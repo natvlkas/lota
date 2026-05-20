@@ -284,6 +284,8 @@ int tpm_init(struct tpm_context *ctx) {
   ctx->lockout_active = false;
   ctx->lockout_first_seen = 0;
   ctx->lockout_event_count = 0;
+  memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
+  ctx->self_hash_ready = false;
 
   /*
    * Initialize TCTI context for device access.
@@ -343,7 +345,19 @@ void tpm_cleanup(struct tpm_context *ctx) {
   memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
   ctx->aik_auth_loaded = false;
 
+  memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
+  ctx->self_hash_ready = false;
+
   ctx->initialized = false;
+}
+
+int tpm_get_self_hash(const struct tpm_context *ctx, uint8_t out[]) {
+  if (!ctx || !out)
+    return -EINVAL;
+  if (!ctx->self_hash_ready)
+    return -ENODATA;
+  memcpy(out, ctx->self_hash, LOTA_HASH_SIZE);
+  return 0;
 }
 
 int tpm_self_test(struct tpm_context *ctx) {

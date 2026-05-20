@@ -297,7 +297,27 @@ int self_measure(struct tpm_context *ctx) {
    * advanced; the verifier rederives the expected PCR14 from the
    * pinned agent hash plus the ClockInfo carried by the next quote.
    */
-  return tpm_extend_boot_commitment(ctx, self_hash);
+  ret = tpm_extend_boot_commitment(ctx, self_hash);
+  if (ret < 0) {
+    if (ret == -EBADMSG) {
+      lota_err("PCR14 holds a boot commitment from a different agent "
+               "binary; live agent upgrades cannot rebind PCR14 without "
+               "resetCount advancing. Cold reboot the host before "
+               "re-running the agent so PCR14 is re-extended against "
+               "the current binary.");
+    }
+    return ret;
+  }
+
+  /*
+   * Cache the hash so build_attestation_report() can pull the exact
+   * bytes folded into PCR14 instead of re-reading /proc/self/exe and
+   * risking a drift if the on-disk binary inode was replaced between
+   * the boot-time hash and the next attestation round.
+   */
+  memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
+  ctx->self_hash_ready = true;
+  return 0;
 }
 
 int poison_runtime_pcr(struct tpm_context *ctx) {

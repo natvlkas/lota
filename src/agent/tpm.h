@@ -126,6 +126,23 @@ struct tpm_context {
   bool lockout_active;
   time_t lockout_first_seen; /* time_t; 0 if not in lockout */
   uint32_t lockout_event_count;
+
+  /*
+   * Boot-time SHA-256 of the running agent binary.
+   *
+   * Captured once by self_measure() at agent startup, both for the
+   * PCR14 boot-commitment extend and for every outgoing attestation
+   * report. A single read of /proc/self/exe per agent lifetime keeps
+   * the value extended into PCR14 and the value carried in
+   * report.system.agent_hash bit-identical, even if a package manager
+   * replaces the on-disk binary inode while the agent process keeps
+   * running.
+   *
+   * self_hash_ready guards the buffer: callers that touch self_hash
+   * before self_measure() has succeeded receive -ENODATA.
+   */
+  uint8_t self_hash[LOTA_HASH_SIZE];
+  bool self_hash_ready;
 };
 
 /*
@@ -314,6 +331,23 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
  */
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
                                const uint8_t self_hash[]);
+
+/*
+ * tpm_get_self_hash - Return the boot-time agent self-hash captured by
+ *                     self_measure()
+ * @ctx: Initialized TPM context
+ * @out: Output buffer of LOTA_HASH_SIZE bytes
+ *
+ * The value returned here is the same SHA-256 that
+ * tpm_extend_boot_commitment() folded into PCR14. Callers building
+ * attestation reports must read it from this function instead of
+ * re-hashing /proc/self/exe, so the bytes carried in
+ * report.system.agent_hash and the bytes bound by PCR14 cannot
+ * diverge under a live binary swap.
+ *
+ * Returns: 0 on success, -ENODATA if self_measure() has not yet run.
+ */
+int tpm_get_self_hash(const struct tpm_context *ctx, uint8_t out[]);
 
 /*
  * tpm_get_aik_public - Export AIK public key in DER SPKI format

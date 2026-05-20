@@ -303,29 +303,28 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
 
   /*
-   * Agent self-hash: hash LOTA own binary for integrity verification.
-   * Verifier can compare this against known-good agent hashes.
+   * Agent self-hash is captured once by self_measure() at startup and
+   * cached on tpm_context. Re-reading /proc/self/exe here would race
+   * package upgrades that swap the on-disk inode while the process
+   * keeps running, splitting the bytes folded into PCR14 from the
+   * bytes carried by the report. The verifier rederives expected
+   * PCR14 from report.system.agent_hash, so the two MUST be identical.
    */
   {
     char agent_path[PATH_MAX];
-    int self_fd;
     ssize_t len =
         readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
 
-    self_fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-    if (self_fd < 0) {
-      fprintf(stderr, "Warning: Failed to open /proc/self/exe for self-hash\n");
-    } else {
-      ret = tpm_hash_fd(self_fd, report->system.agent_hash);
-      close(self_fd);
-      if (ret == 0) {
-        if (len > 0) {
-          agent_path[len] = '\0';
-          lota_dbg("Agent binary hashed: %s", agent_path);
-        }
-      } else {
-        fprintf(stderr, "Warning: Failed to hash agent binary\n");
-      }
+    ret = tpm_get_self_hash(&g_agent.tpm_ctx, report->system.agent_hash);
+    if (ret < 0) {
+      fprintf(stderr,
+              "Self-measurement has not run; agent_hash unavailable: %s\n",
+              strerror(-ret));
+      goto cleanup;
+    }
+    if (len > 0) {
+      agent_path[len] = '\0';
+      lota_dbg("Agent binary: %s (hash pinned at boot)", agent_path);
     }
   }
 
@@ -777,7 +776,21 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   lota_info("Performing self-measurement");
   ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
-    lota_warn("Self-measurement failed: %s", strerror(-ret));
+    /*
+     * Continuing here would let the agent quote PCR14 values that the
+     * verifier cannot rederive (self_hash unpinned, or PCR14 already
+     * bound to a different agent binary), so every subsequent
+     * attestation would be rejected as integrity_mismatch. Fail
+     * closed instead so systemd surfaces the startup failure and the
+     * operator addresses the root cause (typically a cold reboot
+     * after a live binary upgrade) before traffic resumes.
+     */
+    lota_err("Self-measurement failed: %s", strerror(-ret));
+    tpm_cleanup(&g_agent.tpm_ctx);
+    net_cleanup();
+    dbus_cleanup(g_agent.dbus_ctx);
+    ipc_cleanup(&g_agent.ipc_ctx);
+    return ret;
   }
 
   lota_info("Checking AIK");

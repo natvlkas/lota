@@ -849,6 +849,58 @@ static void test_lockout_flag_lifecycle(void) {
   PASS();
 }
 
+/*
+ * Boot-time self_hash buffer round-trip.
+ *
+ * The agent must pin /proc/self/exe SHA-256 once at startup (in
+ * self_measure) and re-use the cached value for every outgoing
+ * attestation report. tpm_get_self_hash is the read accessor; this
+ * test exercises its contract directly so the build catches any
+ * regression in self_hash_ready gating or buffer width.
+ */
+static void test_self_hash_pin_round_trip(void) {
+  struct tpm_context ctx;
+  uint8_t out[LOTA_HASH_SIZE];
+  int ret;
+
+  TEST("tpm_get_self_hash gates on self_hash_ready and round-trips bytes");
+  make_ctx(&ctx);
+
+  ret = tpm_get_self_hash(&ctx, out);
+  if (ret != -ENODATA) {
+    FAIL("expected -ENODATA before self_measure() captured a hash");
+    return;
+  }
+
+  for (size_t i = 0; i < LOTA_HASH_SIZE; i++)
+    ctx.self_hash[i] = (uint8_t)(0xA0 ^ i);
+  ctx.self_hash_ready = true;
+
+  memset(out, 0, sizeof(out));
+  ret = tpm_get_self_hash(&ctx, out);
+  if (ret != 0) {
+    FAIL("expected success after self_hash_ready was set");
+    return;
+  }
+  if (memcmp(out, ctx.self_hash, LOTA_HASH_SIZE) != 0) {
+    FAIL("returned bytes diverged from cached self_hash");
+    return;
+  }
+
+  ret = tpm_get_self_hash(NULL, out);
+  if (ret != -EINVAL) {
+    FAIL("NULL ctx must produce -EINVAL");
+    return;
+  }
+  ret = tpm_get_self_hash(&ctx, NULL);
+  if (ret != -EINVAL) {
+    FAIL("NULL out must produce -EINVAL");
+    return;
+  }
+
+  PASS();
+}
+
 int main(void) {
   printf("\n=== AIK Rotation Tests ===\n\n");
 
@@ -881,6 +933,7 @@ int main(void) {
   test_rc_value_and_handle();
   test_rc_tcti_layer();
   test_lockout_flag_lifecycle();
+  test_self_hash_pin_round_trip();
 
   cleanup_tmp_dir();
 
