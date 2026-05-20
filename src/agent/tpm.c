@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,6 +218,15 @@ static void tpm_clear_lockout(struct tpm_context *ctx) {
  *
  * ctx_ may be NULL when invoked from contexts that do not yet hold a
  * struct tpm_context (e.g. early initialization).
+ *
+ * The macro is restricted to Esys_* calls that do NOT populate
+ * heap-allocated TSS2 output pointers (Esys_PCR_Extend, Esys_SelfTest,
+ * Esys_TR_SetAuth, Esys_TR_FromTPMPublic, Esys_EvictControl). Call
+ * sites that receive allocated outputs (Esys_PCR_Read, Esys_Quote,
+ * Esys_ReadClock, Esys_ReadPublic, Esys_NV_*, Esys_GetCapability,
+ * Esys_CreatePrimary) MUST use tpm_call_with_backoff() so a transient
+ * retry frees the previous allocation instead of overwriting the
+ * pointer and leaking it.
  */
 #define TPM_CALL_RETRY(ctx_, rc_var_, expr_)                                   \
   do {                                                                         \
@@ -238,6 +248,263 @@ static void tpm_clear_lockout(struct tpm_context *ctx) {
     }                                                                          \
   } while (0)
 
+/*
+ * Output-slot capacity for tpm_call_with_backoff(). Esys_CreatePrimary
+ * publishes four allocated pointers (outPublic, creationData,
+ * creationHash, creationTicket); other Esys_* calls use fewer. Bump
+ * if a future TSS2 entry point exceeds this.
+ */
+#define LOTA_TPM_MAX_OUT_SLOTS 8U
+
+/*
+ * Caller-supplied callback that issues a single Esys_*() invocation
+ * and returns the raw TSS2_RC. The cookie is forwarded verbatim from
+ * tpm_call_with_backoff() so call sites can bundle the TSS2 arguments
+ * into a small per-site struct without resorting to global state.
+ */
+typedef TSS2_RC (*tpm_esys_thunk)(void *userdata);
+
+/*
+ * tpm_call_with_backoff - retry an Esys_* invocation while keeping
+ * heap-allocated TSS2 output pointers leak-free.
+ *
+ * @ctx:        TPM context; lockout sticky-state accounting is folded
+ *              in. May be NULL when called pre-init.
+ * @thunk:      Issues the actual Esys_* call. Returns the raw TSS2_RC.
+ * @userdata:   Threaded into @thunk verbatim.
+ * @out_rc:     Optional. On return, holds the last TSS2_RC observed
+ *              (success, lockout, or the last non-transient code).
+ * @out_slot_count: Number of variadic void** slots that follow. Must
+ *              not exceed LOTA_TPM_MAX_OUT_SLOTS.
+ * @...:        @out_slot_count void** pointers. Each points at a
+ *              caller-owned variable that the thunk populates via the
+ *              TSS2 API (e.g. (void **)&time_info for
+ *              Esys_ReadClock's TPMS_TIME_INFO **). Before every
+ *              call into @thunk - including the first - the helper
+ *              walks the slots, invokes Esys_Free(*slot) when *slot
+ *              is non-NULL, and resets *slot to NULL. The TSS2 API
+ *              clobbers the slot unconditionally on the next call,
+ *              so without this housekeeping a transient retry would
+ *              overwrite the pointer and leak the previous
+ *              allocation.
+ *
+ * Returns 0 when the underlying Esys_*() call eventually returned
+ * TSS2_RC_SUCCESS, otherwise the tss2_rc_to_errno() mapping of the
+ * last RC. -EINVAL when @thunk is NULL or @out_slot_count exceeds
+ * the static cap.
+ */
+static int tpm_call_with_backoff_array(struct tpm_context *ctx,
+                                       tpm_esys_thunk thunk, void *userdata,
+                                       TSS2_RC *out_rc, void **slots[],
+                                       size_t out_slot_count) {
+  TSS2_RC rc = TSS2_RC_SUCCESS;
+  unsigned attempt = 0;
+  size_t i;
+
+  if (!thunk || out_slot_count > LOTA_TPM_MAX_OUT_SLOTS) {
+    if (out_rc)
+      *out_rc = TSS2_BASE_RC_BAD_REFERENCE;
+    return -EINVAL;
+  }
+
+  for (;;) {
+    /*
+     * Free output pointers populated by the previous attempt. The
+     * libtss2 ABI documents Esys_Free() as NULL-safe, but the local
+     * guard keeps this routine defensible even when linked against
+     * a stripped-down TSS2 build.
+     */
+    for (i = 0; i < out_slot_count; i++) {
+      if (slots[i] && *slots[i]) {
+        Esys_Free(*slots[i]);
+        *slots[i] = NULL;
+      }
+    }
+
+    rc = thunk(userdata);
+
+    if (rc == TSS2_RC_SUCCESS) {
+      tpm_clear_lockout(ctx);
+      break;
+    }
+    if (tss2_rc_is_lockout(rc)) {
+      tpm_record_lockout(ctx);
+      break;
+    }
+    if (!tss2_rc_is_transient(rc) || attempt >= TPM_RETRY_MAX_ATTEMPTS)
+      break;
+    tpm_backoff_sleep(attempt++);
+  }
+
+  if (out_rc)
+    *out_rc = rc;
+  return rc == TSS2_RC_SUCCESS ? 0 : tss2_rc_to_errno(rc);
+}
+
+static int tpm_call_with_backoff(struct tpm_context *ctx, tpm_esys_thunk thunk,
+                                 void *userdata, TSS2_RC *out_rc,
+                                 size_t out_slot_count, ...) {
+  void **slots[LOTA_TPM_MAX_OUT_SLOTS];
+  size_t i;
+  va_list ap;
+
+  if (out_slot_count > LOTA_TPM_MAX_OUT_SLOTS) {
+    if (out_rc)
+      *out_rc = TSS2_BASE_RC_BAD_REFERENCE;
+    return -EINVAL;
+  }
+
+  va_start(ap, out_slot_count);
+  for (i = 0; i < out_slot_count; i++)
+    slots[i] = va_arg(ap, void **);
+  va_end(ap);
+
+  return tpm_call_with_backoff_array(ctx, thunk, userdata, out_rc, slots,
+                                     out_slot_count);
+}
+
+/*
+ * Per-Esys_*() thunk bindings consumed by tpm_call_with_backoff().
+ *
+ * Each call site that allocates TSS2 output buffers builds the
+ * matching struct on the stack, hands it to the helper, and lets the
+ * helper drive the retry loop. The structs intentionally mirror the
+ * exact subset of arguments each call needs (sessions left at
+ * ESYS_TR_NONE are pinned inside the thunk so the caller does not
+ * repeat them) so the call sites stay small while the helper retains
+ * full control over the output-pointer lifetime.
+ */
+
+struct esys_pcr_read_args {
+  ESYS_CONTEXT *esys_ctx;
+  const TPML_PCR_SELECTION *pcr_selection_in;
+  UINT32 *pcr_update_counter_out;
+  TPML_PCR_SELECTION **pcr_selection_out;
+  TPML_DIGEST **pcr_values_out;
+};
+
+static TSS2_RC esys_pcr_read_thunk(void *u) {
+  struct esys_pcr_read_args *a = u;
+  return Esys_PCR_Read(a->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                       a->pcr_selection_in, a->pcr_update_counter_out,
+                       a->pcr_selection_out, a->pcr_values_out);
+}
+
+struct esys_create_primary_args {
+  ESYS_CONTEXT *esys_ctx;
+  ESYS_TR primary_handle;
+  ESYS_TR shandle1;
+  const TPM2B_SENSITIVE_CREATE *in_sensitive;
+  const TPM2B_PUBLIC *in_public;
+  const TPM2B_DATA *outside_info;
+  const TPML_PCR_SELECTION *creation_pcr;
+  ESYS_TR *object_handle_out;
+  TPM2B_PUBLIC **out_public_out;
+  TPM2B_CREATION_DATA **creation_data_out;
+  TPM2B_DIGEST **creation_hash_out;
+  TPMT_TK_CREATION **creation_ticket_out;
+};
+
+static TSS2_RC esys_create_primary_thunk(void *u) {
+  struct esys_create_primary_args *a = u;
+  return Esys_CreatePrimary(
+      a->esys_ctx, a->primary_handle, a->shandle1, ESYS_TR_NONE, ESYS_TR_NONE,
+      a->in_sensitive, a->in_public, a->outside_info, a->creation_pcr,
+      a->object_handle_out, a->out_public_out, a->creation_data_out,
+      a->creation_hash_out, a->creation_ticket_out);
+}
+
+struct esys_quote_args {
+  ESYS_CONTEXT *esys_ctx;
+  ESYS_TR sign_handle;
+  ESYS_TR shandle1;
+  const TPM2B_DATA *qualifying_data;
+  const TPMT_SIG_SCHEME *in_scheme;
+  const TPML_PCR_SELECTION *pcr_selection;
+  TPM2B_ATTEST **quoted_out;
+  TPMT_SIGNATURE **signature_out;
+};
+
+static TSS2_RC esys_quote_thunk(void *u) {
+  struct esys_quote_args *a = u;
+  return Esys_Quote(a->esys_ctx, a->sign_handle, a->shandle1, ESYS_TR_NONE,
+                    ESYS_TR_NONE, a->qualifying_data, a->in_scheme,
+                    a->pcr_selection, a->quoted_out, a->signature_out);
+}
+
+struct esys_read_clock_args {
+  ESYS_CONTEXT *esys_ctx;
+  TPMS_TIME_INFO **time_info_out;
+};
+
+static TSS2_RC esys_read_clock_thunk(void *u) {
+  struct esys_read_clock_args *a = u;
+  return Esys_ReadClock(a->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                        a->time_info_out);
+}
+
+struct esys_read_public_args {
+  ESYS_CONTEXT *esys_ctx;
+  ESYS_TR object_handle;
+  TPM2B_PUBLIC **out_public_out;
+  TPM2B_NAME **name_out;
+  TPM2B_NAME **qualified_name_out;
+};
+
+static TSS2_RC esys_read_public_thunk(void *u) {
+  struct esys_read_public_args *a = u;
+  return Esys_ReadPublic(a->esys_ctx, a->object_handle, ESYS_TR_NONE,
+                         ESYS_TR_NONE, ESYS_TR_NONE, a->out_public_out,
+                         a->name_out, a->qualified_name_out);
+}
+
+struct esys_get_capability_args {
+  ESYS_CONTEXT *esys_ctx;
+  TPM2_CAP capability;
+  UINT32 property;
+  UINT32 property_count;
+  TPMI_YES_NO *more_data_out;
+  TPMS_CAPABILITY_DATA **capability_data_out;
+};
+
+static TSS2_RC esys_get_capability_thunk(void *u) {
+  struct esys_get_capability_args *a = u;
+  return Esys_GetCapability(
+      a->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, a->capability,
+      a->property, a->property_count, a->more_data_out, a->capability_data_out);
+}
+
+struct esys_nv_read_public_args {
+  ESYS_CONTEXT *esys_ctx;
+  ESYS_TR nv_index;
+  TPM2B_NV_PUBLIC **nv_public_out;
+  TPM2B_NAME **nv_name_out;
+};
+
+static TSS2_RC esys_nv_read_public_thunk(void *u) {
+  struct esys_nv_read_public_args *a = u;
+  return Esys_NV_ReadPublic(a->esys_ctx, a->nv_index, ESYS_TR_NONE,
+                            ESYS_TR_NONE, ESYS_TR_NONE, a->nv_public_out,
+                            a->nv_name_out);
+}
+
+struct esys_nv_read_args {
+  ESYS_CONTEXT *esys_ctx;
+  ESYS_TR auth_handle;
+  ESYS_TR nv_index;
+  ESYS_TR shandle1;
+  UINT16 size;
+  UINT16 offset;
+  TPM2B_MAX_NV_BUFFER **nv_data_out;
+};
+
+static TSS2_RC esys_nv_read_thunk(void *u) {
+  struct esys_nv_read_args *a = u;
+  return Esys_NV_Read(a->esys_ctx, a->auth_handle, a->nv_index, a->shandle1,
+                      ESYS_TR_NONE, ESYS_TR_NONE, a->size, a->offset,
+                      a->nv_data_out);
+}
+
 bool tpm_is_locked_out(const struct tpm_context *ctx) {
   return ctx && ctx->lockout_active;
 }
@@ -256,6 +523,18 @@ int tpm_test_rc_is_transient(uint32_t rc) {
 }
 int tpm_test_rc_is_lockout(uint32_t rc) {
   return tss2_rc_is_lockout((TSS2_RC)rc) ? 1 : 0;
+}
+
+int tpm_test_call_with_backoff_array(struct tpm_context *ctx,
+                                     tpm_esys_thunk thunk, void *userdata,
+                                     uint32_t *out_rc, void **slots[],
+                                     size_t out_slot_count) {
+  TSS2_RC rc = TSS2_RC_SUCCESS;
+  int ret = tpm_call_with_backoff_array(ctx, thunk, userdata, &rc, slots,
+                                        out_slot_count);
+  if (out_rc)
+    *out_rc = rc;
+  return ret;
 }
 #endif
 
@@ -401,14 +680,20 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
   pcr_selection.pcrSelections[0].pcrSelect[pcr_index / 8] =
       (1 << (pcr_index % 8));
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                               ESYS_TR_NONE, &pcr_selection,
-                               &pcr_update_counter, &pcr_selection_out,
-                               &pcr_values));
-
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_pcr_read_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .pcr_selection_in = &pcr_selection,
+        .pcr_update_counter_out = &pcr_update_counter,
+        .pcr_selection_out = &pcr_selection_out,
+        .pcr_values_out = &pcr_values,
+    };
+    int call_ret = tpm_call_with_backoff(ctx, esys_pcr_read_thunk, &args, &rc,
+                                         2, (void **)&pcr_selection_out,
+                                         (void **)&pcr_values);
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   /* copy pcr value to output */
   if (!pcr_values || pcr_values->count == 0) {
@@ -460,14 +745,20 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
   pcr_selection.pcrSelections[0].pcrSelect[2] =
       (uint8_t)((pcr_mask >> 16) & 0xFF);
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                               ESYS_TR_NONE, &pcr_selection,
-                               &pcr_update_counter, &pcr_selection_out,
-                               &pcr_values));
-
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_pcr_read_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .pcr_selection_in = &pcr_selection,
+        .pcr_update_counter_out = &pcr_update_counter,
+        .pcr_selection_out = &pcr_selection_out,
+        .pcr_values_out = &pcr_values,
+    };
+    int call_ret = tpm_call_with_backoff(ctx, esys_pcr_read_thunk, &args, &rc,
+                                         2, (void **)&pcr_selection_out,
+                                         (void **)&pcr_values);
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   if (!pcr_values || !pcr_selection_out || pcr_selection_out->count == 0) {
     Esys_Free(pcr_values);
@@ -599,20 +890,32 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
   TPM2B_DATA outside_info = {.size = 0};
   TPML_PCR_SELECTION creation_pcr = {.count = 0};
 
-  TPM_CALL_RETRY(
-      ctx, rc,
-      Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
-                         ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
-                         &outside_info, &creation_pcr, out_handle, &out_public,
-                         &creation_data, &creation_hash, &creation_ticket));
-
-  Esys_Free(out_public);
-  Esys_Free(creation_data);
-  Esys_Free(creation_hash);
-  Esys_Free(creation_ticket);
-
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_create_primary_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .primary_handle = ESYS_TR_RH_OWNER,
+        .shandle1 = ESYS_TR_PASSWORD,
+        .in_sensitive = &in_sensitive,
+        .in_public = &in_public,
+        .outside_info = &outside_info,
+        .creation_pcr = &creation_pcr,
+        .object_handle_out = out_handle,
+        .out_public_out = &out_public,
+        .creation_data_out = &creation_data,
+        .creation_hash_out = &creation_hash,
+        .creation_ticket_out = &creation_ticket,
+    };
+    int call_ret = tpm_call_with_backoff(
+        ctx, esys_create_primary_thunk, &args, &rc, 4, (void **)&out_public,
+        (void **)&creation_data, (void **)&creation_hash,
+        (void **)&creation_ticket);
+    Esys_Free(out_public);
+    Esys_Free(creation_data);
+    Esys_Free(creation_hash);
+    Esys_Free(creation_ticket);
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   return 0;
 }
@@ -776,13 +1079,23 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
       pcr_selection.pcrSelections[0].pcrSelect[i / 8] |= (1 << (i % 8));
   }
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD,
-                            ESYS_TR_NONE, ESYS_TR_NONE, &qualifying_data,
-                            &in_scheme, &pcr_selection, &quoted, &signature));
-  secure_bzero(qualifying_data.buffer, sizeof(qualifying_data.buffer));
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_quote_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .sign_handle = key_handle,
+        .shandle1 = ESYS_TR_PASSWORD,
+        .qualifying_data = &qualifying_data,
+        .in_scheme = &in_scheme,
+        .pcr_selection = &pcr_selection,
+        .quoted_out = &quoted,
+        .signature_out = &signature,
+    };
+    int call_ret = tpm_call_with_backoff(ctx, esys_quote_thunk, &args, &rc, 2,
+                                         (void **)&quoted, (void **)&signature);
+    secure_bzero(qualifying_data.buffer, sizeof(qualifying_data.buffer));
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   if (quoted->size > LOTA_MAX_ATTEST_SIZE) {
     secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
@@ -1121,11 +1434,16 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
   if (!ctx || !ctx->initialized || !self_hash)
     return -EINVAL;
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_ReadClock(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                                ESYS_TR_NONE, &time_info));
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_read_clock_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .time_info_out = &time_info,
+    };
+    int call_ret = tpm_call_with_backoff(ctx, esys_read_clock_thunk, &args, &rc,
+                                         1, (void **)&time_info);
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   uint32_t reset_count = time_info->clockInfo.resetCount;
   uint32_t restart_count = time_info->clockInfo.restartCount;
@@ -1205,13 +1523,19 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
     return -ENOKEY;
 
   /* read public portion of AIK */
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_ReadPublic(ctx->esys_ctx, key_handle, ESYS_TR_NONE,
-                                 ESYS_TR_NONE, ESYS_TR_NONE, &out_public, &name,
-                                 &qualified_name));
-  if (rc != TSS2_RC_SUCCESS) {
-    ret = tss2_rc_to_errno(rc);
-    goto cleanup;
+  {
+    struct esys_read_public_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .object_handle = key_handle,
+        .out_public_out = &out_public,
+        .name_out = &name,
+        .qualified_name_out = &qualified_name,
+    };
+    ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args, &rc, 3,
+                                (void **)&out_public, (void **)&name,
+                                (void **)&qualified_name);
+    if (ret < 0)
+      goto cleanup;
   }
 
   /* verify its RSA */
@@ -1378,13 +1702,19 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
     return 1; /* AIK fallback */
   }
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_ReadPublic(ctx->esys_ctx, ek_handle, ESYS_TR_NONE,
-                                 ESYS_TR_NONE, ESYS_TR_NONE, &ek_public,
-                                 &ek_name, &ek_qualified_name));
-  if (rc != TSS2_RC_SUCCESS) {
-    ret = tss2_rc_to_errno(rc);
-    goto cleanup;
+  {
+    struct esys_read_public_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .object_handle = ek_handle,
+        .out_public_out = &ek_public,
+        .name_out = &ek_name,
+        .qualified_name_out = &ek_qualified_name,
+    };
+    ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args, &rc, 3,
+                                (void **)&ek_public, (void **)&ek_name,
+                                (void **)&ek_qualified_name);
+    if (ret < 0)
+      goto cleanup;
   }
 
   /*
@@ -2062,12 +2392,20 @@ static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
   if (!ctx || !ctx->initialized || !out_val)
     return -EINVAL;
 
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_GetCapability(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, TPM2_CAP_TPM_PROPERTIES, prop,
-                                    1, &more, &cap_data));
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_get_capability_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .capability = TPM2_CAP_TPM_PROPERTIES,
+        .property = prop,
+        .property_count = 1,
+        .more_data_out = &more,
+        .capability_data_out = &cap_data,
+    };
+    int call_ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk, &args,
+                                         &rc, 1, (void **)&cap_data);
+    if (call_ret < 0)
+      return call_ret;
+  }
 
   if (cap_data->data.tpmProperties.count == 0 ||
       cap_data->data.tpmProperties.tpmProperty[0].property != prop) {
@@ -2111,12 +2449,18 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
   }
 
   /* read NV public to get size */
-  TPM_CALL_RETRY(ctx, rc,
-                 Esys_NV_ReadPublic(ctx->esys_ctx, nv_handle, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, ESYS_TR_NONE, &nv_public,
-                                    &nv_name));
-  if (rc != TSS2_RC_SUCCESS) {
-    return tss2_rc_to_errno(rc);
+  {
+    struct esys_nv_read_public_args args = {
+        .esys_ctx = ctx->esys_ctx,
+        .nv_index = nv_handle,
+        .nv_public_out = &nv_public,
+        .nv_name_out = &nv_name,
+    };
+    int call_ret =
+        tpm_call_with_backoff(ctx, esys_nv_read_public_thunk, &args, &rc, 2,
+                              (void **)&nv_public, (void **)&nv_name);
+    if (call_ret < 0)
+      return call_ret;
   }
 
   size_t data_size = nv_public->nvPublic.dataSize;
@@ -2135,12 +2479,20 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
     if (size_to_read > max_nv_size)
       size_to_read = max_nv_size;
 
-    TPM_CALL_RETRY(ctx, rc,
-                   Esys_NV_Read(ctx->esys_ctx, ESYS_TR_RH_OWNER, nv_handle,
-                                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                                (uint16_t)size_to_read, offset, &nv_data));
-    if (rc != TSS2_RC_SUCCESS) {
-      return tss2_rc_to_errno(rc);
+    {
+      struct esys_nv_read_args args = {
+          .esys_ctx = ctx->esys_ctx,
+          .auth_handle = ESYS_TR_RH_OWNER,
+          .nv_index = nv_handle,
+          .shandle1 = ESYS_TR_PASSWORD,
+          .size = (uint16_t)size_to_read,
+          .offset = offset,
+          .nv_data_out = &nv_data,
+      };
+      int call_ret = tpm_call_with_backoff(ctx, esys_nv_read_thunk, &args, &rc,
+                                           1, (void **)&nv_data);
+      if (call_ret < 0)
+        return call_ret;
     }
 
     memcpy(buf + offset, nv_data->buffer, nv_data->size);

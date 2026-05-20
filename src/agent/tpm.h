@@ -533,6 +533,25 @@ void tpm_test_reset_prop_reader(void);
 int tpm_test_rc_to_errno(uint32_t rc);
 int tpm_test_rc_is_transient(uint32_t rc);
 int tpm_test_rc_is_lockout(uint32_t rc);
+
+/*
+ * Callback type for tpm_call_with_backoff(). Production callers do
+ * not see the helper signature; this typedef is shared between
+ * tpm.c and the test-only entry point declared below.
+ */
+typedef TSS2_RC (*tpm_esys_thunk)(void *userdata);
+
+/*
+ * Test-only entry point into tpm_call_with_backoff(). Mirrors the
+ * production signature but takes the slot array directly so the
+ * caller does not have to assemble a va_list. Used by
+ * tests/test_aik_rotation.c to drive the retry/leak-prevention path
+ * without a real TPM transient.
+ */
+int tpm_test_call_with_backoff_array(struct tpm_context *ctx,
+                                     tpm_esys_thunk thunk, void *userdata,
+                                     uint32_t *out_rc, void **slots[],
+                                     size_t out_slot_count);
 #endif
 
 #endif /* LOTA_TPM_H */

@@ -901,6 +901,136 @@ static void test_self_hash_pin_round_trip(void) {
   PASS();
 }
 
+/*
+ * Thunk state for the tpm_call_with_backoff regression test. The thunk
+ * mimics libtss2: it overwrites *slot with a heap allocation that
+ * Esys_Free() (== free()) can release, returns TPM2_RC_RETRY for the
+ * configured number of attempts, and then succeeds. Between calls the
+ * helper MUST have zeroed *slot - any non-NULL observation indicates
+ * the leak the patch is meant to prevent.
+ */
+struct backoff_thunk_state {
+  int calls;
+  int fail_attempts;
+  int saw_dirty_slot;
+  void **slot;
+};
+
+static TSS2_RC backoff_test_thunk(void *u) {
+  struct backoff_thunk_state *s = u;
+  if (*s->slot != NULL)
+    s->saw_dirty_slot = 1;
+  *s->slot = malloc(64);
+  if (!*s->slot)
+    return TSS2_BASE_RC_GENERAL_FAILURE;
+  s->calls++;
+  if (s->calls <= s->fail_attempts)
+    return TPM2_RC_RETRY;
+  return TSS2_RC_SUCCESS;
+}
+
+/*
+ * Verify that tpm_call_with_backoff:
+ *   - frees the previous allocation before retry (slot observed NULL
+ *     on every thunk entry);
+ *   - performs at most TPM_RETRY_MAX_ATTEMPTS+1 thunk calls before
+ *     bailing;
+ *   - returns 0 and the last successful TSS2_RC when the thunk
+ *     eventually succeeds.
+ */
+static void test_call_with_backoff_no_leak_on_retry(void) {
+  TEST("tpm_call_with_backoff frees output between transient retries");
+  void *slot = NULL;
+  struct backoff_thunk_state state = {
+      .calls = 0,
+      .fail_attempts = 3, /* succeed on call #4 */
+      .saw_dirty_slot = 0,
+      .slot = &slot,
+  };
+  void **slots[1] = {&slot};
+  uint32_t rc = 0;
+  int ret = tpm_test_call_with_backoff_array(NULL, backoff_test_thunk, &state,
+                                             &rc, slots, 1);
+
+  if (ret != 0) {
+    FAIL("expected 0 on eventual success");
+    free(slot);
+    return;
+  }
+  if (rc != TSS2_RC_SUCCESS) {
+    FAIL("expected last rc == TSS2_RC_SUCCESS");
+    free(slot);
+    return;
+  }
+  if (state.saw_dirty_slot != 0) {
+    FAIL("helper failed to zero slot between attempts (leak)");
+    free(slot);
+    return;
+  }
+  if (state.calls != state.fail_attempts + 1) {
+    FAIL("thunk call count diverged from fail_attempts+1");
+    free(slot);
+    return;
+  }
+  if (slot == NULL) {
+    FAIL("successful attempt must leave the slot populated");
+    return;
+  }
+
+  /* successful allocation owns one heap block; release it before exit */
+  free(slot);
+  PASS();
+}
+
+/*
+ * Verify that the helper gives up after TPM_RETRY_MAX_ATTEMPTS
+ * transient observations without leaking. We set fail_attempts well
+ * above the retry budget so the loop exhausts itself, then assert
+ * that:
+ *   - the helper returns a non-zero errno (mapped from TPM2_RC_RETRY,
+ *     which decodes to -EAGAIN through tss2_rc_to_errno);
+ *   - the slot was zeroed before every thunk call, including the
+ *     final one (no dirty observations);
+ *   - the slot holds the allocation from the final failing attempt
+ *     and is therefore caller-owned; the test frees it.
+ */
+static void test_call_with_backoff_gives_up_without_leak(void) {
+  TEST("tpm_call_with_backoff exhausts retry budget without leaking");
+  void *slot = NULL;
+  struct backoff_thunk_state state = {
+      .calls = 0,
+      .fail_attempts = 100, /* much larger than TPM_RETRY_MAX_ATTEMPTS */
+      .saw_dirty_slot = 0,
+      .slot = &slot,
+  };
+  void **slots[1] = {&slot};
+  uint32_t rc = 0;
+  int ret = tpm_test_call_with_backoff_array(NULL, backoff_test_thunk, &state,
+                                             &rc, slots, 1);
+
+  if (ret == 0) {
+    FAIL("expected error after retry exhaustion");
+    free(slot);
+    return;
+  }
+  if (state.saw_dirty_slot != 0) {
+    FAIL("helper failed to zero slot between attempts (leak)");
+    free(slot);
+    return;
+  }
+  if (state.calls < 2) {
+    FAIL("helper bailed before exercising the retry path");
+    free(slot);
+    return;
+  }
+  if (slot == NULL) {
+    FAIL("last failing attempt must leave the slot populated");
+    return;
+  }
+  free(slot);
+  PASS();
+}
+
 int main(void) {
   printf("\n=== AIK Rotation Tests ===\n\n");
 
@@ -934,6 +1064,8 @@ int main(void) {
   test_rc_tcti_layer();
   test_lockout_flag_lifecycle();
   test_self_hash_pin_round_trip();
+  test_call_with_backoff_no_leak_on_retry();
+  test_call_with_backoff_gives_up_without_leak();
 
   cleanup_tmp_dir();
 
