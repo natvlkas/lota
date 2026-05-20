@@ -149,9 +149,10 @@ type Verifier struct {
 	bannedAttests  atomic.Int64
 
 	// policy enforcement
-	requireEventLog bool
-	requireCert     bool
-	requireBootPCRs bool
+	requireEventLog     bool
+	requireCert         bool
+	requireBootPCRs     bool
+	maxRestartCountSkew uint32
 }
 
 type sessionTokenRecord struct {
@@ -244,6 +245,16 @@ type VerifierConfig struct {
 	// bypass the BootBaselineStorer pin even when one is configured.
 	RequireBootPCRs bool
 
+	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
+	// the verifier tolerates when matching the PCR14 boot-commitment
+	// digest. The agent extends PCR14 once at startup with the
+	// restartCount in effect at that moment; the quote's ClockInfo
+	// reports the current restartCount, which advances on every
+	// suspend/resume. Without a window any laptop that suspends
+	// between attestations drops offline with integrity_mismatch.
+	// 0 = exact match only.
+	MaxRestartCountSkew uint32
+
 	// if true, allow policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
@@ -259,6 +270,7 @@ func DefaultConfig() VerifierConfig {
 		RequireEventLog:       true,
 		RequireCert:           true,
 		RequireBootPCRs:       true,
+		MaxRestartCountSkew:   1024,
 		AllowPermissivePolicy: false,
 	}
 }
@@ -297,23 +309,24 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
 
 	v := &Verifier{
-		nonceStore:       NewNonceStoreFromConfig(nonceCfg),
-		pcrVerifier:      pcrVerifier,
-		aikStore:         aikStore,
-		baselineStore:    baselineStore,
-		revocationStore:  cfg.RevocationStore,
-		banStore:         cfg.BanStore,
-		log:              logger,
-		metrics:          m,
-		attestationLog:   cfg.AttestationLog,
-		nonceLifetime:    cfg.NonceLifetime,
-		sessionTokenLife: cfg.SessionTokenLife,
-		aikMaxAge:        effectiveAIKMaxAge,
-		requireEventLog:  cfg.RequireEventLog,
-		requireCert:      cfg.RequireCert,
-		requireBootPCRs:  cfg.RequireBootPCRs,
-		startTime:        time.Now(),
-		tokenIndex:       make(map[[32]byte]sessionTokenRecord),
+		nonceStore:          NewNonceStoreFromConfig(nonceCfg),
+		pcrVerifier:         pcrVerifier,
+		aikStore:            aikStore,
+		baselineStore:       baselineStore,
+		revocationStore:     cfg.RevocationStore,
+		banStore:            cfg.BanStore,
+		log:                 logger,
+		metrics:             m,
+		attestationLog:      cfg.AttestationLog,
+		nonceLifetime:       cfg.NonceLifetime,
+		sessionTokenLife:    cfg.SessionTokenLife,
+		aikMaxAge:           effectiveAIKMaxAge,
+		requireEventLog:     cfg.RequireEventLog,
+		requireCert:         cfg.RequireCert,
+		requireBootPCRs:     cfg.RequireBootPCRs,
+		maxRestartCountSkew: cfg.MaxRestartCountSkew,
+		startTime:           time.Now(),
+		tokenIndex:          make(map[[32]byte]sessionTokenRecord),
 	}
 
 	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
@@ -918,17 +931,26 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			return result, fmt.Errorf("attest parse for boot commitment failed: %w", err)
 		}
 
-		expected := DeriveBootCommitmentPCR14(report.System.AgentHash,
-			attest.ClockInfo.ResetCount, attest.ClockInfo.RestartCount)
-		if expected != pcr14 {
+		expected, restartDrift, ok := MatchBootCommitmentPCR14(
+			report.System.AgentHash,
+			attest.ClockInfo.ResetCount, attest.ClockInfo.RestartCount,
+			pcr14, v.maxRestartCountSkew)
+		if !ok {
 			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 				"actual_pcr14", pcr14Hex,
 				"expected_pcr14", FormatPCR14(expected),
 				"reset_count", attest.ClockInfo.ResetCount,
-				"restart_count", attest.ClockInfo.RestartCount)
+				"restart_count", attest.ClockInfo.RestartCount,
+				"max_restart_skew", v.maxRestartCountSkew)
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
 			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
+		}
+		if restartDrift > 0 {
+			clog.Info("PCR14 boot-commitment matched within restart_count skew window",
+				"restart_drift", restartDrift,
+				"quote_restart_count", attest.ClockInfo.RestartCount,
+				"max_restart_skew", v.maxRestartCountSkew)
 		}
 
 		tofuResult, hashBaseline := hashStore.CheckAndUpdateAgentHash(

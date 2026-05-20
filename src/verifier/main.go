@@ -33,6 +33,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"os/signal"
@@ -81,6 +82,7 @@ var (
 	requireEventLog    = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
 	requireCert        = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	allowLegacyPCRMask = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
+	maxRestartSkew     = flag.Uint("max-restart-count-skew", 1024, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required.")
 	allowPermissive    = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts         stringSliceFlag
 	ekCRLs             stringSliceFlag
@@ -144,6 +146,12 @@ func main() {
 	if *allowLegacyPCRMask {
 		logger.Warn("INSECURE: --allow-legacy-pcr-mask is set; agents may attest without PCR 0/1/7 and bypass the firmware/Secure Boot baseline pin")
 	}
+	if *maxRestartSkew > math.MaxUint32 {
+		logger.Error("--max-restart-count-skew exceeds uint32 range",
+			"value", *maxRestartSkew, "max", uint64(math.MaxUint32))
+		os.Exit(1)
+	}
+	verifierCfg.MaxRestartCountSkew = uint32(*maxRestartSkew)
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
 
 	if *aikMaxAge == 0 {

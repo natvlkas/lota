@@ -53,6 +53,51 @@ func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	return out
 }
 
+// MatchBootCommitmentPCR14 rederives PCR14 for the agent_hash bound at
+// boot and the (resetCount, restartCount) reported in the quote's
+// ClockInfo, then scans restartCount backward looking for a value whose
+// derivation matches the PCR14 carried in the quote.
+//
+// The scan exists because the agent extends PCR14 once at startup using
+// the restartCount in effect at that moment, while the quote carries
+// the restartCount in effect when it is signed. TPM2_Startup(STATE)
+// increments restartCount across every suspend/resume cycle within a
+// single boot session, so on laptops the two values diverge between
+// attestations. resetCount is left fixed because the TPM only
+// increments it at TPM_INIT (cold boot), which would also have killed
+// the agent process and triggered a fresh extend on the next start.
+//
+// matched is true when some restartCount in [quoteRestartCount-maxRestartSkew,
+// quoteRestartCount] reproduces the PCR14 carried in target. expected
+// is set to the matched derivation (drift accepted) or to the exact
+// quote derivation (when no candidate matched) so the caller can log
+// the failure with a deterministic expected_pcr14 column.
+// restartDrift carries the positive distance between the quote value
+// and the matched value (0 when the exact-match branch succeeded).
+//
+// The scan does not weaken the integrity binding: an attacker who does
+// not know the pinned agent_hash cannot produce a matching PCR14 for
+// any restartCount value, and resetCount is not iterated so a post-cold-boot
+// state cannot be replayed.
+func MatchBootCommitmentPCR14(agentHash [types.HashSize]byte,
+	resetCount, quoteRestartCount uint32,
+	target [types.HashSize]byte,
+	maxRestartSkew uint32,
+) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
+
+	expected = DeriveBootCommitmentPCR14(agentHash, resetCount, quoteRestartCount)
+	if expected == target {
+		return expected, 0, true
+	}
+	for d := uint32(1); d <= maxRestartSkew && d <= quoteRestartCount; d++ {
+		cand := DeriveBootCommitmentPCR14(agentHash, resetCount, quoteRestartCount-d)
+		if cand == target {
+			return cand, d, true
+		}
+	}
+	return expected, 0, false
+}
+
 // ErrBaselineNotFound is returned by baseline-mutating helpers when the
 // target client has no PCR14 baseline row yet.
 var ErrBaselineNotFound = errors.New("baseline not found for client")
