@@ -371,6 +371,84 @@ func TestCRL_LoadAcceptsMultiBlockPEMBundle(t *testing.T) {
 	}
 }
 
+// writeCRLWithSigAlgOID emits a syntactically valid CertificateList
+// whose signatureAlgorithm OID is caller-controlled, so the test can
+// inject a CRL signed under a weakened algorithm (sha1WithRSAEncryption,
+// ...) and observe the loader's allow-list rejection. NextUpdate is
+// honored so the staleness gate does not short-circuit the algorithm
+// check.
+func writeCRLWithSigAlgOID(t *testing.T, dir string, ca *x509.Certificate,
+	sigAlgOID asn1.ObjectIdentifier, name string) string {
+	t.Helper()
+
+	algID := pkix.AlgorithmIdentifier{
+		Algorithm:  sigAlgOID,
+		Parameters: asn1.RawValue{Tag: 5}, // NULL
+	}
+
+	tbs := struct {
+		Version    int
+		Signature  pkix.AlgorithmIdentifier
+		Issuer     asn1.RawValue
+		ThisUpdate time.Time
+		NextUpdate time.Time
+	}{
+		Version:    1, // v2
+		Signature:  algID,
+		Issuer:     asn1.RawValue{FullBytes: ca.RawSubject},
+		ThisUpdate: time.Now().Add(-time.Hour).UTC(),
+		NextUpdate: time.Now().Add(time.Hour).UTC(),
+	}
+	tbsDER, err := asn1.Marshal(tbs)
+	if err != nil {
+		t.Fatalf("marshal tbs: %v", err)
+	}
+
+	crl := struct {
+		TBSCertList        asn1.RawValue
+		SignatureAlgorithm pkix.AlgorithmIdentifier
+		SignatureValue     asn1.BitString
+	}{
+		TBSCertList:        asn1.RawValue{FullBytes: tbsDER},
+		SignatureAlgorithm: algID,
+		SignatureValue:     asn1.BitString{Bytes: []byte{0x00}, BitLength: 8},
+	}
+	der, err := asn1.Marshal(crl)
+	if err != nil {
+		t.Fatalf("marshal crl: %v", err)
+	}
+
+	buf := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+func TestCRL_LoadRejectsWeakSignatureAlgorithm(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, _ := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	// sha1WithRSAEncryption (RFC 8017): rejected even though the rest of
+	// the CRL would parse cleanly. The loader must short-circuit before
+	// invoking CheckSignatureFrom so an attacker-supplied CRL under a
+	// weakened algorithm never reaches the trust path.
+	sha1WithRSA := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
+	crlPath := writeCRLWithSigAlgOID(t, dir, ca, sha1WithRSA, "sha1.pem")
+
+	_, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, []string{crlPath}, false)
+	if err == nil {
+		t.Fatal("expected CRL load to fail: SHA-1 signature algorithm")
+	}
+	if !errors.Is(err, ErrCRLWeakSignature) {
+		t.Fatalf("expected ErrCRLWeakSignature, got %v", err)
+	}
+}
+
 func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
 	dir := t.TempDir()
 

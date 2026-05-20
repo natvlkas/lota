@@ -32,8 +32,26 @@ var (
 	ErrCRLStale             = errors.New("CRL is past its NextUpdate; refusing to trust issuer")
 	ErrCRLSignature         = errors.New("CRL signature verification failed against trusted CAs")
 	ErrCRLNoIssuer          = errors.New("CRL issuer is not among trusted CAs")
-	ErrCRLMissingNextUpdate = errors.New("CRL is missing NextUpdate; RFC 5280 p5.1.2.5 requires it for production use")
+	ErrCRLMissingNextUpdate = errors.New("CRL is missing NextUpdate; RFC 5280 §5.1.2.5 requires it for production use")
+	ErrCRLWeakSignature     = errors.New("CRL signature algorithm is not on the production allow-list")
 )
+
+// crlAllowedSignatureAlgorithms enumerates the signature algorithms a
+// CRL signature MUST use to be honored. Go's x509.CheckSignatureFrom
+// already refuses MD5 and RSA-SHA1, but it still accepts ECDSA-SHA1
+// and other legacy combinations.
+var crlAllowedSignatureAlgorithms = map[x509.SignatureAlgorithm]struct{}{
+	x509.SHA256WithRSA:    {},
+	x509.SHA384WithRSA:    {},
+	x509.SHA512WithRSA:    {},
+	x509.SHA256WithRSAPSS: {},
+	x509.SHA384WithRSAPSS: {},
+	x509.SHA512WithRSAPSS: {},
+	x509.ECDSAWithSHA256:  {},
+	x509.ECDSAWithSHA384:  {},
+	x509.ECDSAWithSHA512:  {},
+	x509.PureEd25519:      {},
+}
 
 // revocationListSet holds CRLs grouped by issuer subject DN.
 //
@@ -98,6 +116,11 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 	if crl.NextUpdate.IsZero() {
 		return fmt.Errorf("%w: %s (block %d)",
 			ErrCRLMissingNextUpdate, path, idx)
+	}
+
+	if _, ok := crlAllowedSignatureAlgorithms[crl.SignatureAlgorithm]; !ok {
+		return fmt.Errorf("%w: %s (block %d): %s",
+			ErrCRLWeakSignature, path, idx, crl.SignatureAlgorithm)
 	}
 
 	// signature must verify against one of the trusted CA certificates
