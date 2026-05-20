@@ -78,10 +78,22 @@ static int tpm_read_prop(struct tpm_context *ctx, TPM2_PT prop,
 #define TPM_RC_FMT1_BIT 0x080U
 #define TPM_RC_FMT1_BASE_MASK 0x0BFU /* bits 0-5 + FMT1 indicator */
 
-/* Backoff parameters for transient TPM errors (RETRY/YIELDED/NV_RATE/...) */
+/*
+ * Backoff parameters for transient TPM errors (RETRY/YIELDED/NV_RATE/...).
+ *
+ * TPM_RETRY_MAX_ATTEMPTS caps the geometric retry count. TPM_RETRY_BASE_MS
+ * is the first sleep, doubled on each retry up to TPM_RETRY_CAP_MS. The
+ * cumulative sleep over MAX_ATTEMPTS attempts is also bounded by
+ * TPM_RETRY_BUDGET_MS so a single tpm_call_with_backoff() invocation
+ * cannot consume an unbounded slice of the systemd WatchdogSec= window.
+ * Pinging the watchdog from inside the backoff loop would lie to
+ * systemd while the process is wedged; clamping the budget instead
+ * lets the daemon loop's existing inter-round ping fire on schedule.
+ */
 #define TPM_RETRY_MAX_ATTEMPTS 6U
 #define TPM_RETRY_BASE_MS 25U
 #define TPM_RETRY_CAP_MS 4000U
+#define TPM_RETRY_BUDGET_MS 2000U
 
 static bool tpm_rc_layer_is_tpm(TSS2_RC rc) {
   uint32_t layer = rc & TPM_RC_LAYER_MASK;
@@ -179,11 +191,14 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
   }
 }
 
-static void tpm_backoff_sleep(unsigned attempt) {
+static unsigned tpm_backoff_ms(unsigned attempt) {
   unsigned ms = TPM_RETRY_BASE_MS << (attempt > 7 ? 7 : attempt);
   if (ms > TPM_RETRY_CAP_MS)
     ms = TPM_RETRY_CAP_MS;
+  return ms;
+}
 
+static void tpm_sleep_ms(unsigned ms) {
   struct timespec ts;
   ts.tv_sec = ms / 1000;
   ts.tv_nsec = (long)(ms % 1000) * 1000000L;
@@ -231,6 +246,7 @@ static void tpm_clear_lockout(struct tpm_context *ctx) {
 #define TPM_CALL_RETRY(ctx_, rc_var_, expr_)                                   \
   do {                                                                         \
     unsigned _tpm_attempt = 0;                                                 \
+    unsigned _tpm_budget_ms = 0;                                               \
     for (;;) {                                                                 \
       (rc_var_) = (expr_);                                                     \
       if ((rc_var_) == TSS2_RC_SUCCESS) {                                      \
@@ -244,7 +260,14 @@ static void tpm_clear_lockout(struct tpm_context *ctx) {
       if (!tss2_rc_is_transient((rc_var_)) ||                                  \
           _tpm_attempt >= TPM_RETRY_MAX_ATTEMPTS)                              \
         break;                                                                 \
-      tpm_backoff_sleep(_tpm_attempt++);                                       \
+      {                                                                        \
+        unsigned _tpm_next_ms = tpm_backoff_ms(_tpm_attempt);                  \
+        if (_tpm_budget_ms + _tpm_next_ms > TPM_RETRY_BUDGET_MS)               \
+          break;                                                               \
+        tpm_sleep_ms(_tpm_next_ms);                                            \
+        _tpm_budget_ms += _tpm_next_ms;                                        \
+      }                                                                        \
+      _tpm_attempt++;                                                          \
     }                                                                          \
   } while (0)
 
@@ -299,6 +322,7 @@ static int tpm_call_with_backoff_array(struct tpm_context *ctx,
                                        size_t out_slot_count) {
   TSS2_RC rc = TSS2_RC_SUCCESS;
   unsigned attempt = 0;
+  unsigned budget_used_ms = 0;
   size_t i;
 
   if (!thunk || out_slot_count > LOTA_TPM_MAX_OUT_SLOTS) {
@@ -333,7 +357,23 @@ static int tpm_call_with_backoff_array(struct tpm_context *ctx,
     }
     if (!tss2_rc_is_transient(rc) || attempt >= TPM_RETRY_MAX_ATTEMPTS)
       break;
-    tpm_backoff_sleep(attempt++);
+
+    /*
+     * Bail before the next sleep would push the cumulative wall time
+     * past TPM_RETRY_BUDGET_MS. systemd treats a missed WATCHDOG=1
+     * ping as a hung process; the outer attestation loop pings only
+     * between rounds, so any single TPM call that monopolizes more
+     * than a small slice of the watchdog window would let the
+     * process get killed mid-quote. The caller observes a transient
+     * RC in *out_rc and can retry on its own schedule once the
+     * watchdog has been serviced.
+     */
+    unsigned next_ms = tpm_backoff_ms(attempt);
+    if (budget_used_ms + next_ms > TPM_RETRY_BUDGET_MS)
+      break;
+    tpm_sleep_ms(next_ms);
+    budget_used_ms += next_ms;
+    attempt++;
   }
 
   if (out_rc)

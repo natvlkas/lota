@@ -983,6 +983,61 @@ static void test_call_with_backoff_no_leak_on_retry(void) {
 }
 
 /*
+ * Total wall-time spent inside tpm_call_with_backoff() must stay
+ * under TPM_RETRY_BUDGET_MS (2000 ms) so a single TPM call cannot
+ * monopolise the systemd watchdog window. The test forces the
+ * helper to take the maximum number of geometric backoff steps and
+ * checks the wall-clock duration against a hard ceiling that is
+ * comfortably below the configured WatchdogSec=60s in
+ * systemd/lota-agent.service.
+ */
+static void test_call_with_backoff_respects_wallclock_budget(void) {
+  TEST("tpm_call_with_backoff cumulative sleep stays under watchdog budget");
+  void *slot = NULL;
+  struct backoff_thunk_state state = {
+      .calls = 0,
+      .fail_attempts = 100,
+      .saw_dirty_slot = 0,
+      .slot = &slot,
+  };
+  void **slots[1] = {&slot};
+  uint32_t rc = 0;
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  int ret = tpm_test_call_with_backoff_array(NULL, backoff_test_thunk, &state,
+                                             &rc, slots, 1);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+
+  if (ret == 0) {
+    FAIL("expected non-zero return on retry exhaustion");
+    free(slot);
+    return;
+  }
+
+  int64_t elapsed_ns = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000000000LL +
+                       ((int64_t)t1.tv_nsec - (int64_t)t0.tv_nsec);
+  uint64_t elapsed_ms = elapsed_ns < 0 ? 0 : (uint64_t)(elapsed_ns / 1000000);
+
+  /*
+   * Budget is 2000 ms inside tpm.c. Allow a generous 500 ms slack
+   * for the final RETRY observation that bails (next_ms would have
+   * exceeded the budget) plus scheduling jitter on busy CI hosts.
+   * Crossing 2500 ms means the budget guard is broken.
+   */
+  if (elapsed_ms >= 2500) {
+    char buf[96];
+    snprintf(buf, sizeof(buf), "wall time %llu ms exceeded budget+slack",
+             (unsigned long long)elapsed_ms);
+    FAIL(buf);
+    free(slot);
+    return;
+  }
+  free(slot);
+  PASS();
+}
+
+/*
  * Verify that the helper gives up after TPM_RETRY_MAX_ATTEMPTS
  * transient observations without leaking. We set fail_attempts well
  * above the retry budget so the loop exhausts itself, then assert
@@ -1066,6 +1121,7 @@ int main(void) {
   test_self_hash_pin_round_trip();
   test_call_with_backoff_no_leak_on_retry();
   test_call_with_backoff_gives_up_without_leak();
+  test_call_with_backoff_respects_wallclock_budget();
 
   cleanup_tmp_dir();
 
