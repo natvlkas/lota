@@ -83,6 +83,7 @@ var (
 	requireCert        = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	allowLegacyPCRMask = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	maxRestartSkew     = flag.Uint("max-restart-count-skew", 1024, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required.")
+	rejectLegacyBase   = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	allowPermissive    = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts         stringSliceFlag
 	ekCRLs             stringSliceFlag
@@ -152,6 +153,10 @@ func main() {
 		os.Exit(1)
 	}
 	verifierCfg.MaxRestartCountSkew = uint32(*maxRestartSkew)
+	verifierCfg.RejectLegacyBaselines = *rejectLegacyBase
+	if *rejectLegacyBase {
+		logger.Info("rejecting legacy baseline agent_hash backfills")
+	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
 
 	if *aikMaxAge == 0 {

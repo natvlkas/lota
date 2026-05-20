@@ -128,11 +128,18 @@ func TestAgentHashStore_MemoryBackfillsLegacyRow(t *testing.T) {
 	bs.CheckAndUpdate("legacy", pcr14)
 
 	res, snap := bs.CheckAndUpdateAgentHash("legacy", pcr14, agentHash)
-	if res != TOFUMatch {
-		t.Fatalf("legacy row must accept first agent_hash as TOFUMatch, got %v", res)
+	if res != TOFULegacyBackfill {
+		t.Fatalf("legacy row must report TOFULegacyBackfill on first agent_hash, got %v", res)
 	}
 	if snap.AgentHash != agentHash {
 		t.Fatalf("backfilled agent_hash mismatch: got %x", snap.AgentHash)
+	}
+
+	// subsequent rounds must take the regular match branch, not another
+	// backfill, so the audit signal fires exactly once per client.
+	res2, _ := bs.CheckAndUpdateAgentHash("legacy", pcr14, agentHash)
+	if res2 != TOFUMatch {
+		t.Fatalf("second round must return TOFUMatch, got %v", res2)
 	}
 }
 

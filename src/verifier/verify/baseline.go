@@ -217,6 +217,17 @@ const (
 
 	// Database or store error - must not be treated as first use
 	TOFUError
+
+	// TOFULegacyBackfill is returned by CheckAndUpdateAgentHash when a
+	// pre-existing baseline row carries no pinned agent_hash and the
+	// store accepts the incoming value as the canonical one. The
+	// transition can only happen once per client (subsequent rounds
+	// take the TOFUMatch / TOFUMismatch branch), but the row is
+	// indistinguishable from a real first-use after the write, so the
+	// verifier surfaces a security event and operators can opt to
+	// refuse the implicit trust upgrade via
+	// VerifierConfig.RejectLegacyBaselines.
+	TOFULegacyBackfill
 )
 
 // performs TOFU validation for PCR 14
@@ -337,13 +348,16 @@ func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 
 	var zero [types.HashSize]byte
 	if existing.AgentHash == zero {
-		// upgrade path: legacy row without agent_hash. Backfill on this
-		// match and treat it as a TOFUFirstUse-equivalent decision.
+		// Legacy row from a pre-FlagBootCommitment attestation: the
+		// PCR14 baseline is pinned but agent_hash is not. Record the
+		// incoming hash so future rounds can verify it, but report the
+		// transition as TOFULegacyBackfill so the caller can audit
+		// (and, when configured, reject) the implicit trust upgrade.
 		existing.AgentHash = agentHash
 		existing.LastSeen = now
 		existing.AttestCount++
 		out := *existing
-		return TOFUMatch, &out
+		return TOFULegacyBackfill, &out
 	}
 
 	if existing.AgentHash != agentHash {

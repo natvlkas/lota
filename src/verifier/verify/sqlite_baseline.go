@@ -163,7 +163,11 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	}
 
 	if !hasStored {
-		// legacy row pre-dating agent_hash; backfill and accept as match.
+		// Legacy row from a pre-FlagBootCommitment attestation: the
+		// PCR14 baseline is pinned but agent_hash is NULL. Record the
+		// incoming hash so future rounds can verify it, but report the
+		// transition as TOFULegacyBackfill so the caller can audit
+		// (and, when configured, reject) the implicit trust upgrade.
 		newCount := attestCount + 1
 		if _, err := s.db.Exec(
 			"UPDATE baselines SET agent_hash = ?, last_seen = ?, attest_count = ? WHERE client_id = ?",
@@ -172,7 +176,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 			slog.Error("agent_hash backfill failed", "client_id", clientID, "error", err)
 			return TOFUError, nil
 		}
-		return TOFUMatch, &ClientBaseline{
+		return TOFULegacyBackfill, &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   agentHash,
 			FirstSeen:   firstSeen,

@@ -149,10 +149,11 @@ type Verifier struct {
 	bannedAttests  atomic.Int64
 
 	// policy enforcement
-	requireEventLog     bool
-	requireCert         bool
-	requireBootPCRs     bool
-	maxRestartCountSkew uint32
+	requireEventLog       bool
+	requireCert           bool
+	requireBootPCRs       bool
+	rejectLegacyBaselines bool
+	maxRestartCountSkew   uint32
 }
 
 type sessionTokenRecord struct {
@@ -245,6 +246,18 @@ type VerifierConfig struct {
 	// bypass the BootBaselineStorer pin even when one is configured.
 	RequireBootPCRs bool
 
+	// RejectLegacyBaselines refuses any attestation whose
+	// CheckAndUpdateAgentHash result is TOFULegacyBackfill. The
+	// backfill branch fires once per client - when a baseline row
+	// was pinned before FlagBootCommitment existed and the current
+	// quote is the first to carry an agent_hash. An attacker that
+	// swapped the agent binary on a legacy host across two
+	// attestations would otherwise pin arbitrary bytes as the
+	// canonical hash. Default false keeps existing pre-v1.0
+	// fleets attestable; production deployments past their rollout
+	// grace period should set it to true.
+	RejectLegacyBaselines bool
+
 	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
 	// the verifier tolerates when matching the PCR14 boot-commitment
 	// digest. The agent extends PCR14 once at startup with the
@@ -309,24 +322,25 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
 
 	v := &Verifier{
-		nonceStore:          NewNonceStoreFromConfig(nonceCfg),
-		pcrVerifier:         pcrVerifier,
-		aikStore:            aikStore,
-		baselineStore:       baselineStore,
-		revocationStore:     cfg.RevocationStore,
-		banStore:            cfg.BanStore,
-		log:                 logger,
-		metrics:             m,
-		attestationLog:      cfg.AttestationLog,
-		nonceLifetime:       cfg.NonceLifetime,
-		sessionTokenLife:    cfg.SessionTokenLife,
-		aikMaxAge:           effectiveAIKMaxAge,
-		requireEventLog:     cfg.RequireEventLog,
-		requireCert:         cfg.RequireCert,
-		requireBootPCRs:     cfg.RequireBootPCRs,
-		maxRestartCountSkew: cfg.MaxRestartCountSkew,
-		startTime:           time.Now(),
-		tokenIndex:          make(map[[32]byte]sessionTokenRecord),
+		nonceStore:            NewNonceStoreFromConfig(nonceCfg),
+		pcrVerifier:           pcrVerifier,
+		aikStore:              aikStore,
+		baselineStore:         baselineStore,
+		revocationStore:       cfg.RevocationStore,
+		banStore:              cfg.BanStore,
+		log:                   logger,
+		metrics:               m,
+		attestationLog:        cfg.AttestationLog,
+		nonceLifetime:         cfg.NonceLifetime,
+		sessionTokenLife:      cfg.SessionTokenLife,
+		aikMaxAge:             effectiveAIKMaxAge,
+		requireEventLog:       cfg.RequireEventLog,
+		requireCert:           cfg.RequireCert,
+		requireBootPCRs:       cfg.RequireBootPCRs,
+		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
+		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
+		startTime:             time.Now(),
+		tokenIndex:            make(map[[32]byte]sessionTokenRecord),
 	}
 
 	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
@@ -959,6 +973,24 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		case TOFUFirstUse:
 			clog.Info("TOFU: agent_hash baseline established",
 				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+		case TOFULegacyBackfill:
+			// Pre-FlagBootCommitment baseline accepting its first
+			// pinned agent_hash. The store has already written the
+			// row; reject the attestation when the operator has
+			// elected to refuse implicit trust upgrades, otherwise
+			// log a security event so the transition is auditable.
+			if v.rejectLegacyBaselines {
+				logging.Security(clog, "rejected legacy baseline agent_hash backfill",
+					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+					"hint", "remove --reject-legacy-baselines or clear the stale baseline row to allow this client through")
+				v.metrics.Rejections.Inc("integrity_mismatch")
+				result.Result = types.VerifyIntegrityMismatch
+				return result, errors.New("FAIL_INTEGRITY_MISMATCH: legacy baseline backfill refused by policy")
+			}
+			logging.Security(clog, "legacy baseline agent_hash backfilled",
+				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+				"attest_count", hashBaseline.AttestCount,
+				"hint", "set RejectLegacyBaselines once the fleet rollout window has closed to refuse this branch")
 		case TOFUMatch:
 			clog.Debug("agent_hash matches baseline",
 				"attest_count", hashBaseline.AttestCount)
