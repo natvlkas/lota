@@ -290,11 +290,14 @@ int self_measure(struct tpm_context *ctx) {
   if (ret < 0)
     return ret;
 
-  ret = tpm_pcr_extend(ctx, LOTA_PCR_SELF, self_hash);
-  if (ret < 0)
-    return ret;
-
-  return 0;
+  /*
+   * Bind PCR14 to (self_hash, resetCount, restartCount). A dirty
+   * shutdown that lets the platform reboot into a tampered userspace
+   * cannot replay the previous baseline value because resetCount has
+   * advanced; the verifier rederives the expected PCR14 from the
+   * pinned agent hash plus the ClockInfo carried by the next quote.
+   */
+  return tpm_extend_boot_commitment(ctx, self_hash);
 }
 
 int poison_runtime_pcr(struct tpm_context *ctx) {

@@ -8,12 +8,54 @@
 package verify
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+// bootCommitmentTag is the domain-separation prefix used by the agent
+// when extending PCR14 with the boot commitment. It MUST match the
+// LOTA-PCR14-BOOT-COMMITMENT-v1 string in src/agent/tpm.c.
+const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
+
+// DeriveBootCommitmentPCR14 reproduces the agent's PCR14 derivation:
+//
+//	commit  = SHA256(tag || agent_hash || resetCount_be || restartCount_be)
+//	pcr14   = SHA256(0^32 || commit)
+//
+// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo
+// of the quote.
+func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
+	resetCount, restartCount uint32) [types.HashSize]byte {
+
+	var counters [8]byte
+	binary.BigEndian.PutUint32(counters[0:4], resetCount)
+	binary.BigEndian.PutUint32(counters[4:8], restartCount)
+
+	commit := sha256.New()
+	commit.Write([]byte(bootCommitmentTag))
+	commit.Write(agentHash[:])
+	commit.Write(counters[:])
+	commitDigest := commit.Sum(nil)
+
+	var zero [types.HashSize]byte
+	pcr := sha256.New()
+	pcr.Write(zero[:])
+	pcr.Write(commitDigest)
+
+	var out [types.HashSize]byte
+	copy(out[:], pcr.Sum(nil))
+	return out
+}
+
+// ErrBaselineNotFound is returned by baseline-mutating helpers when the
+// target client has no PCR14 baseline row yet.
+var ErrBaselineNotFound = errors.New("baseline not found for client")
 
 // defines the interface for PCR baseline stores
 type BaselineStorer interface {
@@ -37,6 +79,16 @@ type BaselineStorer interface {
 type ClientBaseline struct {
 	// agent self-measurement hash
 	PCR14 [types.HashSize]byte
+
+	// SHA-256 of the agent binary; pinned independently of PCR14 so the
+	// expected PCR14 can be derived from (agent_hash, resetCount,
+	// restartCount) and replayed-but-stale PCR14 values are rejected
+	// after a dirty reboot.
+	//
+	// Zero array means the baseline was created by an older verifier
+	// that did not pin agent_hash; subsequent attestations from the
+	// same client backfill the field on success.
+	AgentHash [types.HashSize]byte
 
 	// when baseline was established
 	FirstSeen time.Time
@@ -74,6 +126,20 @@ type BootBaselineStorer interface {
 	// CheckAndUpdateBootPCRs validates PCR0/PCR1/PCR7 against the stored
 	// baseline. Semantics mirror BaselineStorer.CheckAndUpdate.
 	CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline)
+}
+
+// AgentHashStorer is optionally implemented by baseline stores that can
+// pin the agent self-hash alongside (or instead of) PCR14. The hash is
+// the SHA-256 of the agent binary as captured by the agent at startup;
+// the verifier uses it to derive the expected PCR14 from TPM ClockInfo,
+// defeating dirty-shutdown replay against the static PCR14 baseline.
+type AgentHashStorer interface {
+	// CheckAndUpdateAgentHash pins the agent self-hash with TOFU
+	// semantics that mirror CheckAndUpdate(). currentPCR14 is recorded
+	// alongside the hash so the baselines table satisfies its NOT NULL
+	// constraint on first use.
+	CheckAndUpdateAgentHash(clientID string,
+		currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 }
 
 // manages per-client PCR baselines (TOFU)
@@ -198,6 +264,52 @@ func (s *BaselineStore) Stats() BaselineStats {
 // returns hex-encoded PCR 14 value
 func FormatPCR14(pcr14 [types.HashSize]byte) string {
 	return hex.EncodeToString(pcr14[:])
+}
+
+// CheckAndUpdateAgentHash pins agent_hash with TOFU semantics in the
+// in-memory baseline store; currentPCR14 is captured on first use so
+// operators retain a forensic snapshot of the runtime PCR value.
+func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
+	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	existing, exists := s.baselines[clientID]
+	if !exists {
+		b := &ClientBaseline{
+			PCR14:       currentPCR14,
+			AgentHash:   agentHash,
+			FirstSeen:   now,
+			LastSeen:    now,
+			AttestCount: 1,
+		}
+		s.baselines[clientID] = b
+		out := *b
+		return TOFUFirstUse, &out
+	}
+
+	var zero [types.HashSize]byte
+	if existing.AgentHash == zero {
+		// upgrade path: legacy row without agent_hash. Backfill on this
+		// match and treat it as a TOFUFirstUse-equivalent decision.
+		existing.AgentHash = agentHash
+		existing.LastSeen = now
+		existing.AttestCount++
+		out := *existing
+		return TOFUMatch, &out
+	}
+
+	if existing.AgentHash != agentHash {
+		out := *existing
+		return TOFUMismatch, &out
+	}
+
+	existing.LastSeen = now
+	existing.AttestCount++
+	out := *existing
+	return TOFUMatch, &out
 }
 
 // CheckAndUpdateBootPCRs pins PCR0/PCR1/PCR7 with TOFU semantics that

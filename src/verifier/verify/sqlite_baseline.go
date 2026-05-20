@@ -35,14 +35,14 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	now := time.Now()
 
 	// check for existing baseline
-	var storedPCR14 []byte
+	var storedPCR14, storedAgentHash []byte
 	var firstSeen, lastSeen time.Time
 	var attestCount uint64
 
 	err := s.db.QueryRow(
-		"SELECT pcr14, first_seen, last_seen, attest_count FROM baselines WHERE client_id = ?",
+		"SELECT pcr14, agent_hash, first_seen, last_seen, attest_count FROM baselines WHERE client_id = ?",
 		clientID,
-	).Scan(&storedPCR14, &firstSeen, &lastSeen, &attestCount)
+	).Scan(&storedPCR14, &storedAgentHash, &firstSeen, &lastSeen, &attestCount)
 
 	if err == sql.ErrNoRows {
 		// first use - establish baseline
@@ -74,11 +74,16 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	if len(storedPCR14) == types.HashSize {
 		copy(stored[:], storedPCR14)
 	}
+	var agentHash [types.HashSize]byte
+	if len(storedAgentHash) == types.HashSize {
+		copy(agentHash[:], storedAgentHash)
+	}
 
 	if stored != pcr14 {
 		// PCR mismatch detected - possible tampering, do not update baseline
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       stored,
+			AgentHash:   agentHash,
 			FirstSeen:   firstSeen,
 			LastSeen:    lastSeen,
 			AttestCount: attestCount,
@@ -97,6 +102,105 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 
 	return TOFUMatch, &ClientBaseline{
 		PCR14:       stored,
+		AgentHash:   agentHash,
+		FirstSeen:   firstSeen,
+		LastSeen:    now,
+		AttestCount: newCount,
+	}
+}
+
+// CheckAndUpdateAgentHash pins agent_hash with TOFU semantics. The
+// pcr14 column is filled on first use from currentPCR14 so the schema
+// NOT NULL constraint is satisfied; the column carries no security
+// meaning for boot-commitment clients - the verifier derives the
+// expected PCR14 dynamically from agent_hash + ClockInfo.
+func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
+	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	var storedPCR14, storedAgentHash []byte
+	var firstSeen, lastSeen time.Time
+	var attestCount uint64
+
+	err := s.db.QueryRow(
+		"SELECT pcr14, agent_hash, first_seen, last_seen, attest_count FROM baselines WHERE client_id = ?",
+		clientID,
+	).Scan(&storedPCR14, &storedAgentHash, &firstSeen, &lastSeen, &attestCount)
+
+	if err == sql.ErrNoRows {
+		_, err := s.db.Exec(
+			"INSERT INTO baselines (client_id, pcr14, agent_hash, first_seen, last_seen, attest_count) VALUES (?, ?, ?, ?, ?, 1)",
+			clientID, currentPCR14[:], agentHash[:], now.UTC(), now.UTC(),
+		)
+		if err != nil {
+			slog.Error("agent_hash baseline INSERT failed",
+				"client_id", clientID, "error", err)
+			return TOFUError, nil
+		}
+		return TOFUFirstUse, &ClientBaseline{
+			PCR14:       currentPCR14,
+			AgentHash:   agentHash,
+			FirstSeen:   now,
+			LastSeen:    now,
+			AttestCount: 1,
+		}
+	}
+	if err != nil {
+		return TOFUError, nil
+	}
+
+	var pcr14 [types.HashSize]byte
+	if len(storedPCR14) == types.HashSize {
+		copy(pcr14[:], storedPCR14)
+	}
+	var stored [types.HashSize]byte
+	hasStored := len(storedAgentHash) == types.HashSize
+	if hasStored {
+		copy(stored[:], storedAgentHash)
+	}
+
+	if !hasStored {
+		// legacy row pre-dating agent_hash; backfill and accept as match.
+		newCount := attestCount + 1
+		if _, err := s.db.Exec(
+			"UPDATE baselines SET agent_hash = ?, last_seen = ?, attest_count = ? WHERE client_id = ?",
+			agentHash[:], now.UTC(), newCount, clientID,
+		); err != nil {
+			slog.Error("agent_hash backfill failed", "client_id", clientID, "error", err)
+			return TOFUError, nil
+		}
+		return TOFUMatch, &ClientBaseline{
+			PCR14:       pcr14,
+			AgentHash:   agentHash,
+			FirstSeen:   firstSeen,
+			LastSeen:    now,
+			AttestCount: newCount,
+		}
+	}
+
+	if stored != agentHash {
+		return TOFUMismatch, &ClientBaseline{
+			PCR14:       pcr14,
+			AgentHash:   stored,
+			FirstSeen:   firstSeen,
+			LastSeen:    lastSeen,
+			AttestCount: attestCount,
+		}
+	}
+
+	newCount := attestCount + 1
+	if _, err := s.db.Exec(
+		"UPDATE baselines SET last_seen = ?, attest_count = ? WHERE client_id = ?",
+		now.UTC(), newCount, clientID,
+	); err != nil {
+		slog.Warn("agent_hash baseline update failed", "client_id", clientID, "error", err)
+	}
+	return TOFUMatch, &ClientBaseline{
+		PCR14:       pcr14,
+		AgentHash:   stored,
 		FirstSeen:   firstSeen,
 		LastSeen:    now,
 		AttestCount: newCount,

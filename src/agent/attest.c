@@ -478,6 +478,15 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
 
+  /*
+   * Advertise the v1 PCR14 boot-commitment derivation so the verifier
+   * rederives the expected PCR14 from (agent_hash, resetCount,
+   * restartCount). self_measure() runs once during agent startup and
+   * is the only path that extends PCR14, so the bit is always set on
+   * a healthy quote.
+   */
+  report->header.flags |= LOTA_REPORT_FLAG_BOOT_COMMITMENT;
+
   ret = 0;
 
 cleanup:

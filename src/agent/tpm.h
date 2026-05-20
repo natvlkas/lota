@@ -280,6 +280,42 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
                    const uint8_t *digest);
 
 /*
+ * tpm_boot_commitment_digest - Compute the boot-bound PCR14 commit
+ * @self_hash:     SHA-256 of the running agent binary (LOTA_HASH_SIZE bytes)
+ * @reset_count:   TPM clockInfo.resetCount  (big-endian wire layout)
+ * @restart_count: TPM clockInfo.restartCount (big-endian wire layout)
+ * @out_digest:    LOTA_HASH_SIZE bytes
+ *
+ * Domain-separated digest used by tpm_extend_boot_commitment(). The
+ * verifier mirrors the same construction to derive the expected PCR14
+ * value from the pinned baseline agent hash plus the ClockInfo
+ * recovered from the TPMS_ATTEST quote.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
+                               uint32_t restart_count, uint8_t out_digest[]);
+
+/*
+ * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
+ *                              current TPM reset/restart counter
+ * @ctx:       Initialized TPM context
+ * @self_hash: SHA-256 of the running agent binary
+ *
+ * Reads clockInfo via Esys_ReadClock and extends PCR14 with the
+ * boot-commitment digest defined by tpm_boot_commitment_digest().
+ * Re-entrancy across agent restarts without TPM reset is handled by
+ * inspecting PCR14: zeros mean a fresh boot (extend), the expected
+ * post-extend value means a warm agent restart (skip), anything else
+ * means the runtime PCR14 has been tampered with and the call fails
+ * with -EBADMSG so attestation refuses to proceed.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_extend_boot_commitment(struct tpm_context *ctx,
+                               const uint8_t self_hash[]);
+
+/*
  * tpm_get_aik_public - Export AIK public key in DER SPKI format
  * @ctx: Initialized TPM context
  * @buf: Output buffer for DER-encoded public key

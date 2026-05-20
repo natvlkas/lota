@@ -1045,6 +1045,124 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
   return 0;
 }
 
+/*
+ * Domain-separation tag for the PCR14 boot commitment.
+ *
+ * The string is intentionally version-tagged so a future revision can
+ * change the derivation without colliding with deployed baselines: the
+ * verifier negotiates the construction via FlagBootCommitment and the
+ * agent always emits the construction matching the current tag.
+ */
+#define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v1"
+
+/* PCR index used for the agent self-measurement and boot commitment.
+ * Mirrors agent.h::LOTA_PCR_SELF without dragging the agent header into
+ * the unit-test build (tpm.c is also linked from test_aik_rotation). */
+#define TPM_BOOT_COMMITMENT_PCR 14
+
+int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
+                               uint32_t restart_count, uint8_t out_digest[]) {
+  if (!self_hash || !out_digest)
+    return -EINVAL;
+
+  uint8_t reset_be[4];
+  uint8_t restart_be[4];
+  reset_be[0] = (uint8_t)((reset_count >> 24) & 0xff);
+  reset_be[1] = (uint8_t)((reset_count >> 16) & 0xff);
+  reset_be[2] = (uint8_t)((reset_count >> 8) & 0xff);
+  reset_be[3] = (uint8_t)(reset_count & 0xff);
+  restart_be[0] = (uint8_t)((restart_count >> 24) & 0xff);
+  restart_be[1] = (uint8_t)((restart_count >> 16) & 0xff);
+  restart_be[2] = (uint8_t)((restart_count >> 8) & 0xff);
+  restart_be[3] = (uint8_t)(restart_count & 0xff);
+
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  if (!md)
+    return -ENOMEM;
+
+  int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+           EVP_DigestUpdate(md, TPM_BOOT_COMMITMENT_TAG,
+                            sizeof(TPM_BOOT_COMMITMENT_TAG) - 1) == 1 &&
+           EVP_DigestUpdate(md, self_hash, LOTA_HASH_SIZE) == 1 &&
+           EVP_DigestUpdate(md, reset_be, sizeof(reset_be)) == 1 &&
+           EVP_DigestUpdate(md, restart_be, sizeof(restart_be)) == 1 &&
+           EVP_DigestFinal_ex(md, out_digest, NULL) == 1;
+  EVP_MD_CTX_free(md);
+
+  if (!ok)
+    return -EIO;
+  return 0;
+}
+
+int tpm_extend_boot_commitment(struct tpm_context *ctx,
+                               const uint8_t self_hash[]) {
+  TSS2_RC rc;
+  TPMS_TIME_INFO *time_info = NULL;
+  uint8_t commit[LOTA_HASH_SIZE];
+  uint8_t current_pcr14[LOTA_HASH_SIZE];
+  uint8_t expected_pcr14[LOTA_HASH_SIZE];
+  uint8_t zero_pcr14[LOTA_HASH_SIZE] = {0};
+  int ret;
+
+  if (!ctx || !ctx->initialized || !self_hash)
+    return -EINVAL;
+
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_ReadClock(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                ESYS_TR_NONE, &time_info));
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  uint32_t reset_count = time_info->clockInfo.resetCount;
+  uint32_t restart_count = time_info->clockInfo.restartCount;
+  Esys_Free(time_info);
+
+  ret =
+      tpm_boot_commitment_digest(self_hash, reset_count, restart_count, commit);
+  if (ret < 0)
+    return ret;
+
+  /*
+   * Derive the expected post-extend PCR14 value so a warm agent
+   * restart (TPM not reset, PCR14 already bound) can be detected and
+   * the second extend skipped. PCR14 starts at 0^32, so the expected
+   * post-extend value is SHA256(0^32 || commit).
+   */
+  {
+    EVP_MD_CTX *md = EVP_MD_CTX_new();
+    if (!md)
+      return -ENOMEM;
+    int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(md, zero_pcr14, sizeof(zero_pcr14)) == 1 &&
+             EVP_DigestUpdate(md, commit, sizeof(commit)) == 1 &&
+             EVP_DigestFinal_ex(md, expected_pcr14, NULL) == 1;
+    EVP_MD_CTX_free(md);
+    if (!ok)
+      return -EIO;
+  }
+
+  ret = tpm_read_pcr(ctx, TPM_BOOT_COMMITMENT_PCR, TPM_HASH_ALG, current_pcr14);
+  if (ret < 0)
+    return ret;
+
+  if (memcmp(current_pcr14, zero_pcr14, LOTA_HASH_SIZE) == 0) {
+    /* fresh boot: TPM was reset, PCR14 still 0^32; extend with commit */
+    return tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
+  }
+
+  if (memcmp(current_pcr14, expected_pcr14, LOTA_HASH_SIZE) == 0) {
+    /* warm agent restart: PCR14 already bound to this resetCount */
+    return 0;
+  }
+
+  /*
+   * Anything else means an unrelated extender touched PCR14 between
+   * platform startup and the agent's own measurement. The trust chain
+   * is unrecoverable from userspace; refuse to attest.
+   */
+  return -EBADMSG;
+}
+
 int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
                        size_t *out_size) {
   TSS2_RC rc;

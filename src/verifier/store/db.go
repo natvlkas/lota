@@ -136,6 +136,13 @@ var migrations = []migration{
 			ALTER TABLE baselines ADD COLUMN boot_last_seen  TIMESTAMP;
 		`,
 	},
+	{
+		version:     4,
+		description: "pin agent self-hash for PCR14 boot-commitment derivation",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN agent_hash BLOB;
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

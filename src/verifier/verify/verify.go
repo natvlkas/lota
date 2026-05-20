@@ -887,23 +887,82 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
-	tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
-	switch tofuResult {
-	case TOFUFirstUse:
-		clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
-	case TOFUMatch:
-		clog.Debug("PCR14 matches baseline", "attest_count", baseline.AttestCount)
-	case TOFUMismatch:
-		logging.Security(clog, "potential agent tampering detected",
-			"expected_pcr14", FormatPCR14(baseline.PCR14), "actual_pcr14", pcr14Hex)
-		v.metrics.Rejections.Inc("integrity_mismatch")
-		result.Result = types.VerifyIntegrityMismatch
-		return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
-	case TOFUError:
-		clog.Error("baseline store error, refusing attestation")
-		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
-		return result, fmt.Errorf("FAIL_BASELINE_ERROR: baseline store unavailable")
+
+	useBootCommitment := report.Header.Flags&types.FlagBootCommitment != 0
+
+	if useBootCommitment {
+		hashStore, ok := v.baselineStore.(AgentHashStorer)
+		if !ok {
+			clog.Error("baseline store does not support agent_hash pinning; refusing FlagBootCommitment attestation")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_BASELINE_ERROR: store missing agent_hash support")
+		}
+
+		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
+		defer wipeBytes(attestData)
+		attest, err := ParseTPMSAttest(attestData)
+		if err != nil {
+			clog.Error("PCR14 derivation: failed to parse TPMS_ATTEST", "error", err)
+			v.metrics.Rejections.Inc("pcr_fail")
+			result.Result = types.VerifyPCRFail
+			return result, fmt.Errorf("attest parse for boot commitment failed: %w", err)
+		}
+
+		expected := DeriveBootCommitmentPCR14(report.System.AgentHash,
+			attest.ClockInfo.ResetCount, attest.ClockInfo.RestartCount)
+		if expected != pcr14 {
+			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
+				"actual_pcr14", pcr14Hex,
+				"expected_pcr14", FormatPCR14(expected),
+				"reset_count", attest.ClockInfo.ResetCount,
+				"restart_count", attest.ClockInfo.RestartCount)
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
+		}
+
+		tofuResult, hashBaseline := hashStore.CheckAndUpdateAgentHash(
+			clientID, pcr14, report.System.AgentHash)
+		switch tofuResult {
+		case TOFUFirstUse:
+			clog.Info("TOFU: agent_hash baseline established",
+				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+		case TOFUMatch:
+			clog.Debug("agent_hash matches baseline",
+				"attest_count", hashBaseline.AttestCount)
+		case TOFUMismatch:
+			logging.Security(clog, "agent_hash drift detected",
+				"expected_agent_hash", hex.EncodeToString(hashBaseline.AgentHash[:]),
+				"actual_agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: agent_hash changed from baseline")
+		case TOFUError:
+			clog.Error("agent_hash baseline store error, refusing attestation")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
+		}
+	} else {
+		tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
+		switch tofuResult {
+		case TOFUFirstUse:
+			clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
+		case TOFUMatch:
+			clog.Debug("PCR14 matches baseline", "attest_count", baseline.AttestCount)
+		case TOFUMismatch:
+			logging.Security(clog, "potential agent tampering detected",
+				"expected_pcr14", FormatPCR14(baseline.PCR14), "actual_pcr14", pcr14Hex)
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
+		case TOFUError:
+			clog.Error("baseline store error, refusing attestation")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, fmt.Errorf("FAIL_BASELINE_ERROR: baseline store unavailable")
+		}
 	}
 
 	// pin firmware / SecureBoot PCRs (0, 1, 7) on stores that support it.

@@ -39,6 +39,13 @@ const (
 	FlagLockdown     uint32 = 1 << 5 // Kernel lockdown active
 	FlagSecureBoot   uint32 = 1 << 6 // Secure Boot enabled
 	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
+
+	// FlagBootCommitment indicates the agent extended PCR14 with
+	// SHA256(magic || agent_hash || resetCount_be || restartCount_be)
+	// instead of the legacy single-extend of agent_hash. The verifier
+	// must derive the expected PCR14 from the pinned baseline agent
+	// hash plus the TPMS_ATTEST ClockInfo before comparing.
+	FlagBootCommitment uint32 = 1 << 8
 )
 
 // verification result codes
