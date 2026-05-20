@@ -119,6 +119,57 @@ static int child_seccomp_blocks_ptrace_self(void) {
   return 0;
 }
 
+/*
+ * Each must fail with EPERM after the seccomp filter is loaded. The probe
+ * values are chosen so the syscall never makes a successful kernel-side effect
+ * even if seccomp somehow let the call through.
+ */
+static int child_seccomp_blocks_new_denials(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+
+  struct {
+    long nr;
+    long arg0;
+    long arg1;
+  } probes[] = {
+      /* SYS_io_uring_setup(entries=1, params=NULL) -> EFAULT without seccomp */
+      {SYS_io_uring_setup, 1, 0},
+      /* SYS_userfaultfd(flags=0) -> usually EPERM/EACCES from kernel,
+       * but seccomp intercepts first. */
+      {SYS_userfaultfd, 0, 0},
+      /* SYS_pidfd_send_signal(pidfd=-1, sig=0, info=NULL, flags=0) ->
+       * EBADF without seccomp; seccomp returns EPERM. */
+      {SYS_pidfd_send_signal, -1, 0},
+  /* SYS_modify_ldt(func=0, ptr=NULL, count=0) -> ENOSYS on
+   * non-x86 builds where the syscall is absent, otherwise EINVAL
+   * from the kernel. seccomp returns EPERM if installed. */
+#ifdef SYS_modify_ldt
+      {SYS_modify_ldt, 0, 0},
+#endif
+      /* SYS_personality(persona=0xFFFFFFFF) -> returns previous
+       * persona on success; the call has a real side effect, so we
+       * MUST see EPERM here. */
+      {SYS_personality, (long)0xFFFFFFFF, 0},
+  };
+
+  for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+    errno = 0;
+    long ret =
+        syscall(probes[i].nr, probes[i].arg0, probes[i].arg1, 0, 0, 0, 0);
+    if (ret >= 0 && probes[i].nr == SYS_personality) {
+      /* personality() returns the previous mask on success; the only
+       * acceptable outcome is an EPERM error. */
+      return 1;
+    }
+    if (errno != EPERM)
+      return 1;
+  }
+  return 0;
+}
+
 static int child_seccomp_allows_benign_syscalls(void) {
   if (hardening_apply_no_new_privs() != 0)
     return 1;
@@ -235,6 +286,9 @@ int main(void) {
                  child_seccomp_blocks_mount);
   run_child_case("seccomp blocks ptrace() with EPERM",
                  child_seccomp_blocks_ptrace_self);
+  run_child_case(
+      "seccomp blocks io_uring/userfaultfd/pidfd/modify_ldt/personality",
+      child_seccomp_blocks_new_denials);
   run_child_case("seccomp keeps getpid/write available",
                  child_seccomp_allows_benign_syscalls);
   run_child_case("apply_all returns 0 in a clean child",

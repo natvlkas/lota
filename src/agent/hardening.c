@@ -76,6 +76,25 @@ int hardening_apply_no_dumpable(void) {
  * Syscalls the agent must never invoke. EPERM keeps the agent alive on
  * an accidental hit and matches the systemd unit's SystemCallErrorNumber
  * so observed behavior is consistent across launch paths.
+ *
+ * Coverage rationale:
+ *   - ptrace, process_vm_readv/writev: cross-process memory inspection.
+ *   - kexec_load/file_load, init_module/finit/delete/create_module,
+ *     query_module, get_kernel_syms: kernel-image and module surface.
+ *   - pivot_root, mount, umount2, name_to_handle_at, open_by_handle_at,
+ *     setns, unshare: namespace and filesystem-handle manipulation.
+ *   - swapon/swapoff, reboot: system-wide state changes.
+ *   - io_uring_setup, io_uring_enter, io_uring_register: ring-based
+ *     async I/O is unused by the agent and is the entry point for
+ *     several historical sandbox escapes (CVE-2022-2602 and follow-ons).
+ *   - userfaultfd: classic UAF / heap-spray primitive (CVE-2016-3070
+ *     class). The agent does not register a userfault region.
+ *   - pidfd_send_signal: delivers signals without kill()/permission
+ *     checks via process file descriptors; the agent only signals
+ *     itself via signalfd.
+ *   - modify_ldt: x86 LDT manipulation, recurring local-priv vector.
+ *   - personality: ABI-switching primitive abused to weaken ASLR
+ *     (READ_IMPLIES_EXEC) on x86.
  */
 static const int hardening_denied_syscalls[] = {
     SCMP_SYS(ptrace),
@@ -99,6 +118,13 @@ static const int hardening_denied_syscalls[] = {
     SCMP_SYS(open_by_handle_at),
     SCMP_SYS(setns),
     SCMP_SYS(unshare),
+    SCMP_SYS(io_uring_setup),
+    SCMP_SYS(io_uring_enter),
+    SCMP_SYS(io_uring_register),
+    SCMP_SYS(userfaultfd),
+    SCMP_SYS(pidfd_send_signal),
+    SCMP_SYS(modify_ldt),
+    SCMP_SYS(personality),
 };
 
 int hardening_apply_seccomp(void) {

@@ -58,8 +58,10 @@ int hardening_apply_no_dumpable(void);
  *   ptrace, process_vm_readv, process_vm_writev, kexec_load,
  *   kexec_file_load, init_module, finit_module, delete_module,
  *   create_module, query_module, get_kernel_syms, pivot_root,
- *   swapon, swapoff, reboot, mount, umount, umount2,
- *   name_to_handle_at, open_by_handle_at, setns, unshare.
+ *   swapon, swapoff, reboot, mount, umount2, name_to_handle_at,
+ *   open_by_handle_at, setns, unshare, io_uring_setup,
+ *   io_uring_enter, io_uring_register, userfaultfd,
+ *   pidfd_send_signal, modify_ldt, personality.
  *
  * Requires PR_SET_NO_NEW_PRIVS to be set beforehand.
  *
