@@ -852,7 +852,23 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   if (ret < 0) {
     lota_err("tpm_quote failed: %s", strerror(-ret));
     fail = true;
-    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+    /*
+     * tpm_quote() latches lockout_active on the tpm_context the
+     * first time TPM2_RC_LOCKOUT is observed. The continuous
+     * attestation loop folds that bit into ctx->status_flags on
+     * its next round, but GET_TOKEN may be the path that triggered
+     * the transition. Surface LOTA_IPC_ERR_TPM_LOCKOUT directly
+     * and seed the IPC status so the next request short-circuits
+     * at the early-reject branch above instead of repeating the
+     * doomed quote.
+     */
+    if (tpm_is_locked_out(ctx->tpm)) {
+      fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
+      ipc_update_status(ctx, ctx->status_flags | LOTA_STATUS_TPM_LOCKOUT,
+                        ctx->valid_until);
+    } else {
+      fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+    }
     goto out;
   }
 
