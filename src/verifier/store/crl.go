@@ -37,8 +37,7 @@ var (
 
 // revocationListSet holds CRLs grouped by issuer subject DN.
 //
-// A single set may contain multiple CRLs (TPM manufacturers commonly
-// publish per-model or per-batch lists). Lookups iterate every list
+// A single set may contain multiple CRLs. Lookups iterate every list
 // whose Issuer matches the certificate Issuer; the cert is revoked if
 // any matching list contains its serial number, and the issuer is
 // flagged stale if every matching list is past NextUpdate.
@@ -52,10 +51,12 @@ func newRevocationListSet() *revocationListSet {
 	}
 }
 
-// loadAndVerify parses one PEM-encoded CRL file, verifies it against the
-// supplied CA pool, and adds it to the set. A CRL whose signature does
-// not chain to any configured CA is rejected up front so misconfiguration
-// surfaces at startup rather than at attestation time.
+// loadAndVerify parses a CRL file, verifies every CRL it contains
+// against the supplied CA pool, and adds each accepted CRL to the set.
+// A file may carry multiple concatenated PEM "X509 CRL" blocks and each
+// block is validated independently. A CRL whose signature does not chain
+// to any configured CA, or whose NextUpdate is absent, is rejected up
+// front so misconfiguration surfaces at startup rather than at attestation time.
 func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) error {
 	if len(cas) == 0 {
 		return ErrNoTrustedCAs
@@ -66,10 +67,26 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 		return fmt.Errorf("read CRL %s: %w", path, err)
 	}
 
-	crl, err := parseCRL(data)
+	crls, err := parseCRL(data)
 	if err != nil {
 		return fmt.Errorf("parse CRL %s: %w", path, err)
 	}
+
+	for idx, crl := range crls {
+		if err := s.verifyAndAdd(path, idx, crl, cas); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyAndAdd applies the per-CRL freshness and signature gates and,
+// on success, attaches the CRL to byIssuer under its raw subject DN.
+// Errors are wrapped with the source path and the zero-based index of
+// the CRL inside the file so operators can tell which block in a
+// multi-CRL bundle was rejected.
+func (s *revocationListSet) verifyAndAdd(path string, idx int,
+	crl *x509.RevocationList, cas []*x509.Certificate) error {
 
 	// RFC 5280 p5.1.2.5 marks NextUpdate as OPTIONAL at the ASN.1 level
 	// but mandates it for production profiles. Without NextUpdate the
@@ -79,7 +96,8 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 	// at load time so operators see the misconfiguration at startup
 	// rather than at the first attestation.
 	if crl.NextUpdate.IsZero() {
-		return fmt.Errorf("%w: %s", ErrCRLMissingNextUpdate, path)
+		return fmt.Errorf("%w: %s (block %d)",
+			ErrCRLMissingNextUpdate, path, idx)
 	}
 
 	// signature must verify against one of the trusted CA certificates
@@ -99,9 +117,10 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 	}
 	if !verified {
 		if sigErr != nil {
-			return fmt.Errorf("%w: %v", ErrCRLSignature, sigErr)
+			return fmt.Errorf("%w: %s (block %d): %v",
+				ErrCRLSignature, path, idx, sigErr)
 		}
-		return ErrCRLNoIssuer
+		return fmt.Errorf("%w: %s (block %d)", ErrCRLNoIssuer, path, idx)
 	}
 
 	key := string(crl.RawIssuer)
@@ -109,14 +128,37 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 	return nil
 }
 
-// parseCRL accepts a CRL file in PEM (-----BEGIN X509 CRL-----) form.
-// DER input is also accepted for tooling convenience.
-func parseCRL(data []byte) (*x509.RevocationList, error) {
-	block, _ := pem.Decode(data)
-	if block != nil {
-		return x509.ParseRevocationList(block.Bytes)
+// parseCRL accepts a CRL file in PEM (-----BEGIN X509 CRL-----) form,
+// including bundles that concatenate multiple PEM blocks in one file
+// (one CRL per BEGIN/END pair). Non-CRL PEM blocks are skipped so a
+// bundle interleaved with informational headers or trust-anchor copies
+// still loads cleanly. A single DER-encoded CRL is also accepted for
+// tooling convenience.
+func parseCRL(data []byte) ([]*x509.RevocationList, error) {
+	block, rest := pem.Decode(data)
+	if block == nil {
+		crl, err := x509.ParseRevocationList(data)
+		if err != nil {
+			return nil, err
+		}
+		return []*x509.RevocationList{crl}, nil
 	}
-	return x509.ParseRevocationList(data)
+
+	var out []*x509.RevocationList
+	for blockIdx := 0; block != nil; blockIdx++ {
+		if block.Type == "X509 CRL" {
+			crl, err := x509.ParseRevocationList(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("parse PEM block %d: %w", blockIdx, err)
+			}
+			out = append(out, crl)
+		}
+		block, rest = pem.Decode(rest)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no X509 CRL PEM blocks found")
+	}
+	return out, nil
 }
 
 // check returns nil if cert is not present in any matching CRL. The

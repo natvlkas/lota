@@ -296,6 +296,81 @@ func writeCRLNoNextUpdate(t *testing.T, dir string, ca *x509.Certificate) string
 	return path
 }
 
+// writeBundledCRL emits a single PEM file containing two
+// independently-signed CRLs concatenated back-to-back. Production
+// operators receive TPM manufacturer feeds shaped this way; the
+// loader must consume every BEGIN/END pair and not silently stop
+// after the first one.
+func writeBundledCRL(t *testing.T, dir string, ca *x509.Certificate,
+	caKey *rsa.PrivateKey, nextUpdate time.Time,
+	firstSerials, secondSerials []int64) string {
+	t.Helper()
+
+	encodeOne := func(number int64, entries []int64) []byte {
+		var revoked []x509.RevocationListEntry
+		for _, s := range entries {
+			revoked = append(revoked, x509.RevocationListEntry{
+				SerialNumber:   big.NewInt(s),
+				RevocationTime: time.Now().Add(-time.Minute),
+			})
+		}
+		tmpl := &x509.RevocationList{
+			SignatureAlgorithm:        x509.SHA256WithRSA,
+			Number:                    big.NewInt(number),
+			ThisUpdate:                time.Now().Add(-time.Hour),
+			NextUpdate:                nextUpdate,
+			RevokedCertificateEntries: revoked,
+		}
+		der, err := x509.CreateRevocationList(rand.Reader, tmpl, ca, caKey)
+		if err != nil {
+			t.Fatalf("CreateRevocationList: %v", err)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+	}
+
+	buf := append([]byte{}, encodeOne(11, firstSerials)...)
+	buf = append(buf, encodeOne(12, secondSerials)...)
+
+	path := filepath.Join(dir, "bundle.pem")
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	return path
+}
+
+func TestCRL_LoadAcceptsMultiBlockPEMBundle(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, caKey := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	const firstSerial = 0xA1
+	const secondSerial = 0xB2
+
+	bundlePath := writeBundledCRL(t, dir, ca, caKey,
+		time.Now().Add(time.Hour),
+		[]int64{firstSerial}, []int64{secondSerial})
+
+	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, []string{bundlePath}, true)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	if cs.CRLCount() != 2 {
+		t.Fatalf("expected 2 CRLs loaded from bundle, got %d", cs.CRLCount())
+	}
+
+	// both serials must reject - one block alone is insufficient.
+	_, leaf1 := buildEKLeaf(t, ca, caKey, firstSerial)
+	if err := cs.verifyEKCertificate(leaf1); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("first-block serial: expected ErrCertificateRevoked, got %v", err)
+	}
+	_, leaf2 := buildEKLeaf(t, ca, caKey, secondSerial)
+	if err := cs.verifyEKCertificate(leaf2); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("second-block serial: expected ErrCertificateRevoked, got %v", err)
+	}
+}
+
 func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
 	dir := t.TempDir()
 
