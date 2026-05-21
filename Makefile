@@ -350,7 +350,7 @@ $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c 
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd
+	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)

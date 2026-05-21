@@ -15,6 +15,7 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -275,6 +276,34 @@ static int child_seccomp_kills_on_modify_ldt(void) {
 }
 #endif
 
+/*
+ * TSYNC propagation: after hardening_apply_seccomp() installs the
+ * filter with SCMP_FLTATR_CTL_TSYNC enabled, a thread spawned later
+ * inherits the filter. Issuing a denied syscall from that thread
+ * therefore must terminate the whole process via SIGSYS; without
+ * TSYNC the thread would start unfiltered and the call would return
+ * to userspace, the thread exit, and the parent observe WIFEXITED.
+ */
+static void *tsync_thread_denied_syscall(void *arg) {
+  (void)arg;
+  syscall(SYS_mount, "none", "/tmp/lota_tsync_should_never_mount", "tmpfs", 0,
+          "");
+  return NULL;
+}
+
+static int child_seccomp_tsync_kills_spawned_thread(void) {
+  if (hardening_apply_basics() != 0)
+    return 1;
+  if (hardening_apply_daemon() != 0)
+    return 1;
+
+  pthread_t t;
+  if (pthread_create(&t, NULL, tsync_thread_denied_syscall, NULL) != 0)
+    return 1;
+  pthread_join(t, NULL);
+  return 0; /* unreachable: SCMP_ACT_KILL_PROCESS terminates the group */
+}
+
 static int child_seccomp_kills_on_personality(void) {
   if (hardening_apply_no_new_privs() != 0)
     return 1;
@@ -454,6 +483,8 @@ int main(void) {
 #endif
   run_kill_case("seccomp kills on personality with SIGSYS",
                 child_seccomp_kills_on_personality);
+  run_kill_case("seccomp TSYNC kills denied syscall in spawned thread",
+                child_seccomp_tsync_kills_spawned_thread);
   run_child_case("seccomp keeps getpid/write available",
                  child_seccomp_allows_benign_syscalls);
   run_child_case("apply_all returns 0 in a clean child",

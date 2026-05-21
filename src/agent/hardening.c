@@ -232,6 +232,24 @@ int hardening_apply_seccomp(void) {
     }
   }
 
+  /*
+   * SCMP_FLTATR_CTL_TSYNC installs the filter on every thread of the
+   * caller's thread group (SECCOMP_FILTER_FLAG_TSYNC at the syscall
+   * level). The agent is single-threaded today but several near-term
+   * paths (libtss2 ESYS background worker, libbpf ring-buffer reader,
+   * future epoll worker pool) may legitimately spawn threads after
+   * this point. Without TSYNC any such thread starts unfiltered,
+   * silently reopening the deny-list. Failing the load when TSYNC
+   * cannot be enforced is the correct production behaviour: a
+   * libseccomp build that lacks TSYNC support is not a configuration
+   * the agent should run in.
+   */
+  rc = seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
+  if (rc < 0) {
+    seccomp_release(ctx);
+    return rc;
+  }
+
   rc = seccomp_load(ctx);
   seccomp_release(ctx);
   if (rc < 0)

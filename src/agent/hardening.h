@@ -83,6 +83,14 @@ int hardening_apply_no_dumpable(void);
  *
  * Requires PR_SET_NO_NEW_PRIVS to be set beforehand.
  *
+ * SCMP_FLTATR_CTL_TSYNC is enabled before load so the filter binds
+ * to every thread of the agent's thread group. The agent is
+ * single-threaded today but libtss2, libbpf, and any future epoll
+ * worker pool may legitimately spawn threads after this point;
+ * without TSYNC such threads would start unfiltered and silently
+ * reopen the deny-list. A libseccomp build that cannot satisfy the
+ * attribute fails the call.
+ *
  * Returns: 0 on success, negative errno on filter build/load failure.
  */
 int hardening_apply_seccomp(void);
