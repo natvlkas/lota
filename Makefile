@@ -261,6 +261,8 @@ install: all
 	install -d $(DESTDIR)/usr/lib/systemd/system
 	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
+	install -d $(DESTDIR)/usr/lib/udev/rules.d
+	install -m 644 configs/udev/99-lota-tpm.rules $(DESTDIR)/usr/lib/udev/rules.d/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/

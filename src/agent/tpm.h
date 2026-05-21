@@ -54,6 +54,53 @@ struct tpm_quote_response;
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
 #define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
 
+/*
+ * Persistent PCR14 clock-state path.
+ *
+ * TPM 2.0 PC Client Platform TPM Profile p3.3 leaves PCR14 in
+ * the OS-Loader-writable range (PCR8-15, Locality 0, auth-free
+ * TPM2_PCR_Extend). The TPM exposes no AuthValue or PolicyPCR
+ * mechanism that could gate the extend operation, so a local
+ * root with /dev/tpmrm0 access can extend PCR14 at any time
+ * between cold boot and the agent's first
+ * tpm_extend_boot_commitment() call. The defense surface lives
+ * entirely outside the TPM (udev + SELinux + systemd ordering); the
+ * clock-state file is the in-band detection layer: every successful
+ * extend records (resetCount, restartCount, post-extend PCR14,
+ * self_hash) and the next agent run compares the current TPM state
+ * against the snapshot to attribute any PCR14 mismatch as
+ *   - cold-boot tamper (resetCount advanced, PCR14 non-zero before
+ *     the agent could extend it);
+ *   - mid-boot-session tamper (resetCount unchanged, PCR14 differs
+ *     from the stored post-extend value AND from the value the
+ *     stored self_hash would produce); or
+ *   - live binary upgrade (resetCount unchanged, PCR14 matches the
+ *     stored post-extend value, self_hash differs).
+ * Without the snapshot all three collapse to a single -EBADMSG with
+ * no operator triage hint.
+ */
+#define TPM_CLOCK_STATE_PATH "/var/lib/lota/clock_state.dat"
+#define TPM_CLOCK_STATE_MAGIC 0x4C434C4B /* "LCLK" */
+#define TPM_CLOCK_STATE_VERSION 1
+
+/*
+ * PCR14 boot-commitment snapshot persisted across agent restarts.
+ *
+ * Layout is fixed and version-tagged so a future revision can extend
+ * the structure (reserved[] takes the new fields) without breaking
+ * load on the previous on-disk record.
+ */
+struct lota_clock_state {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t reset_count;          /* TPM clockInfo.resetCount at last extend */
+  uint32_t restart_count;        /* TPM clockInfo.restartCount at last extend */
+  uint8_t pcr14[LOTA_HASH_SIZE]; /* PCR14 value AFTER the extend */
+  uint8_t self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
+  int64_t saved_at;                  /* time_t when the snapshot was written */
+  uint8_t _reserved[32];
+} __attribute__((packed));
+
 #define TPM_AIK_AUTH_MAGIC 0x41545541 /* "AUTA" */
 #define TPM_AIK_AUTH_VERSION 1
 #define TPM_AIK_AUTH_SIZE 32
@@ -104,6 +151,12 @@ struct tpm_context {
   struct aik_metadata aik_meta;
   bool aik_meta_loaded;
   char aik_meta_path[256];
+
+  /*
+   * Persistent PCR14 clock-state snapshot path. Empty string selects
+   * TPM_CLOCK_STATE_PATH at runtime; tests override per fixture.
+   */
+  char clock_state_path[256];
 
   /* AIK userAuth loaded from root-only sidecar file */
   uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
@@ -348,6 +401,38 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
  * Returns: 0 on success, -ENODATA if self_measure() has not yet run.
  */
 int tpm_get_self_hash(const struct tpm_context *ctx, uint8_t out[]);
+
+/*
+ * tpm_clock_state_load - read the persisted PCR14 snapshot from
+ *                        ctx->clock_state_path (or TPM_CLOCK_STATE_PATH
+ *                        when the override is empty)
+ * @ctx: TPM context whose clock_state_path is consulted
+ * @out: caller-owned record populated on success
+ *
+ * Returns:
+ *   0          on success
+ *   -ENOENT    when the file does not exist (first run on this host)
+ *   -EINVAL    when the file is truncated, mismatches the magic, or
+ *              carries an unsupported version
+ *   negative errno on I/O failure
+ *
+ * Callers MUST treat -ENOENT as "no prior snapshot available" and
+ * NOT as a fatal error: a fresh host has nothing to compare against.
+ */
+int tpm_clock_state_load(const struct tpm_context *ctx,
+                         struct lota_clock_state *out);
+
+/*
+ * tpm_clock_state_save - atomically persist the post-extend PCR14
+ *                        snapshot for the next agent run
+ *
+ * The on-disk write goes through tmpfile + fsync + rename so a crash
+ * mid-write cannot leave a partial record.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int tpm_clock_state_save(const struct tpm_context *ctx,
+                         const struct lota_clock_state *in);
 
 /*
  * tpm_get_aik_public - Export AIK public key in DER SPKI format

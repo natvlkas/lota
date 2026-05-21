@@ -13,6 +13,40 @@ SELinux policy for confining the LOTA agent.
 | `lota_bpf_t`        | eBPF object files               |
 | `lota_log_t`        | Log files                       |
 | `lota_port_t`       | Network port for attestation    |
+| `lota_tpm_device_t` | `/dev/tpm[0-9]*` and `/dev/tpmrm[0-9]*` (relabelled by `configs/udev/99-lota-tpm.rules`) |
+
+### `lota_tpm_device_t` - pre-agent PCR14 defence
+
+TPM 2.0 PC Client Platform TPM Profile p3.3 keeps PCR14 in the
+OS-Loader-writable range (PCR8–15, Locality 0, auth-free
+`TPM2_PCR_Extend`). The TPM exposes **no on-chip mechanism** that
+could gate the extend, so a local-root attacker with `/dev/tpmrm0`
+access can extend PCR14 between cold boot and the agent's first
+`tpm_extend_boot_commitment()` call. The defence has to live outside
+the TPM. LOTA stacks four layers:
+
+1. **udev** (`configs/udev/99-lota-tpm.rules`) sets `0600 root:root`
+   on `/dev/tpm*` at device-add time and assigns the
+   `lota_tpm_device_t` SELinux label.
+2. **SELinux** (this module) is the only policy that allows `rw_chr_file_perms`
+   on `lota_tpm_device_t`, and only to `lota_agent_t`. Stock refpolicy
+   interfaces (`dev_rw_tpm()`, ...) bind to the generic `tpm_device_t`
+   label and no longer apply once the udev rule has run — including
+   for `unconfined_t`.
+3. **systemd ordering** (`systemd/lota-agent.service` `Before=multi-user.target
+   getty.target`) narrows the window in which any login-capable target
+   could spawn a tool that races the agent's first extend.
+4. **Persistent clock-state attribution** (`src/agent/tpm.c`,
+   `/var/lib/lota/clock_state.dat`) detects every PCR14 mismatch
+   post-hoc and attributes it to one of cold-boot tamper,
+   mid-session tamper, or live binary upgrade so the operator
+   receives an actionable journal entry.
+
+**Operators MUST run SELinux in enforcing mode for the MAC layer to
+bind.** A permissive system trusts every uid-0 process equally and
+LOTA cannot offer protection against that operator decision; the
+clock-state attribution layer still records the tamper but cannot
+prevent it.
 
 ### Capabilities Granted
 
@@ -128,6 +162,8 @@ EAC, BattlEye, and other anti-cheat systems running in Wine can:
 | `/var/lib/lota/`      | `lota_var_t`        |
 | `/var/log/lota/`      | `lota_log_t`        |
 | `/run/lota/`          | `lota_var_t`        |
+| `/dev/tpm[0-9]*`      | `lota_tpm_device_t` |
+| `/dev/tpmrm[0-9]*`    | `lota_tpm_device_t` |
 
 ### Custom Locations
 
@@ -169,8 +205,13 @@ sudo ausearch -m avc | audit2allow -m lota_local
 # Check device labels
 ls -Z /dev/tpm*
 
-# Should show tpm_device_t
-# If not, report bug in distribution policy (please!)
+# Expected after install: lota_tpm_device_t. If the label is still
+# tpm_device_t the LOTA udev rule never ran:
+sudo install -m 644 ../configs/udev/99-lota-tpm.rules \
+    /usr/lib/udev/rules.d/99-lota-tpm.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=tpm
+ls -Z /dev/tpm*
 ```
 
 #### BPF program loading fails

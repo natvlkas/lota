@@ -858,6 +858,152 @@ static void test_lockout_flag_lifecycle(void) {
  * test exercises its contract directly so the build catches any
  * regression in self_hash_ready gating or buffer width.
  */
+static void fill_pattern(uint8_t *buf, size_t n, uint8_t seed) {
+  for (size_t i = 0; i < n; i++)
+    buf[i] = (uint8_t)(seed ^ i);
+}
+
+/*
+ * Clock-state save/load round-trip: every field that survives the
+ * persistence layer must come back bit-identical so the tamper-
+ * attribution logic in tpm_extend_boot_commitment compares against
+ * the exact snapshot it wrote.
+ */
+static void test_clock_state_save_load_round_trip(void) {
+  struct tpm_context ctx;
+  struct lota_clock_state in;
+  struct lota_clock_state out;
+
+  TEST("tpm_clock_state save -> load round-trips every field");
+  make_ctx(&ctx);
+  snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+           "%s/clock_state.dat", tmp_dir);
+  unlink(ctx.clock_state_path);
+
+  memset(&in, 0, sizeof(in));
+  in.reset_count = 0xCAFEBABEU;
+  in.restart_count = 7;
+  fill_pattern(in.pcr14, LOTA_HASH_SIZE, 0x42);
+  fill_pattern(in.self_hash, LOTA_HASH_SIZE, 0xA5);
+  in.saved_at = 1715000000;
+
+  if (tpm_clock_state_save(&ctx, &in) != 0) {
+    FAIL("save failed");
+    return;
+  }
+
+  if (tpm_clock_state_load(&ctx, &out) != 0) {
+    FAIL("load failed");
+    return;
+  }
+
+  if (out.reset_count != in.reset_count ||
+      out.restart_count != in.restart_count || out.saved_at != in.saved_at) {
+    FAIL("scalar field mismatch after round-trip");
+    return;
+  }
+  if (memcmp(out.pcr14, in.pcr14, LOTA_HASH_SIZE) != 0) {
+    FAIL("pcr14 bytes mismatch after round-trip");
+    return;
+  }
+  if (memcmp(out.self_hash, in.self_hash, LOTA_HASH_SIZE) != 0) {
+    FAIL("self_hash bytes mismatch after round-trip");
+    return;
+  }
+
+  PASS();
+}
+
+/*
+ * Missing snapshot must surface as -ENOENT (non-fatal "first run"
+ * signal) so the agent's attribution layer can degrade gracefully
+ * instead of treating a fresh host as a tamper.
+ */
+static void test_clock_state_load_missing_is_enoent(void) {
+  struct tpm_context ctx;
+  struct lota_clock_state out;
+
+  TEST("tpm_clock_state_load reports -ENOENT on missing file");
+  make_ctx(&ctx);
+  snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+           "%s/no_state.dat", tmp_dir);
+  unlink(ctx.clock_state_path);
+
+  int ret = tpm_clock_state_load(&ctx, &out);
+  if (ret != -ENOENT) {
+    FAIL("expected -ENOENT, got different errno");
+    return;
+  }
+  PASS();
+}
+
+/*
+ * Corrupted file (wrong magic / truncated) must be rejected with
+ * -EINVAL so a tampered or partial state cannot pose as a valid
+ * snapshot.
+ */
+static void test_clock_state_load_rejects_corrupt(void) {
+  struct tpm_context ctx;
+  struct lota_clock_state out;
+
+  TEST("tpm_clock_state_load rejects bad magic + truncated record");
+  make_ctx(&ctx);
+  snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+           "%s/bad_state.dat", tmp_dir);
+
+  /* truncated: zero-byte file */
+  int fd = open(ctx.clock_state_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) {
+    FAIL("cannot create truncated test file");
+    return;
+  }
+  close(fd);
+  if (tpm_clock_state_load(&ctx, &out) != -EINVAL) {
+    FAIL("zero-byte file should produce -EINVAL");
+    return;
+  }
+
+  /* bad magic */
+  struct lota_clock_state bad;
+  memset(&bad, 0, sizeof(bad));
+  bad.magic = 0xDEADBEEFU;
+  bad.version = TPM_CLOCK_STATE_VERSION;
+  fd = open(ctx.clock_state_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) {
+    FAIL("cannot create bad-magic test file");
+    return;
+  }
+  {
+    ssize_t w = write(fd, &bad, sizeof(bad));
+    (void)w;
+  }
+  close(fd);
+  if (tpm_clock_state_load(&ctx, &out) != -EINVAL) {
+    FAIL("bad magic should produce -EINVAL");
+    return;
+  }
+
+  /* bad version */
+  bad.magic = TPM_CLOCK_STATE_MAGIC;
+  bad.version = 99;
+  fd = open(ctx.clock_state_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) {
+    FAIL("cannot create bad-version test file");
+    return;
+  }
+  {
+    ssize_t w = write(fd, &bad, sizeof(bad));
+    (void)w;
+  }
+  close(fd);
+  if (tpm_clock_state_load(&ctx, &out) != -EINVAL) {
+    FAIL("bad version should produce -EINVAL");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_self_hash_pin_round_trip(void) {
   struct tpm_context ctx;
   uint8_t out[LOTA_HASH_SIZE];
@@ -1119,6 +1265,9 @@ int main(void) {
   test_rc_tcti_layer();
   test_lockout_flag_lifecycle();
   test_self_hash_pin_round_trip();
+  test_clock_state_save_load_round_trip();
+  test_clock_state_load_missing_is_enoent();
+  test_clock_state_load_rejects_corrupt();
   test_call_with_backoff_no_leak_on_retry();
   test_call_with_backoff_gives_up_without_leak();
   test_call_with_backoff_respects_wallclock_budget();

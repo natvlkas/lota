@@ -4,6 +4,17 @@
 #
 
 #
+# Dedicated TPM device label. The kernel ships /dev/tpm[0-9]* and
+# /dev/tpmrm[0-9]* with the generic tpm_device_t label; the LOTA
+# udev rule (configs/udev/99-lota-tpm.rules) overrides this at
+# device-add time to fence the device behind lota_tpm_device_t.
+# These restorecon contexts ensure `restorecon /dev/tpm*` after
+# manual relabel still ends up under the lota_agent_t allow set.
+#
+/dev/tpm[0-9]*					-c	gen_context(system_u:object_r:lota_tpm_device_t,s0)
+/dev/tpmrm[0-9]*				-c	gen_context(system_u:object_r:lota_tpm_device_t,s0)
+
+#
 # Executables
 #
 /usr/bin/lota-agent			--	gen_context(system_u:object_r:lota_agent_exec_t,s0)

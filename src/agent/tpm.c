@@ -47,6 +47,7 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
                                          int had_existing_aik);
+static int mkdirs(const char *path, mode_t mode);
 
 static void secure_bzero(void *ptr, size_t len) {
   if (!ptr || len == 0)
@@ -1461,6 +1462,134 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
   return 0;
 }
 
+int tpm_clock_state_load(const struct tpm_context *ctx,
+                         struct lota_clock_state *out) {
+  if (!ctx || !out)
+    return -EINVAL;
+
+  const char *path =
+      ctx->clock_state_path[0] ? ctx->clock_state_path : TPM_CLOCK_STATE_PATH;
+
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    if (errno == ENOENT)
+      return -ENOENT;
+    return -errno;
+  }
+
+  struct lota_clock_state wire;
+  ssize_t n = read(fd, &wire, sizeof(wire));
+  int saved_errno = errno;
+  close(fd);
+
+  if (n < 0)
+    return -saved_errno;
+  if ((size_t)n != sizeof(wire))
+    return -EINVAL;
+
+  uint32_t magic = le32toh(wire.magic);
+  uint32_t version = le32toh(wire.version);
+  if (magic != TPM_CLOCK_STATE_MAGIC)
+    return -EINVAL;
+  if (version != TPM_CLOCK_STATE_VERSION)
+    return -EINVAL;
+
+  out->magic = magic;
+  out->version = version;
+  out->reset_count = le32toh(wire.reset_count);
+  out->restart_count = le32toh(wire.restart_count);
+  memcpy(out->pcr14, wire.pcr14, sizeof(out->pcr14));
+  memcpy(out->self_hash, wire.self_hash, sizeof(out->self_hash));
+  out->saved_at = (int64_t)le64toh((uint64_t)wire.saved_at);
+  memset(out->_reserved, 0, sizeof(out->_reserved));
+  return 0;
+}
+
+int tpm_clock_state_save(const struct tpm_context *ctx,
+                         const struct lota_clock_state *in) {
+  if (!ctx || !in)
+    return -EINVAL;
+
+  const char *path =
+      ctx->clock_state_path[0] ? ctx->clock_state_path : TPM_CLOCK_STATE_PATH;
+
+  int ret = mkdirs(path, 0755);
+  if (ret < 0)
+    return ret;
+
+  char tmp[PATH_MAX];
+  int written = snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path);
+  if (written < 0 || (size_t)written >= sizeof(tmp))
+    return -ENAMETOOLONG;
+
+  int fd = mkstemp(tmp);
+  if (fd < 0)
+    return -errno;
+  if (fchmod(fd, 0600) != 0) {
+    ret = -errno;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
+
+  struct lota_clock_state wire;
+  wire.magic = htole32(TPM_CLOCK_STATE_MAGIC);
+  wire.version = htole32(TPM_CLOCK_STATE_VERSION);
+  wire.reset_count = htole32(in->reset_count);
+  wire.restart_count = htole32(in->restart_count);
+  memcpy(wire.pcr14, in->pcr14, sizeof(wire.pcr14));
+  memcpy(wire.self_hash, in->self_hash, sizeof(wire.self_hash));
+  wire.saved_at = (int64_t)htole64((uint64_t)in->saved_at);
+  memset(wire._reserved, 0, sizeof(wire._reserved));
+
+  ssize_t n = write(fd, &wire, sizeof(wire));
+  if (n != (ssize_t)sizeof(wire)) {
+    close(fd);
+    unlink(tmp);
+    return -EIO;
+  }
+  if (fsync(fd) != 0) {
+    ret = -errno;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
+  close(fd);
+
+  if (rename(tmp, path) != 0) {
+    ret = -errno;
+    unlink(tmp);
+    return ret;
+  }
+  return 0;
+}
+
+/*
+ * Helper: SHA256(0^32 || commit) so callers can recompute the expected
+ * PCR14 value for a given (self_hash, resetCount, restartCount) without
+ * duplicating the EVP plumbing at every site.
+ */
+static int derive_expected_pcr14(const uint8_t self_hash[],
+                                 uint32_t reset_count, uint32_t restart_count,
+                                 uint8_t out_pcr14[LOTA_HASH_SIZE]) {
+  uint8_t commit[LOTA_HASH_SIZE];
+  uint8_t zero[LOTA_HASH_SIZE] = {0};
+  int ret =
+      tpm_boot_commitment_digest(self_hash, reset_count, restart_count, commit);
+  if (ret < 0)
+    return ret;
+
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  if (!md)
+    return -ENOMEM;
+  int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+           EVP_DigestUpdate(md, zero, sizeof(zero)) == 1 &&
+           EVP_DigestUpdate(md, commit, sizeof(commit)) == 1 &&
+           EVP_DigestFinal_ex(md, out_pcr14, NULL) == 1;
+  EVP_MD_CTX_free(md);
+  return ok ? 0 : -EIO;
+}
+
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
                                const uint8_t self_hash[]) {
   TSS2_RC rc;
@@ -1495,43 +1624,193 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
     return ret;
 
   /*
-   * Derive the expected post-extend PCR14 value so a warm agent
-   * restart (TPM not reset, PCR14 already bound) can be detected and
-   * the second extend skipped. PCR14 starts at 0^32, so the expected
-   * post-extend value is SHA256(0^32 || commit).
+   * Expected post-extend PCR14: SHA256(0^32 || commit). Same construction
+   * the verifier rederives from the quote's ClockInfo plus the pinned
+   * agent_hash baseline.
    */
-  {
-    EVP_MD_CTX *md = EVP_MD_CTX_new();
-    if (!md)
-      return -ENOMEM;
-    int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(md, zero_pcr14, sizeof(zero_pcr14)) == 1 &&
-             EVP_DigestUpdate(md, commit, sizeof(commit)) == 1 &&
-             EVP_DigestFinal_ex(md, expected_pcr14, NULL) == 1;
-    EVP_MD_CTX_free(md);
-    if (!ok)
-      return -EIO;
-  }
+  ret = derive_expected_pcr14(self_hash, reset_count, restart_count,
+                              expected_pcr14);
+  if (ret < 0)
+    return ret;
 
   ret = tpm_read_pcr(ctx, TPM_BOOT_COMMITMENT_PCR, TPM_HASH_ALG, current_pcr14);
   if (ret < 0)
     return ret;
 
+  /*
+   * Load the previous on-disk snapshot for tamper attribution. -ENOENT
+   * (no prior state on this host) is non-fatal: a first-run agent has
+   * nothing to compare against but every later run does.
+   */
+  struct lota_clock_state prev;
+  int have_prev = 0;
+  ret = tpm_clock_state_load(ctx, &prev);
+  if (ret == 0)
+    have_prev = 1;
+  else if (ret != -ENOENT)
+    fprintf(stderr,
+            "PCR14 boot-commitment: clock-state load failed (%s); "
+            "continuing without attribution\n",
+            strerror(-ret));
+
   if (memcmp(current_pcr14, zero_pcr14, LOTA_HASH_SIZE) == 0) {
-    /* fresh boot: TPM was reset, PCR14 still 0^32; extend with commit */
-    return tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
+    /*
+     * Fresh boot: TPM reset, PCR14 still 0^32. If a prior snapshot
+     * exists and its resetCount matches the current one, the TPM
+     * apparently zeroed PCR14 without advancing resetCount - an
+     * abnormal state worth flagging (operator action with
+     * tpm2_pcr_reset on a debug PCR, kernel reload, ...).
+     */
+    if (have_prev && prev.reset_count == reset_count) {
+      fprintf(stderr,
+              "SECURITY: PCR14 cleared while resetCount=%u unchanged "
+              "since last extend (last saved %lld); refusing to attest "
+              "without operator review\n",
+              (unsigned)reset_count, (long long)prev.saved_at);
+      return -EBADMSG;
+    }
+    ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
+    if (ret < 0)
+      return ret;
+    struct lota_clock_state snap = {
+        .reset_count = reset_count,
+        .restart_count = restart_count,
+        .saved_at = (int64_t)time(NULL),
+    };
+    memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
+    memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
+    int save_ret = tpm_clock_state_save(ctx, &snap);
+    if (save_ret < 0)
+      fprintf(stderr,
+              "PCR14 boot-commitment: clock-state save failed (%s); "
+              "next run will lose tamper attribution\n",
+              strerror(-save_ret));
+    return 0;
   }
 
   if (memcmp(current_pcr14, expected_pcr14, LOTA_HASH_SIZE) == 0) {
-    /* warm agent restart: PCR14 already bound to this resetCount */
+    /*
+     * Warm restart: PCR14 already bound to (self_hash, resetCount,
+     * restartCount). Refresh the snapshot so the saved_at stamp
+     * stays current and a corrupted file gets healed.
+     */
+    struct lota_clock_state snap = {
+        .reset_count = reset_count,
+        .restart_count = restart_count,
+        .saved_at = (int64_t)time(NULL),
+    };
+    memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
+    memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
+    int save_ret = tpm_clock_state_save(ctx, &snap);
+    if (save_ret < 0)
+      fprintf(stderr,
+              "PCR14 boot-commitment: clock-state refresh failed (%s)\n",
+              strerror(-save_ret));
     return 0;
   }
 
   /*
-   * Anything else means an unrelated extender touched PCR14 between
-   * platform startup and the agent's own measurement. The trust chain
-   * is unrecoverable from userspace; refuse to attest.
+   * PCR14 holds an unexpected value. Without prior state every cause
+   * collapses to a single -EBADMSG; with it we can attribute to one
+   * of three concrete operator scenarios so the journal entry tells
+   * the responder which runbook to follow.
    */
+  if (!have_prev) {
+    fprintf(stderr,
+            "SECURITY: PCR14 holds an unexpected value (resetCount=%u "
+            "restartCount=%u) and no prior clock-state snapshot exists "
+            "to attribute the cause. Possible explanations: "
+            "(1) initramfs / boot loader extended PCR14 with a "
+            "non-LOTA commitment; "
+            "(2) local root extended PCR14 between cold boot and the "
+            "agent reaching this code; "
+            "(3) the clock-state file was deleted between runs. "
+            "Cold reboot the host and consult systemd journal for "
+            "tpm2_pcr_extend invocations before lota-agent's first "
+            "quote\n",
+            (unsigned)reset_count, (unsigned)restart_count);
+    return -EBADMSG;
+  }
+
+  if (prev.reset_count < reset_count) {
+    /*
+     * Cold boot happened since the last agent run (resetCount
+     * advanced) and PCR14 is already non-zero before the agent could
+     * extend it. PCR14 should have been 0^32 at this point; something
+     * touched it between TPM_INIT and lota-agent startup.
+     */
+    fprintf(stderr,
+            "SECURITY: PCR14 tampered between cold boot and agent start "
+            "(resetCount advanced from %u to %u; last successful "
+            "extend at %lld). A non-LOTA component extended PCR14 "
+            "before lota-agent reached its self_measure() call. "
+            "Cold reboot, then audit boot scripts and any tooling "
+            "that touches /dev/tpmrm0 (tpm2-tools, IMA, integrity "
+            "subsystem) and verify the udev rule labelling tpmrm0 "
+            "with lota_tpm_device_t is loaded with SELinux enforcing\n",
+            (unsigned)prev.reset_count, (unsigned)reset_count,
+            (long long)prev.saved_at);
+    return -EBADMSG;
+  }
+
+  if (prev.reset_count == reset_count) {
+    /*
+     * Same boot session. Two sub-cases:
+     *
+     *  (a) PCR14 still holds the value lota-agent itself wrote during
+     *      the previous run in this session, AND the agent binary
+     *      hash has changed since then. Live agent upgrade without a
+     *      cold reboot: PCR14 cannot be rebound without resetCount
+     *      advancing, and the operator must reboot to re-extend.
+     *
+     *  (b) PCR14 differs from both the recomputed expected value AND
+     *      the previously-saved snapshot value. Something mutated
+     *      PCR14 during the current boot session after the last
+     *      successful extend.
+     */
+    int pcr_matches_prev =
+        memcmp(current_pcr14, prev.pcr14, LOTA_HASH_SIZE) == 0;
+    int self_hash_changed =
+        memcmp(prev.self_hash, self_hash, LOTA_HASH_SIZE) != 0;
+
+    if (pcr_matches_prev && self_hash_changed) {
+      fprintf(stderr,
+              "SECURITY: PCR14 holds the boot commitment of a prior "
+              "agent binary in this boot session (resetCount=%u); the "
+              "agent binary has changed since that extend. PCR14 is "
+              "non-resettable from userspace, so live upgrades cannot "
+              "rebind it. Cold reboot to re-extend PCR14 against the "
+              "current agent binary\n",
+              (unsigned)reset_count);
+      return -EBADMSG;
+    }
+
+    fprintf(stderr,
+            "SECURITY: PCR14 mutated during the current boot session "
+            "(resetCount=%u; last successful extend at %lld). Another "
+            "writer extended PCR14 after lota-agent's last "
+            "self_measure() and outside its control. Possible causes: "
+            "(1) local root invoked tpm2_pcr_extend on /dev/tpmrm0; "
+            "(2) another integrity subsystem (IMA, integrity-init, "
+            "...) extended PCR14 from the OS. Audit auditd and the "
+            "process table for the writer; cold reboot to restore a "
+            "clean baseline\n",
+            (unsigned)reset_count, (long long)prev.saved_at);
+    return -EBADMSG;
+  }
+
+  /*
+   * prev.reset_count > reset_count: the TPM reports an OLDER reset
+   * count than what we previously persisted. The TPM device or the
+   * clock-state file is lying about platform identity; treat as
+   * tamper.
+   */
+  fprintf(stderr,
+          "SECURITY: TPM reports resetCount=%u while the local "
+          "snapshot recorded a higher value (%u). The TPM device or "
+          "the persistent state file has been rolled back; refusing "
+          "to attest\n",
+          (unsigned)reset_count, (unsigned)prev.reset_count);
   return -EBADMSG;
 }
 

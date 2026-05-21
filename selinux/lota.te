@@ -51,6 +51,28 @@ type lota_port_t;
 corenet_port(lota_port_t)
 
 #
+# Dedicated TPM character-device type.
+#
+# TPM 2.0 PC Client Platform TPM Profile p3.3 leaves PCR8-15
+# (including PCR14, used by lota-agent's boot commitment) auth-free
+# and Locality-0 writable. The TPM exposes no on-chip mechanism that
+# could gate the extend operation, so the only enforceable barrier
+# against a local-root attacker touching PCR14 before lota-agent
+# reaches self_measure() lives at the MAC layer.
+#
+# The shipped udev rule (configs/udev/99-lota-tpm.rules) relabels
+# /dev/tpm[0-9]* and /dev/tpmrm[0-9]* with lota_tpm_device_t at
+# device-add time. This module is the only policy that allows rw on
+# the type and grants it only to lota_agent_t. Stock refpolicy
+# interfaces such as dev_rw_tpm() bind to the generic tpm_device_t
+# label and therefore no longer apply once the rule has run;
+# even an unconfined_t domain loses /dev/tpm* access under SELinux
+# enforcing.
+#
+type lota_tpm_device_t;
+dev_node(lota_tpm_device_t)
+
+#
 # lota_agent_t policy
 #
 
@@ -87,8 +109,19 @@ files_tmp_filetrans(lota_agent_t, lota_tmp_t, { file dir })
 # Hardware access
 #
 
-# /dev/tpmrm0, /dev/tpm0
+# /dev/tpm[0-9]*, /dev/tpmrm[0-9]* (relabelled by udev to
+# lota_tpm_device_t at device-add time)
+allow lota_agent_t lota_tpm_device_t:chr_file rw_chr_file_perms;
+
+# Bootstrap fallback: on systems where the udev rule has not yet
+# loaded (early initramfs hand-off, hostile relabel, ...) lota-agent
+# still needs read+open on the stock tpm_device_t label so the
+# operator can recover. The verifier path detects the missing label
+# at attestation time via the agent's clock-state attribution
+# (src/agent/tpm.c::tpm_extend_boot_commitment) and refuses to
+# attest until the udev relabel has run.
 dev_rw_tpm(lota_agent_t)
+
 dev_read_raw_memory(lota_agent_t)
 
 # /dev/urandom

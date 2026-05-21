@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+#
+# LOTA - restrict /dev/tpm0 and /dev/tpmrm0 to lota-agent
+#
+# TPM 2.0 PC Client Platform TPM Profile p3.3 assigns PCR8-15 (including
+# PCR14, used by lota-agent's boot commitment) to the "OS Loader / OS
+# components" range and explicitly permits TPM2_PCR_Extend from
+# Locality 0 by any caller with /dev/tpmrm0 access. The TPM exposes no
+# AuthValue, PolicyPCR, or locality mechanism that could gate the
+# extend, so the only enforceable lock against a local-root attacker
+# tampering with PCR14 before lota-agent has bound is the kernel
+# device-access layer.
+#
+# This rule narrows that surface to:
+#
+#   - root:root file ownership;
+#   - 0600 permission bits (no group/world access);
+#   - SELinux relabel to lota_tpm_device_t at device-add time. The
+#     LOTA SELinux module (selinux/lota.te) is the only module that
+#     grants rw on lota_tpm_device_t, and it grants it only to
+#     lota_agent_t. Stock refpolicy interfaces such as dev_rw_tpm()
+#     bind to tpm_device_t and therefore no longer apply to /dev/tpm*
+#     while this rule is in force - even an unconfined root domain
+#     loses access under SELinux enforcing.
+#
+# Operators MUST run SELinux in enforcing mode for the MAC layer to
+# bind. A permissive system trusts every uid-0 process equally and
+# lota-agent cannot protect against that operator decision; the
+# clock-state attribution layer in src/agent/tpm.c (cold-boot vs
+# mid-session vs upgrade) still detects the tamper after the fact
+# but cannot prevent it.
+#
+# Installation:
+#   install -m 644 99-lota-tpm.rules /usr/lib/udev/rules.d/
+#   udevadm control --reload-rules
+#   udevadm trigger --subsystem-match=tpm
+#
+
+KERNEL=="tpm[0-9]*",   MODE="0600", OWNER="root", GROUP="root", SECLABEL{selinux}="system_u:object_r:lota_tpm_device_t:s0"
+KERNEL=="tpmrm[0-9]*", MODE="0600", OWNER="root", GROUP="root", SECLABEL{selinux}="system_u:object_r:lota_tpm_device_t:s0"

@@ -16,8 +16,33 @@
 [Unit]
 Description=LOTA - Linux Open Trusted Attestation Agent
 Documentation=https://github.com/szymonwilczek/lota
-After=network.target local-fs.target
+#
+# Ordering rationale.
+#
+# - systemd-udevd / systemd-udev-trigger: the LOTA udev rule
+#   (configs/udev/99-lota-tpm.rules) relabels /dev/tpm[0-9]* and
+#   /dev/tpmrm[0-9]* with lota_tpm_device_t at device-add time. The
+#   agent must not open the device before that rule has run or the
+#   SELinux MAC fence against pre-agent PCR14 tampering is not yet
+#   in place.
+# - systemd-tmpfiles-setup: /run/lota and /var/lib/lota are present
+#   before the agent reads or writes its clock-state snapshot.
+# - tpm2-abrmd / dbus: stock TPM resource manager and bus the agent
+#   talks to.
+# - network.target: remote attestation requires network reachability.
+# - Before=multi-user.target getty.target: narrows the window in
+#   which any login shell, ssh session, or user-session daemon could
+#   spawn a tpm2-tools invocation that races the agent's first PCR14
+#   extend. The TPM PC Client profile keeps PCR14 OS-writable by
+#   design, so the race window cannot be closed entirely from
+#   userspace alone; pushing the agent ahead of every login-capable
+#   target is the tightest non-initramfs schedule available.
+#
+After=systemd-udevd.service systemd-udev-trigger.service
+After=systemd-tmpfiles-setup.service
 After=tpm2-abrmd.service dbus.service
+After=network.target local-fs.target
+Before=multi-user.target getty.target
 Wants=tpm2-abrmd.service
 Requires=lota-agent.socket
 
