@@ -191,7 +191,15 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
   case TPM2_RC_AUTH_FAIL:
   case TPM2_RC_BAD_AUTH:
   case TPM2_RC_NV_AUTHORIZATION:
-    return -EACCES;
+    /*
+     * Every auth failure also bumps the TPM dictionary-attack
+     * counter; repeated occurrences walk the platform into
+     * TPM2_RC_LOCKOUT. Surfacing the dedicated LOTA code instead
+     * of -EACCES keeps operator triage on the right runbook (audit
+     * the caller's auth source, do not blame SELinux) and lets the
+     * tpm_strerror() log line call out the DA-counter implication.
+     */
+    return -LOTA_ERR_TPM_AUTH_FAIL;
   case TPM2_RC_VALUE:
   case TPM2_RC_SIZE:
     return -EINVAL;
@@ -207,6 +215,8 @@ const char *tpm_strerror(int err) {
     return "success";
   case LOTA_ERR_TPM_LOCKED:
     return "TPM dictionary-attack lockout engaged";
+  case LOTA_ERR_TPM_AUTH_FAIL:
+    return "TPM authorization failed (increments DA lockout counter)";
   default:
     return strerror(code);
   }

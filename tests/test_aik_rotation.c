@@ -761,10 +761,10 @@ static void test_rc_auth_fail_with_session_bits(void) {
    * those scratch bits before mapping. */
   TPM2_RC auth_fail_with_session = (TPM2_RC)(TPM2_RC_AUTH_FAIL | 0x300);
 
-  TEST("tpm_test_rc_to_errno: AUTH_FAIL with session offset -> EACCES");
+  TEST("tpm_test_rc_to_errno: AUTH_FAIL -> LOTA_ERR_TPM_AUTH_FAIL");
 
-  if (tpm_test_rc_to_errno(auth_fail_with_session) != -EACCES) {
-    FAIL("expected -EACCES");
+  if (tpm_test_rc_to_errno(auth_fail_with_session) != -LOTA_ERR_TPM_AUTH_FAIL) {
+    FAIL("expected -LOTA_ERR_TPM_AUTH_FAIL");
     return;
   }
   if (tpm_test_rc_is_lockout(auth_fail_with_session)) {
@@ -876,6 +876,12 @@ static void test_tpm_strerror_maps_lota_private(void) {
   }
   if (strstr(neg, "lockout") == NULL || strstr(pos, "lockout") == NULL) {
     FAIL("expected the description to mention the lockout");
+    return;
+  }
+
+  const char *auth = tpm_strerror(-LOTA_ERR_TPM_AUTH_FAIL);
+  if (!auth || strstr(auth, "DA") == NULL) {
+    FAIL("AUTH_FAIL description must call out the DA-counter implication");
     return;
   }
 

@@ -45,6 +45,20 @@ struct tpm_quote_response;
 #define LOTA_ERR_TPM_LOCKED 4097
 
 /*
+ * TPM2_RC_AUTH_FAIL / TPM2_RC_BAD_AUTH / TPM2_RC_NV_AUTHORIZATION.
+ * Surfaced as a LOTA-private code rather than -EACCES because every
+ * such RC bumps the TPM's dictionary-attack counter; repeated
+ * occurrences walk the platform into TPM2_RC_LOCKOUT and operators
+ * triaging an -EACCES would otherwise mistake the failure for a
+ * filesystem or SELinux denial and miss the DA pressure. Log sites
+ * print this via tpm_strerror() and the journal entry calls out the
+ * DA-counter implication so the responder knows to inspect the
+ * caller (stale aik_auth, NV index passwords, ...) before the TPM
+ * locks out.
+ */
+#define LOTA_ERR_TPM_AUTH_FAIL 4098
+
+/*
  * tpm_strerror - error-to-string helper that handles both POSIX
  *                errno values and LOTA-private codes.
  *
