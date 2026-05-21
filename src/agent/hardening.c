@@ -144,9 +144,18 @@ int hardening_apply_no_dumpable(void) {
 }
 
 /*
- * Syscalls the agent must never invoke. EPERM keeps the agent alive on
- * an accidental hit and matches the systemd unit's SystemCallErrorNumber
- * so observed behavior is consistent across launch paths.
+ * Syscalls the agent must never invoke. The filter answers any hit
+ * with SECCOMP_RET_KILL_PROCESS (SIGSYS, no handler runs, no rollback):
+ * a denied syscall reaching this point means either (a) an agent
+ * regression that started calling something it has no business in,
+ * (b) attacker-induced state mid-process, or (c) a dependency
+ * stepping outside its documented surface. In none of those cases is
+ * "return EPERM and keep going" a safe outcome - the in-process
+ * filter is the fail-deep layer, distinct from the systemd unit's
+ * SystemCallErrorNumber=EPERM which exists only to catch
+ * non-daemon paths. systemd restarts the agent and the journal
+ * carries the SIGSYS+si_code=SYS_SECCOMP audit line so the
+ * responder can attribute the kill to the responsible syscall.
  *
  * Coverage rationale:
  *   - ptrace, process_vm_readv/writev: cross-process memory inspection.
@@ -209,7 +218,7 @@ int hardening_apply_seccomp(void) {
     if (sc < 0)
       continue; /* libseccomp returns __NR_SCMP_ERROR (negative) on unknown */
 
-    rc = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EPERM), sc, 0);
+    rc = seccomp_rule_add(ctx, SCMP_ACT_KILL_PROCESS, sc, 0);
     if (rc < 0) {
       /*
        * EOPNOTSUPP/EDOM may indicate a syscall absent on this arch

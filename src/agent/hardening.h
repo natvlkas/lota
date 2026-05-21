@@ -63,8 +63,15 @@ int hardening_apply_no_dumpable(void);
 /*
  * hardening_apply_seccomp - Install in-process seccomp BPF blocklist
  *
- * Default policy: SCMP_ACT_ALLOW. The agent denies (with -EPERM) every
- * syscall that has no legitimate use in attestation or BPF management:
+ * Default policy: SCMP_ACT_ALLOW. Every denied syscall fires
+ * SCMP_ACT_KILL_PROCESS: the kernel terminates the agent with
+ * SIGSYS (si_code=SYS_SECCOMP) and no handler runs. The filter is
+ * the fail-deep layer for the daemon - a hit means the process is
+ * already in an unsafe state and EPERM-and-continue would mask the
+ * regression or compromise. systemd then restarts the agent and
+ * the journal carries the audit line.
+ *
+ * Blocklisted:
  *
  *   ptrace, process_vm_readv, process_vm_writev, kexec_load,
  *   kexec_file_load, init_module, finit_module, delete_module,

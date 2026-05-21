@@ -15,9 +15,11 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -207,87 +209,78 @@ static int child_no_dumpable_sets_flag(void) {
   return v == 0 ? 0 : 1;
 }
 
-static int child_seccomp_blocks_mount(void) {
-  if (hardening_apply_no_new_privs() != 0)
-    return 1;
-  if (hardening_apply_seccomp() != 0)
-    return 1;
-
-  errno = 0;
-  long ret = syscall(SYS_mount, "none", "/tmp/lota_should_never_mount", "tmpfs",
-                     0, "");
-  if (ret == 0)
-    return 1; /* mount must not succeed */
-  if (errno != EPERM)
-    return 1;
-
-  return 0;
-}
-
-static int child_seccomp_blocks_ptrace_self(void) {
-  if (hardening_apply_no_new_privs() != 0)
-    return 1;
-  if (hardening_apply_seccomp() != 0)
-    return 1;
-
-  errno = 0;
-  long ret = syscall(SYS_ptrace, 0 /* PTRACE_TRACEME */, 0, 0, 0);
-  if (ret == 0)
-    return 1;
-  if (errno != EPERM)
-    return 1;
-
-  return 0;
-}
-
 /*
- * Each must fail with EPERM after the seccomp filter is loaded. The probe
- * values are chosen so the syscall never makes a successful kernel-side effect
- * even if seccomp somehow let the call through.
+ * Each denied-syscall child runs in its own fork because
+ * SCMP_ACT_KILL_PROCESS terminates the calling process; a single
+ * fork that probed multiple denied syscalls in sequence would only
+ * exercise the first. The body installs no_new_privs + seccomp,
+ * issues exactly one denied syscall, and never returns: a parent
+ * observing WIFEXITED means the kernel let the syscall through
+ * (test failure), WIFSIGNALED with WTERMSIG == SIGSYS means the
+ * filter killed as designed.
  */
-static int child_seccomp_blocks_new_denials(void) {
+static int child_seccomp_kills_on_mount(void) {
   if (hardening_apply_no_new_privs() != 0)
     return 1;
   if (hardening_apply_seccomp() != 0)
     return 1;
+  syscall(SYS_mount, "none", "/tmp/lota_should_never_mount", "tmpfs", 0, "");
+  return 0; /* unreachable when SCMP_ACT_KILL_PROCESS fires */
+}
 
-  struct {
-    long nr;
-    long arg0;
-    long arg1;
-  } probes[] = {
-      /* SYS_io_uring_setup(entries=1, params=NULL) -> EFAULT without seccomp */
-      {SYS_io_uring_setup, 1, 0},
-      /* SYS_userfaultfd(flags=0) -> usually EPERM/EACCES from kernel,
-       * but seccomp intercepts first. */
-      {SYS_userfaultfd, 0, 0},
-      /* SYS_pidfd_send_signal(pidfd=-1, sig=0, info=NULL, flags=0) ->
-       * EBADF without seccomp; seccomp returns EPERM. */
-      {SYS_pidfd_send_signal, -1, 0},
-  /* SYS_modify_ldt(func=0, ptr=NULL, count=0) -> ENOSYS on
-   * non-x86 builds where the syscall is absent, otherwise EINVAL
-   * from the kernel. seccomp returns EPERM if installed. */
+static int child_seccomp_kills_on_ptrace_self(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_ptrace, 0 /* PTRACE_TRACEME */, 0, 0, 0);
+  return 0;
+}
+
+static int child_seccomp_kills_on_io_uring_setup(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_io_uring_setup, 1, 0);
+  return 0;
+}
+
+static int child_seccomp_kills_on_userfaultfd(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_userfaultfd, 0);
+  return 0;
+}
+
+static int child_seccomp_kills_on_pidfd_send_signal(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_pidfd_send_signal, -1, 0, 0, 0);
+  return 0;
+}
+
 #ifdef SYS_modify_ldt
-      {SYS_modify_ldt, 0, 0},
+static int child_seccomp_kills_on_modify_ldt(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_modify_ldt, 0, 0, 0);
+  return 0;
+}
 #endif
-      /* SYS_personality(persona=0xFFFFFFFF) -> returns previous
-       * persona on success; the call has a real side effect, so we
-       * MUST see EPERM here. */
-      {SYS_personality, (long)0xFFFFFFFF, 0},
-  };
 
-  for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
-    errno = 0;
-    long ret =
-        syscall(probes[i].nr, probes[i].arg0, probes[i].arg1, 0, 0, 0, 0);
-    if (ret >= 0 && probes[i].nr == SYS_personality) {
-      /* personality() returns the previous mask on success; the only
-       * acceptable outcome is an EPERM error. */
-      return 1;
-    }
-    if (errno != EPERM)
-      return 1;
-  }
+static int child_seccomp_kills_on_personality(void) {
+  if (hardening_apply_no_new_privs() != 0)
+    return 1;
+  if (hardening_apply_seccomp() != 0)
+    return 1;
+  syscall(SYS_personality, (long)0xFFFFFFFF);
   return 0;
 }
 
@@ -360,24 +353,19 @@ static int child_apply_basics_no_seccomp(void) {
 
 /*
  * hardening_apply_daemon, run after basics, completes the lockdown:
- * seccomp is installed and mount() is refused with EPERM.
+ * seccomp is installed (PR_GET_SECCOMP returns SECCOMP_MODE_FILTER).
+ * The kill-case tests above prove the filter actually fires on a
+ * denied syscall; this body is non-fatal because issuing a denied
+ * syscall here would terminate the child via SIGSYS and the
+ * run_child_case driver only inspects WIFEXITED status.
  */
 static int child_apply_daemon_installs_seccomp(void) {
   if (hardening_apply_basics() != 0)
     return 1;
   if (hardening_apply_daemon() != 0)
     return 1;
-
   if (prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 2)
     return 1; /* expected SECCOMP_MODE_FILTER */
-
-  errno = 0;
-  long ret = syscall(SYS_mount, "none", "/tmp/lota_should_never_mount", "tmpfs",
-                     0, "");
-  if (ret == 0)
-    return 1;
-  if (errno != EPERM)
-    return 1;
   return 0;
 }
 
@@ -392,6 +380,45 @@ static void run_child_case(const char *name, int (*body)(void)) {
     return;
   }
   PASS();
+}
+
+/*
+ * run_kill_case forks, runs body (which is expected to never
+ * return because SCMP_ACT_KILL_PROCESS fires), and asserts the
+ * child terminated via SIGSYS. A normal exit means seccomp let
+ * the denied syscall through, which is a test failure.
+ */
+static void run_kill_case(const char *name, int (*body)(void)) {
+  TEST(name);
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    FAIL("fork");
+    return;
+  }
+  if (pid == 0) {
+    body();
+    _exit(77); /* sentinel: reached only when seccomp did NOT kill */
+  }
+
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) {
+    FAIL("waitpid");
+    return;
+  }
+  if (WIFSIGNALED(status) && WTERMSIG(status) == SIGSYS) {
+    PASS();
+    return;
+  }
+  if (WIFEXITED(status)) {
+    char buf[80];
+    snprintf(buf, sizeof(buf),
+             "seccomp did NOT kill on denied syscall (child exit=%d)",
+             WEXITSTATUS(status));
+    FAIL(buf);
+    return;
+  }
+  FAIL("unexpected child termination");
 }
 
 int main(void) {
@@ -411,13 +438,22 @@ int main(void) {
                  child_no_new_privs_sets_flag);
   run_child_case("apply_no_dumpable: PR_GET_DUMPABLE == 0",
                  child_no_dumpable_sets_flag);
-  run_child_case("seccomp blocks mount() with EPERM",
-                 child_seccomp_blocks_mount);
-  run_child_case("seccomp blocks ptrace() with EPERM",
-                 child_seccomp_blocks_ptrace_self);
-  run_child_case(
-      "seccomp blocks io_uring/userfaultfd/pidfd/modify_ldt/personality",
-      child_seccomp_blocks_new_denials);
+  run_kill_case("seccomp kills on mount() with SIGSYS",
+                child_seccomp_kills_on_mount);
+  run_kill_case("seccomp kills on ptrace() with SIGSYS",
+                child_seccomp_kills_on_ptrace_self);
+  run_kill_case("seccomp kills on io_uring_setup with SIGSYS",
+                child_seccomp_kills_on_io_uring_setup);
+  run_kill_case("seccomp kills on userfaultfd with SIGSYS",
+                child_seccomp_kills_on_userfaultfd);
+  run_kill_case("seccomp kills on pidfd_send_signal with SIGSYS",
+                child_seccomp_kills_on_pidfd_send_signal);
+#ifdef SYS_modify_ldt
+  run_kill_case("seccomp kills on modify_ldt with SIGSYS",
+                child_seccomp_kills_on_modify_ldt);
+#endif
+  run_kill_case("seccomp kills on personality with SIGSYS",
+                child_seccomp_kills_on_personality);
   run_child_case("seccomp keeps getpid/write available",
                  child_seccomp_allows_benign_syscalls);
   run_child_case("apply_all returns 0 in a clean child",
