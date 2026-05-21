@@ -344,7 +344,14 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    * reports self-inconsistent and would also leave downgrade room for
    * a peer that tampers with the flag field.
    */
-  report->header.flags |= LOTA_REPORT_FLAG_BOOT_COMMITMENT;
+  if ((challenge->flags & LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V1) == 0) {
+    fprintf(stderr, "Verifier challenge does not advertise PCR14 "
+                    "boot-commitment v1 support; refusing to send a report "
+                    "whose PCR14 cannot be interpreted safely\n");
+    ret = -EPROTONOSUPPORT;
+    goto cleanup;
+  }
+  report->header.flags |= LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1;
   if (g_agent.tpm_ctx.boot_commitment_locked)
     report->header.flags |= LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1;
 

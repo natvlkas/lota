@@ -1450,8 +1450,8 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  *
  * The string is intentionally version-tagged so a future revision can
  * change the derivation without colliding with deployed baselines: the
- * verifier negotiates the construction via FlagBootCommitment and the
- * agent always emits the construction matching the current tag.
+ * verifier advertises the matching challenge capability and the agent
+ * reports the corresponding LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 bit.
  */
 #define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v1"
 

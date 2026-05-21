@@ -938,13 +938,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
 
-	useBootCommitment := report.Header.Flags&types.FlagBootCommitment != 0
+	useBootCommitment := report.Header.Flags&types.FlagBootCommitmentV1 != 0
 	useInitramfsLock := report.Header.Flags&types.FlagInitramfsLockV1 != 0
 	if useInitramfsLock && !useBootCommitment {
 		logging.Security(clog, "initramfs-lock flag set without boot-commitment flag")
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
-		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitment")
+		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitmentV1")
 	}
 
 	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory in

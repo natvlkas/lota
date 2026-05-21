@@ -40,12 +40,18 @@ const (
 	FlagSecureBoot   uint32 = 1 << 6 // Secure Boot enabled
 	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
 
-	// FlagBootCommitment indicates the agent extended PCR14 with
+	// FlagBootCommitmentV1 indicates the agent extended PCR14 with
 	// SHA256(magic || agent_hash || resetCount_be || restartCount_be)
 	// instead of the legacy single-extend of agent_hash. The verifier
 	// must derive the expected PCR14 from the pinned baseline agent
 	// hash plus the TPMS_ATTEST ClockInfo before comparing.
-	FlagBootCommitment uint32 = 1 << 8
+	FlagBootCommitmentV1 uint32 = 1 << 8
+
+	// FlagBootCommitment is retained as a source-compatible alias for
+	// pre-negotiation code. On the wire the bit is explicitly the v1
+	// construction; a future v2 must use a new report flag and a new
+	// ChallengeFlagBootCommitmentV2 capability bit.
+	FlagBootCommitment uint32 = FlagBootCommitmentV1
 
 	// FlagInitramfsLockV1 is set when the agent observed that an
 	// initramfs-time helper (lota-pcr14-lock, shipped under the
@@ -59,11 +65,22 @@ const (
 	//     pcr14_lock  = SHA256(0^32 || initramfs_lock_commit)
 	//     pcr14_final = SHA256(pcr14_lock || boot_commitment)
 	// The verifier mirrors the derivation when this flag is set.
-	// Legacy fleets without the dracut module continue emitting
-	// FlagBootCommitment alone; locked hosts add this bit so a
-	// mixed deployment authenticates correctly without
-	// flag negotiation.
+	// Legacy v1 fleets without the dracut module continue emitting
+	// FlagBootCommitmentV1 alone; locked v1 hosts add this bit so a
+	// mixed deployment authenticates correctly within the negotiated
+	// v1 boot-commitment family.
 	FlagInitramfsLockV1 uint32 = 1 << 9
+)
+
+// challenge capability flags (see: include/attestation.h)
+const (
+	// ChallengeFlagBootCommitmentV1 advertises that the verifier will
+	// accept reports carrying FlagBootCommitmentV1 for the issued
+	// nonce. The nonce store remembers this bit and rejects a report
+	// that claims a boot-commitment version not offered by its
+	// challenge, so future derivation versions cannot silently fall
+	// through a generic flag.
+	ChallengeFlagBootCommitmentV1 uint32 = 1 << 0
 )
 
 // verification result codes

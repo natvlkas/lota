@@ -35,8 +35,25 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
 #define LOTA_REPORT_FLAG_ENFORCE (1U << 7)    /* LSM enforce mode active */
-#define LOTA_REPORT_FLAG_BOOT_COMMITMENT                                       \
-  (1U << 8) /* PCR14 bound to TPM resetCount/restartCount */
+#define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1                                    \
+  (1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
+/*
+ * Source-compatible alias for pre-negotiation code. The bit is not a
+ * generic "some boot commitment" marker: on the wire it names the v1
+ * construction below. A future v2 must get a new report flag and a
+ * matching LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V2 capability bit.
+ */
+#define LOTA_REPORT_FLAG_BOOT_COMMITMENT LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1
+
+/*
+ * Challenge capability flags. The verifier sends these in
+ * verifier_challenge.flags to advertise the PCR14 derivations it is
+ * willing to validate for the nonce it just issued. The agent must
+ * emit only report derivation flags that were offered in the
+ * challenge; the verifier stores the offered set alongside the nonce
+ * and rejects reports that claim an unadvertised construction.
+ */
+#define LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V1 (1U << 0)
 
 /*
  * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 is set when the agent observed
@@ -50,10 +67,9 @@ struct lota_report_header {
  * chain:
  *     pcr14_lock = SHA256(0^32 || initramfs_lock_commit)
  *     pcr14_final = SHA256(pcr14_lock || boot_commitment)
- * The verifier mirrors the derivation. The bit pins the order so a
- * mixed fleet (some hosts with the dracut module, some without) can
- * be authenticated correctly without flag negotiation: legacy hosts
- * keep emitting LOTA_REPORT_FLAG_BOOT_COMMITMENT alone and locked
+ * The verifier mirrors the derivation. The bit pins the order inside
+ * the negotiated v1 boot-commitment family: legacy v1 hosts keep
+ * emitting LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 alone and locked v1
  * hosts add LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1.
  */
 #define LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 (1U << 9)

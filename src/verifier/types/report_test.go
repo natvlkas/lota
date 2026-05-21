@@ -346,7 +346,7 @@ func TestChallenge_Serialize(t *testing.T) {
 		Magic:   ReportMagic,
 		Version: ReportVersion,
 		PCRMask: 0x00004003,
-		Flags:   0,
+		Flags:   ChallengeFlagBootCommitmentV1,
 	}
 	for i := range challenge.Nonce {
 		challenge.Nonce[i] = byte(i)
@@ -368,6 +368,17 @@ func TestChallenge_Serialize(t *testing.T) {
 		if nonce[i] != byte(i) {
 			t.Errorf("Nonce[%d]: got %d, want %d", i, nonce[i], i)
 		}
+	}
+
+	pcrMask := binary.LittleEndian.Uint32(data[40:44])
+	if pcrMask != 0x00004003 {
+		t.Errorf("PCRMask: got 0x%08X, want 0x00004003", pcrMask)
+	}
+
+	flags := binary.LittleEndian.Uint32(data[44:48])
+	if flags != ChallengeFlagBootCommitmentV1 {
+		t.Errorf("Flags: got 0x%08X, want 0x%08X",
+			flags, ChallengeFlagBootCommitmentV1)
 	}
 
 	t.Log("✓ Challenge serialization correct")

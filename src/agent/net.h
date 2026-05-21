@@ -40,7 +40,7 @@ struct verifier_challenge {
   uint32_t version;
   uint8_t nonce[32];
   uint32_t pcr_mask;
-  uint32_t flags;
+  uint32_t flags; /* LOTA_CHALLENGE_FLAG_* capability bitmask */
 };
 
 /*
