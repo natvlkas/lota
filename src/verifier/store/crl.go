@@ -22,11 +22,15 @@ package store
 import (
 	"bytes"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -150,9 +154,95 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 		return fmt.Errorf("%w: %s (block %d)", ErrCRLNoIssuer, path, idx)
 	}
 
-	key := string(crl.RawIssuer)
+	key, err := canonicalIssuerKey(crl.RawIssuer)
+	if err != nil {
+		return fmt.Errorf("%s (block %d): canonicalise issuer DN: %w",
+			path, idx, err)
+	}
 	s.byIssuer[key] = append(s.byIssuer[key], crl)
 	return nil
+}
+
+// canonicalIssuerKey produces a deterministic lookup key for an
+// X.500 Name encoded as DER bytes. Production TPM manufacturer CAs
+// re-encode the same logical issuer DN in subtly different ways
+// across CRL refreshes (PrintableString vs UTF8String for the same
+// ASCII value, swapped order of AVAs inside a multi-AVA RDN,
+// leading/trailing whitespace, case in non-CN attributes), and the
+// raw byte-equal key the original implementation used would index
+// each variation under a separate bucket so a cert.Issuer that
+// matched one variation would miss the others. Anchor the key to
+// the parsed RDN sequence with per-RDN AVA sorting + case+
+// whitespace folding of DirectoryString-shaped values.
+//
+// The function intentionally preserves the RDN order itself: RFC
+// 5280 Names are hierarchical (C, O, OU, CN ...) and reordering
+// RDNs would change identity. Only the unordered multi-AVA SET
+// inside one RDN gets sorted.
+func canonicalIssuerKey(rawIssuer []byte) (string, error) {
+	var seq pkix.RDNSequence
+	if _, err := asn1.Unmarshal(rawIssuer, &seq); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	for _, rdn := range seq {
+		sorted := make([]pkix.AttributeTypeAndValue, len(rdn))
+		copy(sorted, rdn)
+		sort.Slice(sorted, func(i, j int) bool {
+			return cmpOID(sorted[i].Type, sorted[j].Type) < 0
+		})
+		for k, ava := range sorted {
+			if k > 0 {
+				sb.WriteByte(0x1f) // unit separator: between AVAs in an RDN
+			}
+			sb.WriteString(ava.Type.String())
+			sb.WriteByte('=')
+			switch v := ava.Value.(type) {
+			case string:
+				sb.WriteString(foldDirectoryString(v))
+			case []byte:
+				sb.WriteString(foldDirectoryString(string(v)))
+			default:
+				fmt.Fprintf(&sb, "%v", ava.Value)
+			}
+		}
+		sb.WriteByte(0x1e) // record separator: between RDNs
+	}
+	return sb.String(), nil
+}
+
+// foldDirectoryString applies RFC 4518 string-prep style folding for
+// caseIgnoreMatch attribute matching: trim surrounding whitespace,
+// collapse internal whitespace to single SPACE, lowercase. This is
+// the minimal set that handles the common variations seen across CA
+// re-encodes and is intentionally narrower than the full RFC 4518
+// machinery (no Unicode normalisation, no character mapping table)
+// to keep the code reviewable.
+func foldDirectoryString(s string) string {
+	fields := strings.Fields(s) // collapses any run of whitespace
+	return strings.ToLower(strings.Join(fields, " "))
+}
+
+func cmpOID(a, b asn1.ObjectIdentifier) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }
 
 // parseCRL accepts a CRL file in PEM (-----BEGIN X509 CRL-----) form,
@@ -196,7 +286,18 @@ func (s *revocationListSet) check(cert *x509.Certificate, now time.Time) error {
 		return nil
 	}
 
-	crls, ok := s.byIssuer[string(cert.RawIssuer)]
+	// Match the certificate's issuer DN against the canonicalised key
+	// the load path used. A failure to parse the cert's RawIssuer is
+	// treated as "no CRL configured for this issuer": x509.ParseCertificate
+	// already accepted the cert, so the RawIssuer bytes are well-formed
+	// ASN.1, but if a future codepath feeds in a malformed DER we lean
+	// fail-open rather than fail-noisy here - the caller has already
+	// gated on chain verification.
+	key, err := canonicalIssuerKey(cert.RawIssuer)
+	if err != nil {
+		return nil
+	}
+	crls, ok := s.byIssuer[key]
 	if !ok || len(crls) == 0 {
 		// no CRL configured for this issuer: nothing to check
 		return nil

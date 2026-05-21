@@ -545,6 +545,103 @@ func TestCRL_ReloadRejectsBadFeedKeepsPreviousSet(t *testing.T) {
 	}
 }
 
+// buildIssuerDER hand-marshals a single-RDN DN with the given CN
+// string and Country, so tests can drive the canonical-key matcher
+// with synthetic byte sequences that x509.CreateCertificate would
+// silently normalise away.
+func buildIssuerDER(t *testing.T, country, commonName string) []byte {
+	t.Helper()
+	seq := pkix.RDNSequence{
+		{
+			pkix.AttributeTypeAndValue{
+				Type:  asn1.ObjectIdentifier{2, 5, 4, 6}, // C
+				Value: country,
+			},
+		},
+		{
+			pkix.AttributeTypeAndValue{
+				Type:  asn1.ObjectIdentifier{2, 5, 4, 3}, // CN
+				Value: commonName,
+			},
+		},
+	}
+	der, err := asn1.Marshal(seq)
+	if err != nil {
+		t.Fatalf("marshal RDNSequence: %v", err)
+	}
+	return der
+}
+
+func TestCanonicalIssuerKey_StableAcrossWhitespaceAndCase(t *testing.T) {
+	a := buildIssuerDER(t, "us", "  LOTA   Privacy CA  ")
+	b := buildIssuerDER(t, "US", "lota privacy ca")
+
+	ka, err := canonicalIssuerKey(a)
+	if err != nil {
+		t.Fatalf("canonicalIssuerKey(a): %v", err)
+	}
+	kb, err := canonicalIssuerKey(b)
+	if err != nil {
+		t.Fatalf("canonicalIssuerKey(b): %v", err)
+	}
+	if ka != kb {
+		t.Fatalf("expected matching keys for the same logical DN; got\n  a=%q\n  b=%q",
+			ka, kb)
+	}
+}
+
+func TestCanonicalIssuerKey_DistinguishesDifferentDNs(t *testing.T) {
+	a := buildIssuerDER(t, "US", "LOTA Privacy CA")
+	b := buildIssuerDER(t, "US", "Some Other CA")
+
+	ka, _ := canonicalIssuerKey(a)
+	kb, _ := canonicalIssuerKey(b)
+	if ka == kb {
+		t.Fatal("different CN must produce different keys")
+	}
+}
+
+// TestCanonicalIssuerKey_StableAcrossMultiAVAOrder asserts that an
+// RDN with multiple AttributeTypeAndValue entries serialises to the
+// same key regardless of source order: RFC 5280 p4.1.2.4 leaves AVAs
+// inside a single RDN unordered.
+func TestCanonicalIssuerKey_StableAcrossMultiAVAOrder(t *testing.T) {
+	make := func(reverse bool) []byte {
+		// Multi-AVA RDN: CN + OU
+		ava1 := pkix.AttributeTypeAndValue{
+			Type:  asn1.ObjectIdentifier{2, 5, 4, 3}, // CN
+			Value: "lota ca",
+		}
+		ava2 := pkix.AttributeTypeAndValue{
+			Type:  asn1.ObjectIdentifier{2, 5, 4, 11}, // OU
+			Value: "trust",
+		}
+		var rdn pkix.RelativeDistinguishedNameSET
+		if reverse {
+			rdn = pkix.RelativeDistinguishedNameSET{ava2, ava1}
+		} else {
+			rdn = pkix.RelativeDistinguishedNameSET{ava1, ava2}
+		}
+		der, err := asn1.Marshal(pkix.RDNSequence{rdn})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return der
+	}
+	ka, err := canonicalIssuerKey(make(false))
+	if err != nil {
+		t.Fatalf("canonicalIssuerKey forward: %v", err)
+	}
+	kb, err := canonicalIssuerKey(make(true))
+	if err != nil {
+		t.Fatalf("canonicalIssuerKey reverse: %v", err)
+	}
+	if ka != kb {
+		t.Fatalf("multi-AVA order must not affect the key; got\n  forward=%q\n  reverse=%q",
+			ka, kb)
+	}
+}
+
 func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
 	dir := t.TempDir()
 
