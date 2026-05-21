@@ -432,6 +432,61 @@ func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 	t.Logf("✓ Correctly detected tampered PCR values: %v", err)
 }
 
+// TestVerifyPCRDigestParsed_NilAttest pins the new parsed entry
+// point's contract for a NULL TPMS_ATTEST so future refactors cannot
+// silently dereference and crash.
+func TestVerifyPCRDigestParsed_NilAttest(t *testing.T) {
+	var pcrValues [types.PCRCount][types.HashSize]byte
+	err := VerifyPCRDigestParsed(nil, pcrValues, 0)
+	if err == nil {
+		t.Fatal("expected error for nil *TPMSAttest")
+	}
+}
+
+// TestVerifyPCRDigestParsed_MatchesByteForm asserts that a single
+// parse drives both the digest check and the FlagBootCommitment
+// ClockInfo read: parsing once and feeding the result to
+// VerifyPCRDigestParsed must produce the same accept/reject outcome
+// as the byte-slice convenience entry point.
+func TestVerifyPCRDigestParsed_MatchesByteForm(t *testing.T) {
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+
+	var pcrValues [types.PCRCount][types.HashSize]byte
+	for i := 0; i < types.HashSize; i++ {
+		pcrValues[0][i] = byte(i ^ 0x55)
+		pcrValues[1][i] = byte(i ^ 0xAA)
+		pcrValues[14][i] = byte(i ^ 0xC3)
+	}
+
+	h := sha256.New()
+	h.Write(pcrValues[0][:])
+	h.Write(pcrValues[1][:])
+	h.Write(pcrValues[14][:])
+	digest := h.Sum(nil)
+
+	blob := buildTestAttestBlob(digest)
+	parsed, err := ParseTPMSAttest(blob)
+	if err != nil {
+		t.Fatalf("ParseTPMSAttest: %v", err)
+	}
+
+	if err := VerifyPCRDigestParsed(parsed, pcrValues, pcrMask); err != nil {
+		t.Fatalf("parsed-form unexpected mismatch: %v", err)
+	}
+	if err := VerifyPCRDigest(blob, pcrValues, pcrMask); err != nil {
+		t.Fatalf("byte-form unexpected mismatch: %v", err)
+	}
+
+	// tamper one PCR; both entry points must reject.
+	pcrValues[14][0] ^= 0xFF
+	if err := VerifyPCRDigestParsed(parsed, pcrValues, pcrMask); err == nil {
+		t.Fatal("parsed-form: tampered PCR must reject")
+	}
+	if err := VerifyPCRDigest(blob, pcrValues, pcrMask); err == nil {
+		t.Fatal("byte-form: tampered PCR must reject")
+	}
+}
+
 func TestVerifyPCRDigest_InvalidAttest(t *testing.T) {
 	t.Log("SECURITY TEST: Rejecting invalid attestation data")
 

@@ -883,11 +883,25 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 	}
 
-	// verify PCR digest binding: ensure reported PCR values match TPM-signed digest
+	// verify PCR digest binding: ensure reported PCR values match the
+	// TPM-signed digest. The parsed TPMS_ATTEST is reused below by the
+	// FlagBootCommitment branch so attestData walks the parser exactly
+	// once per attestation; a malformed payload therefore cannot cost
+	// two allocation passes and the DoS surface from twice-running the
+	// parser collapses to one.
+	var parsedAttest *TPMSAttest
 	if report.TPM.AttestSize > 0 {
 		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
 		defer wipeBytes(attestData)
-		if err := VerifyPCRDigest(attestData, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
+		var err error
+		parsedAttest, err = ParseTPMSAttest(attestData)
+		if err != nil {
+			clog.Error("PCR digest verification failed", "error", err)
+			v.metrics.Rejections.Inc("pcr_fail")
+			result.Result = types.VerifyPCRFail
+			return result, fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
+		}
+		if err := VerifyPCRDigestParsed(parsedAttest, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
@@ -965,26 +979,26 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
 		}
 
-		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
-		defer wipeBytes(attestData)
-		attest, err := ParseTPMSAttest(attestData)
-		if err != nil {
-			clog.Error("PCR14 derivation: failed to parse TPMS_ATTEST", "error", err)
+		// Reuse the TPMS_ATTEST already parsed for the PCR digest
+		// binding above; FlagBootCommitment paths cannot run with
+		// AttestSize=0, so parsedAttest must be non-nil here.
+		if parsedAttest == nil {
+			clog.Error("FlagBootCommitment set without a TPM quote payload")
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
-			return result, fmt.Errorf("attest parse for boot commitment failed: %w", err)
+			return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
 		}
 
 		expected, restartDrift, matched := MatchBootCommitmentPCR14(
 			report.System.AgentHash,
-			attest.ClockInfo.ResetCount, attest.ClockInfo.RestartCount,
+			parsedAttest.ClockInfo.ResetCount, parsedAttest.ClockInfo.RestartCount,
 			pcr14, v.maxRestartCountSkew)
 		if !matched {
 			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 				"actual_pcr14", pcr14Hex,
 				"expected_pcr14", FormatPCR14(expected),
-				"reset_count", attest.ClockInfo.ResetCount,
-				"restart_count", attest.ClockInfo.RestartCount,
+				"reset_count", parsedAttest.ClockInfo.ResetCount,
+				"restart_count", parsedAttest.ClockInfo.RestartCount,
 				"max_restart_skew", v.maxRestartCountSkew)
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
@@ -993,7 +1007,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		if restartDrift > 0 {
 			clog.Info("PCR14 boot-commitment matched within restart_count skew window",
 				"restart_drift", restartDrift,
-				"quote_restart_count", attest.ClockInfo.RestartCount,
+				"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
 				"max_restart_skew", v.maxRestartCountSkew)
 		}
 

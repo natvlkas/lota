@@ -193,21 +193,23 @@ func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
 	return nil
 }
 
-// verifies that PCR values in the report match the TPM-signed PCRDigest
-func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
-	attest, err := ParseTPMSAttest(attestData)
-	if err != nil {
-		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
+// VerifyPCRDigestParsed compares the reported PCR values against the
+// PCRDigest signed inside an already-parsed TPMS_ATTEST. Callers that
+// reuse the parsed structure later in the verification flow (e.g. for
+// the FlagBootCommitment ClockInfo path) MUST go through this entry
+// point instead of VerifyPCRDigest so the heavy attest parser runs
+// once per attestation and a malformed attestData cannot pay for two
+// allocation passes.
+func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+	if attest == nil {
+		return errors.New("nil TPMS_ATTEST")
 	}
-
 	if attest.Type != TPMSTAttestQuote {
 		return fmt.Errorf("not a quote attestation (type 0x%04X)", attest.Type)
 	}
-
 	if attest.QuoteInfo == nil {
 		return errors.New("no quote info in attestation")
 	}
-
 	if len(attest.QuoteInfo.PCRDigest) == 0 {
 		return errors.New("PCR digest is empty (corrupted quote?)")
 	}
@@ -225,6 +227,18 @@ func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSiz
 	}
 
 	return nil
+}
+
+// VerifyPCRDigest is the byte-slice entry point used by callers that do
+// not consume the parsed TPMS_ATTEST themselves. Internally it parses
+// and delegates to VerifyPCRDigestParsed; new code should prefer the
+// parsed form to avoid re-parsing.
+func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+	attest, err := ParseTPMSAttest(attestData)
+	if err != nil {
+		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
+	}
+	return VerifyPCRDigestParsed(attest, pcrValues, pcrMask)
 }
 
 // extracts nonce (extraData) from TPMS_ATTEST
