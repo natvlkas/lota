@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -930,6 +931,7 @@ static void test_clock_state_save_load_round_trip(void) {
   fill_pattern(in.pcr14, LOTA_HASH_SIZE, 0x42);
   fill_pattern(in.self_hash, LOTA_HASH_SIZE, 0xA5);
   in.saved_at = 1715000000;
+  in.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK;
 
   if (tpm_clock_state_save(&ctx, &in) != 0) {
     FAIL("save failed");
@@ -942,7 +944,8 @@ static void test_clock_state_save_load_round_trip(void) {
   }
 
   if (out.reset_count != in.reset_count ||
-      out.restart_count != in.restart_count || out.saved_at != in.saved_at) {
+      out.restart_count != in.restart_count || out.saved_at != in.saved_at ||
+      out.flags != in.flags) {
     FAIL("scalar field mismatch after round-trip");
     return;
   }
@@ -952,6 +955,110 @@ static void test_clock_state_save_load_round_trip(void) {
   }
   if (memcmp(out.self_hash, in.self_hash, LOTA_HASH_SIZE) != 0) {
     FAIL("self_hash bytes mismatch after round-trip");
+    return;
+  }
+
+  PASS();
+}
+
+/*
+ * Older clock-state snapshots zero-filled the reserved tail. The
+ * initramfs-lock flag now lives in the first byte of that tail, so
+ * loading a zero-filled v1 record must preserve the legacy meaning:
+ * no initramfs lock was observed on that boot.
+ */
+static void test_clock_state_legacy_reserved_maps_to_no_lock(void) {
+  struct tpm_context ctx;
+  struct lota_clock_state legacy;
+  struct lota_clock_state out;
+
+  TEST("tpm_clock_state_load treats legacy reserved byte as no lock");
+  make_ctx(&ctx);
+  snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+           "%s/legacy_clock_state.dat", tmp_dir);
+
+  memset(&legacy, 0, sizeof(legacy));
+  legacy.magic = TPM_CLOCK_STATE_MAGIC;
+  legacy.version = TPM_CLOCK_STATE_VERSION;
+  legacy.reset_count = 3;
+  legacy.restart_count = 4;
+  legacy.saved_at = 1715000001;
+
+  int fd = open(ctx.clock_state_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) {
+    FAIL("cannot create legacy clock-state file");
+    return;
+  }
+  {
+    ssize_t w = write(fd, &legacy, sizeof(legacy));
+    (void)w;
+  }
+  close(fd);
+
+  if (tpm_clock_state_load(&ctx, &out) != 0) {
+    FAIL("legacy-shaped clock-state load failed");
+    return;
+  }
+  if (out.flags != 0) {
+    FAIL("legacy reserved byte must load as flags=0");
+    return;
+  }
+
+  PASS();
+}
+
+static void reference_initramfs_lock_digest(uint32_t reset_count,
+                                            uint32_t restart_count,
+                                            uint8_t out[LOTA_HASH_SIZE]) {
+  static const char tag[] = "LOTA-PCR14-INITRAMFS-LOCK-v1";
+  uint8_t counters[8];
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+
+  counters[0] = (uint8_t)(reset_count >> 24);
+  counters[1] = (uint8_t)(reset_count >> 16);
+  counters[2] = (uint8_t)(reset_count >> 8);
+  counters[3] = (uint8_t)reset_count;
+  counters[4] = (uint8_t)(restart_count >> 24);
+  counters[5] = (uint8_t)(restart_count >> 16);
+  counters[6] = (uint8_t)(restart_count >> 8);
+  counters[7] = (uint8_t)restart_count;
+
+  if (!md) {
+    memset(out, 0, LOTA_HASH_SIZE);
+    return;
+  }
+  if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
+      EVP_DigestUpdate(md, tag, sizeof(tag) - 1) != 1 ||
+      EVP_DigestUpdate(md, counters, sizeof(counters)) != 1 ||
+      EVP_DigestFinal_ex(md, out, NULL) != 1)
+    memset(out, 0, LOTA_HASH_SIZE);
+  EVP_MD_CTX_free(md);
+}
+
+/*
+ * The agent's lock-digest helper mirrors the standalone initramfs
+ * binary. Pin it against an independent OpenSSL construction so a
+ * tag or endian drift is caught without needing a hardware TPM.
+ */
+static void test_initramfs_lock_digest_matches_reference(void) {
+  uint8_t got[LOTA_HASH_SIZE];
+  uint8_t want[LOTA_HASH_SIZE];
+
+  TEST("tpm_initramfs_lock_digest matches reference derivation");
+  memset(got, 0, sizeof(got));
+  memset(want, 0, sizeof(want));
+
+  if (tpm_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, got) != 0) {
+    FAIL("digest helper failed");
+    return;
+  }
+  reference_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, want);
+  if (memcmp(got, want, LOTA_HASH_SIZE) != 0) {
+    FAIL("digest mismatch");
+    return;
+  }
+  if (tpm_initramfs_lock_digest(1, 2, NULL) != -EINVAL) {
+    FAIL("NULL output must be rejected");
     return;
   }
 
@@ -1311,6 +1418,8 @@ int main(void) {
   test_self_hash_pin_round_trip();
   test_tpm_strerror_maps_lota_private();
   test_clock_state_save_load_round_trip();
+  test_clock_state_legacy_reserved_maps_to_no_lock();
+  test_initramfs_lock_digest_matches_reference();
   test_clock_state_load_missing_is_enoent();
   test_clock_state_load_rejects_corrupt();
   test_call_with_backoff_no_leak_on_retry();

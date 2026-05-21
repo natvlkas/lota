@@ -46,6 +46,24 @@ const (
 	// must derive the expected PCR14 from the pinned baseline agent
 	// hash plus the TPMS_ATTEST ClockInfo before comparing.
 	FlagBootCommitment uint32 = 1 << 8
+
+	// FlagInitramfsLockV1 is set when the agent observed that an
+	// initramfs-time helper (lota-pcr14-lock, shipped under the
+	// 90lota dracut module) extended PCR14 with the domain-separated
+	// digest
+	//     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
+	//             restartCount_be)
+	// before the agent ran. The agent then extends with the
+	// boot-commitment value on top, so the final PCR14 reflects a
+	// two-hop chain:
+	//     pcr14_lock  = SHA256(0^32 || initramfs_lock_commit)
+	//     pcr14_final = SHA256(pcr14_lock || boot_commitment)
+	// The verifier mirrors the derivation when this flag is set.
+	// Legacy fleets without the dracut module continue emitting
+	// FlagBootCommitment alone; locked hosts add this bit so a
+	// mixed deployment authenticates correctly without
+	// flag negotiation.
+	FlagInitramfsLockV1 uint32 = 1 << 9
 )
 
 // verification result codes

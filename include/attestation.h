@@ -39,6 +39,26 @@ struct lota_report_header {
   (1U << 8) /* PCR14 bound to TPM resetCount/restartCount */
 
 /*
+ * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 is set when the agent observed
+ * that an initramfs-time helper (lota-pcr14-lock, shipped under the
+ * 90lota dracut module) already extended PCR14 with the
+ * domain-separated digest
+ *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
+ *             restartCount_be)
+ * before the agent ran. The agent then extends with the existing
+ * boot commitment ON TOP, so the final PCR14 reflects a two-hop
+ * chain:
+ *     pcr14_lock = SHA256(0^32 || initramfs_lock_commit)
+ *     pcr14_final = SHA256(pcr14_lock || boot_commitment)
+ * The verifier mirrors the derivation. The bit pins the order so a
+ * mixed fleet (some hosts with the dracut module, some without) can
+ * be authenticated correctly without flag negotiation: legacy hosts
+ * keep emitting LOTA_REPORT_FLAG_BOOT_COMMITMENT alone and locked
+ * hosts add LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1.
+ */
+#define LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 (1U << 9)
+
+/*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
  * Contains: magic, type, qualifiedSigner, extraData (nonce),
  * clockInfo, firmwareVersion, and quote info (PCR selection + digest).

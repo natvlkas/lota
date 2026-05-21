@@ -197,10 +197,11 @@ static void test_pidfile_default_path(void) {
   }
 
   /*
-   * non-root: expect -EACCES or -ENOENT or -ENOTDIR
+   * non-root or sandboxed test runner: expect a permission/path error.
    * important thing is it does not crash
    */
-  if (fd == -EACCES || fd == -ENOENT || fd == -ENOTDIR || fd == -EPERM) {
+  if (fd == -EACCES || fd == -ENOENT || fd == -ENOTDIR || fd == -EPERM ||
+      fd == -EROFS) {
     PASS();
   } else {
     char msg[128];

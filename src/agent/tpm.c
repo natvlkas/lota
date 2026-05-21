@@ -636,6 +636,7 @@ int tpm_init(struct tpm_context *ctx) {
   ctx->lockout_event_count = 0;
   memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
   ctx->self_hash_ready = false;
+  ctx->boot_commitment_locked = false;
 
   /*
    * Initialize TCTI context for device access.
@@ -697,6 +698,7 @@ void tpm_cleanup(struct tpm_context *ctx) {
 
   memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
   ctx->self_hash_ready = false;
+  ctx->boot_commitment_locked = false;
 
   ctx->initialized = false;
 }
@@ -1453,6 +1455,15 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  */
 #define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v1"
 
+/*
+ * Domain-separation tag for the PCR14 initramfs lock. Mirrors
+ * src/initramfs/lota-pcr14-lock.c and
+ * verifier/verify/baseline.go::initramfsLockTag; any change here must
+ * be made in lock-step with both peers or the verifier will refuse to
+ * authenticate a freshly locked host.
+ */
+#define TPM_INITRAMFS_LOCK_TAG "LOTA-PCR14-INITRAMFS-LOCK-v1"
+
 /* PCR index used for the agent self-measurement and boot commitment.
  * Mirrors agent.h::LOTA_PCR_SELF without dragging the agent header into
  * the unit-test build (tpm.c is also linked from test_aik_rotation). */
@@ -1490,6 +1501,36 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
   if (!ok)
     return -EIO;
   return 0;
+}
+
+int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
+                              uint8_t out_digest[]) {
+  if (!out_digest)
+    return -EINVAL;
+
+  uint8_t reset_be[4];
+  uint8_t restart_be[4];
+  reset_be[0] = (uint8_t)((reset_count >> 24) & 0xff);
+  reset_be[1] = (uint8_t)((reset_count >> 16) & 0xff);
+  reset_be[2] = (uint8_t)((reset_count >> 8) & 0xff);
+  reset_be[3] = (uint8_t)(reset_count & 0xff);
+  restart_be[0] = (uint8_t)((restart_count >> 24) & 0xff);
+  restart_be[1] = (uint8_t)((restart_count >> 16) & 0xff);
+  restart_be[2] = (uint8_t)((restart_count >> 8) & 0xff);
+  restart_be[3] = (uint8_t)(restart_count & 0xff);
+
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  if (!md)
+    return -ENOMEM;
+
+  int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+           EVP_DigestUpdate(md, TPM_INITRAMFS_LOCK_TAG,
+                            sizeof(TPM_INITRAMFS_LOCK_TAG) - 1) == 1 &&
+           EVP_DigestUpdate(md, reset_be, sizeof(reset_be)) == 1 &&
+           EVP_DigestUpdate(md, restart_be, sizeof(restart_be)) == 1 &&
+           EVP_DigestFinal_ex(md, out_digest, NULL) == 1;
+  EVP_MD_CTX_free(md);
+  return ok ? 0 : -EIO;
 }
 
 int tpm_clock_state_load(const struct tpm_context *ctx,
@@ -1531,6 +1572,7 @@ int tpm_clock_state_load(const struct tpm_context *ctx,
   memcpy(out->pcr14, wire.pcr14, sizeof(out->pcr14));
   memcpy(out->self_hash, wire.self_hash, sizeof(out->self_hash));
   out->saved_at = (int64_t)le64toh((uint64_t)wire.saved_at);
+  out->flags = wire.flags;
   memset(out->_reserved, 0, sizeof(out->_reserved));
   return 0;
 }
@@ -1570,6 +1612,7 @@ int tpm_clock_state_save(const struct tpm_context *ctx,
   memcpy(wire.pcr14, in->pcr14, sizeof(wire.pcr14));
   memcpy(wire.self_hash, in->self_hash, sizeof(wire.self_hash));
   wire.saved_at = (int64_t)htole64((uint64_t)in->saved_at);
+  wire.flags = in->flags;
   memset(wire._reserved, 0, sizeof(wire._reserved));
 
   ssize_t n = write(fd, &wire, sizeof(wire));
@@ -1595,9 +1638,29 @@ int tpm_clock_state_save(const struct tpm_context *ctx,
 }
 
 /*
- * Helper: SHA256(0^32 || commit) so callers can recompute the expected
- * PCR14 value for a given (self_hash, resetCount, restartCount) without
- * duplicating the EVP plumbing at every site.
+ * sha256_two_block - SHA-256(block_a || block_b), each block exactly
+ * LOTA_HASH_SIZE bytes. Used to derive both the post-extend PCR14
+ * value (block_a = 0^32) and the lock-then-extend chain
+ * (block_a = pcr14_after_lock).
+ */
+static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
+                            const uint8_t block_b[LOTA_HASH_SIZE],
+                            uint8_t out[LOTA_HASH_SIZE]) {
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  if (!md)
+    return -ENOMEM;
+  int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+           EVP_DigestUpdate(md, block_a, LOTA_HASH_SIZE) == 1 &&
+           EVP_DigestUpdate(md, block_b, LOTA_HASH_SIZE) == 1 &&
+           EVP_DigestFinal_ex(md, out, NULL) == 1;
+  EVP_MD_CTX_free(md);
+  return ok ? 0 : -EIO;
+}
+
+/*
+ * derive_expected_pcr14 - SHA-256(0^32 || boot_commit). Final PCR14
+ * value an agent observes when it extends boot commitment onto an
+ * untouched PCR14 (no initramfs lock ran).
  */
 static int derive_expected_pcr14(const uint8_t self_hash[],
                                  uint32_t reset_count, uint32_t restart_count,
@@ -1608,16 +1671,44 @@ static int derive_expected_pcr14(const uint8_t self_hash[],
       tpm_boot_commitment_digest(self_hash, reset_count, restart_count, commit);
   if (ret < 0)
     return ret;
+  return sha256_two_block(zero, commit, out_pcr14);
+}
 
-  EVP_MD_CTX *md = EVP_MD_CTX_new();
-  if (!md)
-    return -ENOMEM;
-  int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
-           EVP_DigestUpdate(md, zero, sizeof(zero)) == 1 &&
-           EVP_DigestUpdate(md, commit, sizeof(commit)) == 1 &&
-           EVP_DigestFinal_ex(md, out_pcr14, NULL) == 1;
-  EVP_MD_CTX_free(md);
-  return ok ? 0 : -EIO;
+/*
+ * derive_lock_pcr14_value - SHA-256(0^32 || lock_commit). The exact
+ * PCR14 value PCR14 carries when the initramfs lock helper ran but
+ * the agent has not extended its own commitment yet.
+ */
+static int derive_lock_pcr14_value(uint32_t reset_count, uint32_t restart_count,
+                                   uint8_t out[LOTA_HASH_SIZE]) {
+  uint8_t lock_commit[LOTA_HASH_SIZE];
+  uint8_t zero[LOTA_HASH_SIZE] = {0};
+  int ret = tpm_initramfs_lock_digest(reset_count, restart_count, lock_commit);
+  if (ret < 0)
+    return ret;
+  return sha256_two_block(zero, lock_commit, out);
+}
+
+/*
+ * derive_expected_locked_pcr14 - final PCR14 after the lock-then-extend
+ * chain: SHA-256(lock_value || boot_commit). Used by both the warm-
+ * restart match (when the agent re-runs in a locked boot session) and
+ * the post-extend state save.
+ */
+static int derive_expected_locked_pcr14(const uint8_t self_hash[],
+                                        uint32_t reset_count,
+                                        uint32_t restart_count,
+                                        uint8_t out[LOTA_HASH_SIZE]) {
+  uint8_t lock_value[LOTA_HASH_SIZE];
+  uint8_t boot_commit[LOTA_HASH_SIZE];
+  int ret = derive_lock_pcr14_value(reset_count, restart_count, lock_value);
+  if (ret < 0)
+    return ret;
+  ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
+                                   boot_commit);
+  if (ret < 0)
+    return ret;
+  return sha256_two_block(lock_value, boot_commit, out);
 }
 
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
@@ -1627,11 +1718,21 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
   uint8_t commit[LOTA_HASH_SIZE];
   uint8_t current_pcr14[LOTA_HASH_SIZE];
   uint8_t expected_pcr14[LOTA_HASH_SIZE];
+  uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
+  uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
   uint8_t zero_pcr14[LOTA_HASH_SIZE] = {0};
   int ret;
 
   if (!ctx || !ctx->initialized || !self_hash)
     return -EINVAL;
+
+  /*
+   * boot_commitment_locked is recomputed on every call: a stale
+   * "true" value from a previous attempt could mislead the
+   * attestation report builder if the new call took the unlocked
+   * branch (e.g. operator removed the dracut module between runs).
+   */
+  ctx->boot_commitment_locked = false;
 
   {
     struct esys_read_clock_args args = {
@@ -1654,12 +1755,27 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
     return ret;
 
   /*
-   * Expected post-extend PCR14: SHA256(0^32 || commit). Same construction
-   * the verifier rederives from the quote's ClockInfo plus the pinned
-   * agent_hash baseline.
+   * Three candidate PCR14 values the agent can legitimately observe:
+   *   expected_pcr14         = SHA-256(0^32 || boot_commit)
+   *     - unlocked host, agent extended boot commit on top of an
+   *       untouched PCR14
+   *   lock_pcr14_value       = SHA-256(0^32 || lock_commit)
+   *     - locked host where the initramfs helper ran but the agent
+   *       has not extended its own commitment yet
+   *   expected_locked_pcr14  = SHA-256(lock_value || boot_commit)
+   *     - locked host where both extends have occurred
+   * Anything else is treated as tamper and routed through the
+   * attribution logic below.
    */
   ret = derive_expected_pcr14(self_hash, reset_count, restart_count,
                               expected_pcr14);
+  if (ret < 0)
+    return ret;
+  ret = derive_lock_pcr14_value(reset_count, restart_count, lock_pcr14_value);
+  if (ret < 0)
+    return ret;
+  ret = derive_expected_locked_pcr14(self_hash, reset_count, restart_count,
+                                     expected_locked_pcr14);
   if (ret < 0)
     return ret;
 
@@ -1682,6 +1798,57 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
             "PCR14 boot-commitment: clock-state load failed (%s); "
             "continuing without attribution\n",
             strerror(-ret));
+
+  /*
+   * Locked-host branches handled before the legacy state machine
+   * so a host that just deployed the dracut module gets the
+   * lock-then-extend chain on its first run.
+   */
+  if (memcmp(current_pcr14, lock_pcr14_value, LOTA_HASH_SIZE) == 0) {
+    /*
+     * Initramfs lock ran; agent has not extended yet. Extend with
+     * the boot commitment on top so PCR14 ends at the two-hop
+     * value the verifier expects from FlagInitramfsLockV1 reports.
+     */
+    ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
+    if (ret < 0)
+      return ret;
+    struct lota_clock_state snap = {
+        .reset_count = reset_count,
+        .restart_count = restart_count,
+        .saved_at = (int64_t)time(NULL),
+        .flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
+    };
+    memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
+    memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
+    int save_ret = tpm_clock_state_save(ctx, &snap);
+    if (save_ret < 0)
+      fprintf(stderr,
+              "PCR14 boot-commitment: clock-state save failed (%s); "
+              "next run will lose tamper attribution\n",
+              strerror(-save_ret));
+    ctx->boot_commitment_locked = true;
+    return 0;
+  }
+
+  if (memcmp(current_pcr14, expected_locked_pcr14, LOTA_HASH_SIZE) == 0) {
+    /* Warm restart on a locked host - both extends already done. */
+    struct lota_clock_state snap = {
+        .reset_count = reset_count,
+        .restart_count = restart_count,
+        .saved_at = (int64_t)time(NULL),
+        .flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
+    };
+    memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
+    memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
+    int save_ret = tpm_clock_state_save(ctx, &snap);
+    if (save_ret < 0)
+      fprintf(stderr,
+              "PCR14 boot-commitment: clock-state refresh failed (%s)\n",
+              strerror(-save_ret));
+    ctx->boot_commitment_locked = true;
+    return 0;
+  }
 
   if (memcmp(current_pcr14, zero_pcr14, LOTA_HASH_SIZE) == 0) {
     /*

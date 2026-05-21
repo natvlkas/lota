@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=LOTA PCR14 initramfs lock
+DefaultDependencies=no
+Before=initrd-root-fs.target sysroot.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/lota/lota-pcr14-lock
+RemainAfterExit=yes
+
+[Install]
+WantedBy=initrd.target

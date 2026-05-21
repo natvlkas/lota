@@ -133,11 +133,22 @@ const char *tpm_strerror(int err);
 #define TPM_CLOCK_STATE_VERSION 1
 
 /*
+ * Bit flags recorded on the persistent clock-state snapshot. Stored
+ * inside the existing _reserved area so older snapshots written by
+ * agents that pre-date the initramfs-lock feature read as flags=0
+ * (LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK clear, i.e. "no lock
+ * observed", which is the correct interpretation for those hosts).
+ */
+#define LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK (1U << 0)
+
+/*
  * PCR14 boot-commitment snapshot persisted across agent restarts.
  *
- * Layout is fixed and version-tagged so a future revision can extend
- * the structure (reserved[] takes the new fields) without breaking
- * load on the previous on-disk record.
+ * Layout is fixed and version-tagged. flags deliberately consumes the
+ * first byte of the old 32-byte reserved tail; pre-initramfs-lock
+ * snapshots zero-filled that area, so version 1 remains loadable
+ * without a migration while new writers retain 31 bytes for future
+ * extension.
  */
 struct lota_clock_state {
   uint32_t magic;
@@ -147,7 +158,8 @@ struct lota_clock_state {
   uint8_t pcr14[LOTA_HASH_SIZE]; /* PCR14 value AFTER the extend */
   uint8_t self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
   int64_t saved_at;                  /* time_t when the snapshot was written */
-  uint8_t _reserved[32];
+  uint8_t flags;
+  uint8_t _reserved[31];
 } __attribute__((packed));
 
 #define TPM_AIK_AUTH_MAGIC 0x41545541 /* "AUTA" */
@@ -245,6 +257,19 @@ struct tpm_context {
    */
   uint8_t self_hash[LOTA_HASH_SIZE];
   bool self_hash_ready;
+
+  /*
+   * Set to true by tpm_extend_boot_commitment() when PCR14 already
+   * carried the initramfs-lock value at agent start (i.e. the
+   * lota-pcr14-lock helper ran inside the initramfs and locked
+   * PCR14 before any userspace daemon could touch it). The
+   * attestation report builder mirrors this into
+   * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 so the verifier picks the
+   * two-hop derivation. Carried on tpm_context (not g_agent) so the
+   * value is naturally per-TPM-session and survives across the
+   * single agent lifecycle.
+   */
+  bool boot_commitment_locked;
 };
 
 /*
@@ -416,6 +441,27 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
                                uint32_t restart_count, uint8_t out_digest[]);
 
 /*
+ * tpm_initramfs_lock_digest - reproduce the digest the initramfs lock
+ *                             helper (src/initramfs/lota-pcr14-lock.c)
+ *                             extends PCR14 with before the agent runs
+ * @reset_count, @restart_count: clockInfo at the time the helper ran
+ * @out_digest: LOTA_HASH_SIZE bytes, receives the SHA-256 digest
+ *
+ * The helper extends with
+ *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
+ *             restartCount_be)
+ * and PCR14 ends up at SHA256(0^32 || that_digest). The agent calls
+ * this function so it can recognise when PCR14 already carries the
+ * lock value and chain its own boot commitment on top deterministically.
+ * The verifier mirrors the derivation via
+ * verifier/verify/baseline.go::DeriveInitramfsLockPCR14.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
+                              uint8_t out_digest[]);
+
+/*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
  *                              current TPM reset/restart counter
  * @ctx:       Initialized TPM context
@@ -424,10 +470,11 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
  * Reads clockInfo via Esys_ReadClock and extends PCR14 with the
  * boot-commitment digest defined by tpm_boot_commitment_digest().
  * Re-entrancy across agent restarts without TPM reset is handled by
- * inspecting PCR14: zeros mean a fresh boot (extend), the expected
- * post-extend value means a warm agent restart (skip), anything else
- * means the runtime PCR14 has been tampered with and the call fails
- * with -EBADMSG so attestation refuses to proceed.
+ * inspecting PCR14: zeros mean a fresh unlocked boot (extend), the
+ * initramfs-lock value means a fresh locked boot (extend on top), an
+ * expected post-extend value means a warm agent restart (skip),
+ * anything else means the runtime PCR14 has been tampered with and
+ * the call fails with -EBADMSG so attestation refuses to proceed.
  *
  * Returns: 0 on success, negative errno on failure
  */

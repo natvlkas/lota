@@ -939,6 +939,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	pcr14Hex = FormatPCR14(pcr14)
 
 	useBootCommitment := report.Header.Flags&types.FlagBootCommitment != 0
+	useInitramfsLock := report.Header.Flags&types.FlagInitramfsLockV1 != 0
+	if useInitramfsLock && !useBootCommitment {
+		logging.Security(clog, "initramfs-lock flag set without boot-commitment flag")
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitment")
+	}
 
 	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory in
 	// the default production configuration. Move this ahead of any
@@ -989,17 +996,40 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
 		}
 
-		expected, restartDrift, matched := MatchBootCommitmentPCR14(
-			report.System.AgentHash,
-			parsedAttest.ClockInfo.ResetCount, parsedAttest.ClockInfo.RestartCount,
-			pcr14, v.maxRestartCountSkew)
+		// Pick the derivation that matches the flag set on the
+		// report. Hosts with the 90lota dracut module run the
+		// initramfs lock helper (src/initramfs/lota-pcr14-lock.c)
+		// before the agent ever starts, so PCR14 carries the
+		// two-hop chain SHA256(lock_value || boot_commit) and the
+		// report carries FlagInitramfsLockV1. Hosts without the
+		// module emit FlagBootCommitment alone and fall through to
+		// the single-hop derivation.
+		var (
+			expected     [types.HashSize]byte
+			restartDrift uint32
+			matched      bool
+		)
+		if useInitramfsLock {
+			expected, restartDrift, matched = MatchLockedBootCommitmentPCR14(
+				report.System.AgentHash,
+				parsedAttest.ClockInfo.ResetCount,
+				parsedAttest.ClockInfo.RestartCount,
+				pcr14, v.maxRestartCountSkew)
+		} else {
+			expected, restartDrift, matched = MatchBootCommitmentPCR14(
+				report.System.AgentHash,
+				parsedAttest.ClockInfo.ResetCount,
+				parsedAttest.ClockInfo.RestartCount,
+				pcr14, v.maxRestartCountSkew)
+		}
 		if !matched {
 			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 				"actual_pcr14", pcr14Hex,
 				"expected_pcr14", FormatPCR14(expected),
 				"reset_count", parsedAttest.ClockInfo.ResetCount,
 				"restart_count", parsedAttest.ClockInfo.RestartCount,
-				"max_restart_skew", v.maxRestartCountSkew)
+				"max_restart_skew", v.maxRestartCountSkew,
+				"initramfs_lock", useInitramfsLock)
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
 			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
@@ -1008,7 +1038,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			clog.Info("PCR14 boot-commitment matched within restart_count skew window",
 				"restart_drift", restartDrift,
 				"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
-				"max_restart_skew", v.maxRestartCountSkew)
+				"max_restart_skew", v.maxRestartCountSkew,
+				"initramfs_lock", useInitramfsLock)
 		}
 
 		var bootPtr *BootBaseline

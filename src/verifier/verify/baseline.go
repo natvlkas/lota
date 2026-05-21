@@ -23,6 +23,80 @@ import (
 // LOTA-PCR14-BOOT-COMMITMENT-v1 string in src/agent/tpm.c.
 const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
 
+// initramfsLockTag is the domain-separation prefix used by the
+// initramfs lock helper (src/initramfs/lota-pcr14-lock.c) when it
+// extends PCR14 before any userspace daemon runs. The verifier
+// rederives the same digest whenever FlagInitramfsLockV1 is set on a
+// report.
+const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
+
+// DeriveInitramfsLockPCR14 reproduces the post-extend PCR14 value the
+// initramfs lock helper installs:
+//
+//	commit = SHA256(initramfsLockTag || resetCount_be || restartCount_be)
+//	pcr14  = SHA256(0^32 || commit)
+//
+// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo
+// of the quote. The helper does NOT include agent_hash in the digest:
+// the lock runs before the agent binary is on the running system, so
+// no self_hash exists yet, and binding the lock only to the TPM
+// counters keeps the derivation reproducible regardless of which
+// agent binary later layers a boot commitment on top.
+func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]byte {
+	var counters [8]byte
+	binary.BigEndian.PutUint32(counters[0:4], resetCount)
+	binary.BigEndian.PutUint32(counters[4:8], restartCount)
+
+	commit := sha256.New()
+	commit.Write([]byte(initramfsLockTag))
+	commit.Write(counters[:])
+	commitDigest := commit.Sum(nil)
+
+	var zero [types.HashSize]byte
+	pcr := sha256.New()
+	pcr.Write(zero[:])
+	pcr.Write(commitDigest)
+
+	var out [types.HashSize]byte
+	copy(out[:], pcr.Sum(nil))
+	return out
+}
+
+// DeriveLockedBootCommitmentPCR14 reproduces the final PCR14 value
+// when both the initramfs lock and the agent's boot commitment have
+// been applied in sequence. The chain is:
+//
+//	lock_value  = DeriveInitramfsLockPCR14(R, S)
+//	boot_commit = SHA256(bootCommitmentTag || agentHash || R || S)
+//	pcr14_final = SHA256(lock_value || boot_commit)
+//
+// The verifier picks this derivation when the report carries
+// FlagInitramfsLockV1 alongside FlagBootCommitment; a report with
+// only FlagBootCommitment falls back to DeriveBootCommitmentPCR14.
+func DeriveLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
+	resetCount, restartCount uint32) [types.HashSize]byte {
+
+	lockValue := DeriveInitramfsLockPCR14(resetCount, restartCount)
+
+	var counters [8]byte
+	binary.BigEndian.PutUint32(counters[0:4], resetCount)
+	binary.BigEndian.PutUint32(counters[4:8], restartCount)
+
+	commit := sha256.New()
+	commit.Write([]byte(bootCommitmentTag))
+	commit.Write(agentHash[:])
+	commit.Write(counters[:])
+	commitDigest := commit.Sum(nil)
+
+	pcr := sha256.New()
+	pcr.Write(lockValue[:])
+	pcr.Write(commitDigest)
+
+	var out [types.HashSize]byte
+	copy(out[:], pcr.Sum(nil))
+	return out
+}
+
 // DeriveBootCommitmentPCR14 reproduces the agent's PCR14 derivation:
 //
 //	commit  = SHA256(tag || agent_hash || resetCount_be || restartCount_be)
@@ -85,12 +159,42 @@ func MatchBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
 
-	expected = DeriveBootCommitmentPCR14(agentHash, resetCount, quoteRestartCount)
+	return matchPCR14(DeriveBootCommitmentPCR14, agentHash, resetCount,
+		quoteRestartCount, target, maxRestartSkew)
+}
+
+// MatchLockedBootCommitmentPCR14 mirrors MatchBootCommitmentPCR14 for
+// the two-hop derivation used when an initramfs lock has run before
+// the agent. The skew-tolerant scan stays the same; only the per-step
+// derivation function differs so a caller dispatching on
+// FlagInitramfsLockV1 selects the right chain.
+func MatchLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
+	resetCount, quoteRestartCount uint32,
+	target [types.HashSize]byte,
+	maxRestartSkew uint32,
+) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
+
+	return matchPCR14(DeriveLockedBootCommitmentPCR14, agentHash, resetCount,
+		quoteRestartCount, target, maxRestartSkew)
+}
+
+// matchPCR14 factors the restartCount-skew scan out of the two
+// derivation paths so a future third derivation (e.g. a v2 lock) can
+// reuse the same exhaustion logic without copy/paste.
+func matchPCR14(
+	derive func(agentHash [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte,
+	agentHash [types.HashSize]byte,
+	resetCount, quoteRestartCount uint32,
+	target [types.HashSize]byte,
+	maxRestartSkew uint32,
+) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
+
+	expected = derive(agentHash, resetCount, quoteRestartCount)
 	if expected == target {
 		return expected, 0, true
 	}
 	for d := uint32(1); d <= maxRestartSkew && d <= quoteRestartCount; d++ {
-		cand := DeriveBootCommitmentPCR14(agentHash, resetCount, quoteRestartCount-d)
+		cand := derive(agentHash, resetCount, quoteRestartCount-d)
 		if cand == target {
 			return cand, d, true
 		}

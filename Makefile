@@ -33,6 +33,7 @@ BUILD_DIR := build
 
 # Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
+INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
@@ -149,7 +150,7 @@ ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -158,6 +159,17 @@ $(BUILD_DIR):
 # build agent binary
 $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "Built: $@"
+
+# build the initramfs PCR14 lock helper. The binary stays small and
+# self-contained: it links only against TSS2-ESYS and OpenSSL so the
+# 90lota dracut module can copy a minimal closure of shared objects
+# into the initramfs image. PIE + the rest of the agent's hardening
+# flags are inherited from CFLAGS so the helper is built with the
+# same protections as the daemon.
+$(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
+		-ltss2-esys -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
 
 # compile agent
@@ -215,11 +227,13 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent verifier sdk server-sdk wine-hook anticheat clean install test
+.PHONY: bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install test
 
 bpf: $(BPF_OBJ)
 
 agent: $(AGENT_BIN)
+
+initramfs-lock: $(INITRAMFS_LOCK_BIN)
 
 verifier: $(VERIFIER_BIN)
 
@@ -244,10 +258,12 @@ clean:
 install: all
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
+	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
 	install -d $(DESTDIR)/usr/lib64
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
+	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
@@ -263,6 +279,8 @@ install: all
 	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
 	install -d $(DESTDIR)/usr/lib/udev/rules.d
 	install -m 644 configs/udev/99-lota-tpm.rules $(DESTDIR)/usr/lib/udev/rules.d/
+	install -m 755 src/initramfs/90lota/module-setup.sh $(DESTDIR)/usr/lib/dracut/modules.d/90lota/
+	install -m 644 src/initramfs/90lota/lota-pcr14-lock.service $(DESTDIR)/usr/lib/dracut/modules.d/90lota/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
@@ -287,6 +305,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
 	$(TEST_BIN_DIR)/test_aik_rotation \
+	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
 	$(TEST_BIN_DIR)/sdk_demo \
@@ -349,6 +368,10 @@ $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c 
 	$(CC) $(CFLAGS) -DLOTA_TPM_TESTING -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
 	@echo "Built: $@"
@@ -398,6 +421,7 @@ test-unit: all $(TEST_BINS)
 	@./build/test_policy_sign
 	@./build/test_policy_export
 	@./build/test_aik_rotation
+	@./build/test_initramfs_lock
 	@./build/test_hardening
 	@./build/test_server_sdk
 	@./build/test_anticheat
@@ -496,6 +520,7 @@ help:
 	@echo "  all        - Build agent, verifier, SDKs and BPF program (default)"
 	@echo "  bpf        - Build only BPF program"
 	@echo "  agent      - Build only user-space agent"
+	@echo "  initramfs-lock - Build only the initramfs PCR14 lock helper"
 	@echo "  verifier   - Build only Go verifier"
 	@echo "  sdk        - Build only gaming SDK library"
 	@echo "  server-sdk - Build only server-side verification SDK"

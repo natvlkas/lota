@@ -34,6 +34,48 @@ func referenceBootCommitmentPCR14(agentHash [types.HashSize]byte, reset, restart
 	return out
 }
 
+func referenceInitramfsLockPCR14(reset, restart uint32) [types.HashSize]byte {
+	const tag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
+	var counters [8]byte
+	binary.BigEndian.PutUint32(counters[0:4], reset)
+	binary.BigEndian.PutUint32(counters[4:8], restart)
+
+	commit := sha256.New()
+	commit.Write([]byte(tag))
+	commit.Write(counters[:])
+	d := commit.Sum(nil)
+
+	var zero [types.HashSize]byte
+	final := sha256.New()
+	final.Write(zero[:])
+	final.Write(d)
+	var out [types.HashSize]byte
+	copy(out[:], final.Sum(nil))
+	return out
+}
+
+func referenceLockedBootCommitmentPCR14(agentHash [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
+	const tag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
+	lockValue := referenceInitramfsLockPCR14(reset, restart)
+
+	var counters [8]byte
+	binary.BigEndian.PutUint32(counters[0:4], reset)
+	binary.BigEndian.PutUint32(counters[4:8], restart)
+
+	commit := sha256.New()
+	commit.Write([]byte(tag))
+	commit.Write(agentHash[:])
+	commit.Write(counters[:])
+	d := commit.Sum(nil)
+
+	final := sha256.New()
+	final.Write(lockValue[:])
+	final.Write(d)
+	var out [types.HashSize]byte
+	copy(out[:], final.Sum(nil))
+	return out
+}
+
 func TestDeriveBootCommitmentPCR14_StableForSameInputs(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
@@ -49,6 +91,37 @@ func TestDeriveBootCommitmentPCR14_StableForSameInputs(t *testing.T) {
 	want := referenceBootCommitmentPCR14(agentHash, 5, 1)
 	if a != want {
 		t.Fatalf("derivation diverged from reference: got %x want %x", a, want)
+	}
+}
+
+func TestDeriveInitramfsLockPCR14_StableForSameInputs(t *testing.T) {
+	a := DeriveInitramfsLockPCR14(9, 2)
+	b := DeriveInitramfsLockPCR14(9, 2)
+	if a != b {
+		t.Fatal("initramfs lock derivation must be deterministic")
+	}
+
+	want := referenceInitramfsLockPCR14(9, 2)
+	if a != want {
+		t.Fatalf("initramfs lock derivation diverged from reference: got %x want %x", a, want)
+	}
+}
+
+func TestDeriveLockedBootCommitmentPCR14_ChainsLockBeforeAgentCommit(t *testing.T) {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = byte(0x80 + i)
+	}
+
+	got := DeriveLockedBootCommitmentPCR14(agentHash, 6, 3)
+	want := referenceLockedBootCommitmentPCR14(agentHash, 6, 3)
+	if got != want {
+		t.Fatalf("locked derivation diverged from reference: got %x want %x", got, want)
+	}
+
+	unlocked := DeriveBootCommitmentPCR14(agentHash, 6, 3)
+	if got == unlocked {
+		t.Fatal("locked two-hop derivation must not collapse to unlocked PCR14")
 	}
 }
 
@@ -404,5 +477,32 @@ func TestMatchBootCommitmentPCR14_ZeroSkewIsExactOnly(t *testing.T) {
 	_, _, okDrift := MatchBootCommitmentPCR14(agentHash, 1, 6, target, 0)
 	if okDrift {
 		t.Fatal("any drift must be rejected when maxRestartSkew=0")
+	}
+}
+
+func TestMatchLockedBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = 0xA1
+	}
+
+	const (
+		resetCount        uint32 = 8
+		bootRestartCount  uint32 = 1
+		quoteRestartCount uint32 = 5
+		maxSkew           uint32 = 16
+	)
+	target := DeriveLockedBootCommitmentPCR14(agentHash, resetCount, bootRestartCount)
+
+	expected, drift, ok := MatchLockedBootCommitmentPCR14(agentHash,
+		resetCount, quoteRestartCount, target, maxSkew)
+	if !ok {
+		t.Fatal("expected locked PCR14 acceptance within skew window")
+	}
+	if drift != quoteRestartCount-bootRestartCount {
+		t.Fatalf("drift: got %d, want %d", drift, quoteRestartCount-bootRestartCount)
+	}
+	if expected != target {
+		t.Fatal("matched locked expected value diverged from target")
 	}
 }
