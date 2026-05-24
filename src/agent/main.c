@@ -183,6 +183,7 @@ struct run_daemon_params {
   bool block_ptrace;
   bool strict_modules;
   bool block_anon_exec;
+  bool allow_mutable_rootfs;
   const char *config_path;
   struct lota_config *cfg;
 };
@@ -396,6 +397,7 @@ static int run_daemon(const struct run_daemon_params *params) {
       .trust_lib_count = g_trust_lib_count,
       .allow_verity = g_allow_verity,
       .allow_verity_count = g_allow_verity_count,
+      .allow_mutable_rootfs = params->allow_mutable_rootfs,
   };
 
   /*
@@ -489,6 +491,38 @@ static int run_daemon(const struct run_daemon_params *params) {
   }
 
 cleanup_bpf:
+  /*
+   * Dirty-shutdown coverage.
+   *
+   * poison_runtime_pcr() only runs on the clean shutdown path that
+   * reaches this label. A panic, power loss, SIGKILL, or hard reset
+   * leaves PCR14 carrying the last live boot commitment and never
+   * extends it with the poison value, so a verifier that re-attests
+   * the same host after such a stop sees that PCR14 as authentic
+   * even if the on-disk agent binary, library closure, or policy
+   * file was tampered while the host was offline. The TPM itself
+   * cannot detect that mutation: PCR0/PCR1/PCR7 cover firmware /
+   * SecureBoot / cmdline, and PCR14 only binds the running agent
+   * self-hash, not inode contents that were touched after the
+   * agent stopped reading them.
+   *
+   * Closing the dirty-shutdown gap therefore lives outside the
+   * agent's runtime path:
+   *   - fs-verity on /proc/self/exe is enforced at startup by
+   *     bpf_loader_verify_kernel_runtime_hardening() (the
+   *     agent_self_fsverity_enabled() gate), so a hard reset that
+   *     swaps the agent binary on disk fails the next agent start
+   *     and never reaches a fresh attestation;
+   *   - dm-verity or IMA appraisal on the rootfs that hosts the
+   *     policy file, shared libraries, and supporting binaries is
+   *     the operator's deployment contract; the agent already
+   *     requires kernel IMA appraisal at startup.
+   * The --insecure-allow-mutable-rootfs escape hatch keeps the gap
+   * open on legacy hosts and logs a warn-level deviation; the
+   * verifier still binds PCR14 to the live agent self-hash, but
+   * the dirty-shutdown -> tampered-rootfs branch is no longer
+   * authenticated end to end on that host.
+   */
   if (g_agent.tpm_ctx.initialized && g_agent.bpf_ctx.loaded) {
     int poison_ret = poison_runtime_pcr(&g_agent.tpm_ctx);
     if (poison_ret < 0) {
@@ -551,6 +585,7 @@ int main(int argc, char *argv[]) {
   int no_verify_tls = 0;
   int insecure_allow_no_verify_tls = 0;
   int insecure_allow_mode_downgrade = 0;
+  int insecure_allow_mutable_rootfs = 0;
   bool cli_mode_set = false;
   int config_file_mode = -1;
   const char *pin_sha256_hex = NULL;
@@ -577,6 +612,7 @@ int main(int argc, char *argv[]) {
       {"no-verify-tls", no_argument, 0, 'K'},
       {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
       {"insecure-allow-mode-downgrade", no_argument, 0, 1002},
+      {"insecure-allow-mutable-rootfs", no_argument, 0, 1003},
       {"pin-sha256", required_argument, 0, 'F'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
@@ -773,6 +809,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1002:
       insecure_allow_mode_downgrade = 1;
+      break;
+    case 1003:
+      insecure_allow_mutable_rootfs = 1;
       break;
     case 'F':
       pin_sha256_hex = optarg;
@@ -1161,6 +1200,7 @@ int main(int argc, char *argv[]) {
         .block_ptrace = block_ptrace,
         .strict_modules = strict_modules,
         .block_anon_exec = block_anon_exec,
+        .allow_mutable_rootfs = insecure_allow_mutable_rootfs != 0,
         .config_path = config_path,
         .cfg = &cfg,
     };

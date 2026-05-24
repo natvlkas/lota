@@ -375,7 +375,51 @@ static int kernel_module_sig_enforced(void) {
   return -EPERM;
 }
 
-int bpf_loader_verify_kernel_runtime_hardening(void) {
+/*
+ * Returns 0 when /proc/self/exe carries an fs-verity digest, a
+ * negative errno otherwise.
+ *
+ * Rationale (dirty-shutdown coverage). poison_runtime_pcr() only runs
+ * on clean shutdown paths. A panic, power loss, SIGKILL, or hard reset
+ * leaves PCR14 carrying the last live boot commitment, and a verifier
+ * that re-attests the same host after such a stop sees that value as
+ * authentic if the on-disk agent binary, library closure, or policy
+ * file was swapped while the host was offline. The TPM itself cannot
+ * detect that mutation: PCR0/PCR1/PCR7 cover firmware / SecureBoot /
+ * cmdline, and PCR14 only binds the running agent self-hash, not
+ * inode contents that were touched after the agent stopped reading
+ * them. Closing the dirty-shutdown gap therefore requires
+ * tamper-evident rootfs storage: fs-verity on the agent binary +
+ * dm-verity / IMA appraisal on the rootfs that hosts the policy file
+ * and shared libraries. The agent binary self-check below is the
+ * minimum the agent can verify before it starts; the surrounding
+ * rootfs guarantees are the operator's deployment contract.
+ */
+static int agent_self_fsverity_enabled(void) {
+  int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return -errno;
+
+  struct {
+    struct fsverity_digest hdr;
+    uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+  } d;
+  memset(&d, 0, sizeof(d));
+  d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+
+  int ret = 0;
+  if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+    int err = errno;
+    if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
+      ret = -ENODATA;
+    else
+      ret = -err;
+  }
+  close(fd);
+  return ret;
+}
+
+int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs) {
   int ret;
 
   ret = kernel_lockdown_restrictive();
@@ -397,6 +441,27 @@ int bpf_loader_verify_kernel_runtime_hardening(void) {
   if (ret < 0) {
     lota_err("IMA appraisal policy is required for anti-tamper startup");
     return ret;
+  }
+
+  ret = agent_self_fsverity_enabled();
+  if (ret < 0) {
+    if (allow_mutable_rootfs) {
+      lota_warn("INSECURE: agent binary (/proc/self/exe) is not "
+                "fs-verity protected, and --insecure-allow-mutable-rootfs "
+                "was set. Dirty shutdown (panic/power-loss/SIGKILL) on "
+                "this host cannot detect a swapped agent binary, library "
+                "closure, or policy file across a hard reset; the verifier "
+                "will accept the same PCR14 boot commitment after the "
+                "next boot even if those inputs were tampered while the "
+                "host was offline.");
+    } else {
+      lota_err(
+          "Agent binary (/proc/self/exe) is not fs-verity protected "
+          "(required to detect tampering across panic/power-loss/SIGKILL; "
+          "dirty shutdown cannot run poison_runtime_pcr() and the verifier "
+          "has no other way to notice a swapped binary on a measured rootfs)");
+      return ret;
+    }
   }
 
   return 0;

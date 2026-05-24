@@ -237,7 +237,14 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
  *
  * Returns: 0 on success, negative errno on failure
  */
-int bpf_loader_verify_kernel_runtime_hardening(void);
+/*
+ * @allow_mutable_rootfs: when true, the agent-binary fs-verity self
+ *   check is skipped (the function still requires lockdown, module
+ *   signature enforcement, and IMA appraisal). Reserved for legacy
+ *   hosts whose rootfs cannot yet ship fs-verity; the call site logs
+ *   the deviation so the dirty-shutdown coverage gap stays visible.
+ */
+int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 
 /*
  * bpf_loader_protect_pid - Add a PID to the protected set

@@ -480,7 +480,8 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   if (ret < 0)
     return ret;
 
-  ret = bpf_loader_verify_kernel_runtime_hardening();
+  ret =
+      bpf_loader_verify_kernel_runtime_hardening(policy->allow_mutable_rootfs);
   if (ret < 0) {
     lota_err("Kernel anti-tamper prerequisites are not satisfied: %s",
              strerror(-ret));
