@@ -642,6 +642,76 @@ func TestCanonicalIssuerKey_StableAcrossMultiAVAOrder(t *testing.T) {
 	}
 }
 
+// TestCRL_LoadAcceptsCanonicalIssuerDriftFromCA covers the load-time
+// canonicalIssuerKey match path. A CA that re-encodes its Subject DN
+// between issuing its own certificate and signing a CRL refresh
+// produces byte-different RawSubject vs RawIssuer for the same logical
+// issuer. The previous byte-equal gate would have dropped the CRL at
+// load time and silently landed the leaf check on the "no CRL
+// configured for this issuer" fail-open branch. With the canonical
+// gate the load must accept and the revocation must take effect.
+func TestCRL_LoadAcceptsCanonicalIssuerDriftFromCA(t *testing.T) {
+	ca, caKey := buildCA(t)
+
+	// CRL is built and signed first so RawIssuer captures the
+	// canonical DER emitted by x509.CreateRevocationList. The CRL
+	// signature is computed over its own TBS using caKey, so
+	// CheckSignatureFrom() validates against ca.PublicKey
+	// regardless of any later mutation to ca.RawSubject.
+	const revokedSerial = 0x7E51
+	tmpl := &x509.RevocationList{
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		Number:             big.NewInt(11),
+		ThisUpdate:         time.Now().Add(-time.Hour),
+		NextUpdate:         time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{
+				SerialNumber:   big.NewInt(revokedSerial),
+				RevocationTime: time.Now().Add(-time.Minute),
+			},
+		},
+	}
+	crlDER, err := x509.CreateRevocationList(rand.Reader, tmpl, ca, caKey)
+	if err != nil {
+		t.Fatalf("CreateRevocationList: %v", err)
+	}
+	crl, err := x509.ParseRevocationList(crlDER)
+	if err != nil {
+		t.Fatalf("ParseRevocationList: %v", err)
+	}
+
+	// Inject case drift into the CommonName string inside
+	// ca.RawSubject so it stays a valid DER encoding of the same
+	// logical DN but byte-differs from crl.RawIssuer. The mutation
+	// runs only over the printable value bytes of the embedded
+	// CN, never over tag/length headers or OID bytes, so the
+	// surrounding ASN.1 structure stays well-formed.
+	const cnNeedle = "LOTA CRL Test CA"
+	idx := bytes.Index(ca.RawSubject, []byte(cnNeedle))
+	if idx < 0 {
+		t.Fatalf("expected %q inside ca.RawSubject", cnNeedle)
+	}
+	mutated := make([]byte, len(ca.RawSubject))
+	copy(mutated, ca.RawSubject)
+	// Lower-case the first letter of "LOTA" inside the CN value.
+	mutated[idx] = 'l'
+	if bytes.Equal(mutated, ca.RawSubject) {
+		t.Fatal("mutated RawSubject still byte-equal to original")
+	}
+	ca.RawSubject = mutated
+
+	set := newRevocationListSet()
+	if err := set.verifyAndAdd("synthetic.pem", 0, crl, []*x509.Certificate{ca}); err != nil {
+		t.Fatalf("verifyAndAdd: %v", err)
+	}
+
+	// Confirm the loaded CRL is indexed under the canonical key the
+	// lookup path computes from the leaf cert's Issuer.
+	if set.size() != 1 {
+		t.Fatalf("expected 1 CRL in set, got %d", set.size())
+	}
+}
+
 func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
 	dir := t.TempDir()
 

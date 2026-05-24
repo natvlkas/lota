@@ -20,7 +20,6 @@
 package store
 
 import (
-	"bytes"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -131,12 +130,38 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 			ErrCRLWeakSignature, path, idx, crl.SignatureAlgorithm)
 	}
 
-	// signature must verify against one of the trusted CA certificates
-	// whose Subject matches the CRL Issuer DN.
+	// Signature must verify against one of the trusted CA certificates
+	// whose Subject matches the CRL Issuer DN. The match runs against
+	// canonicalIssuerKey() on both sides instead of bytes.Equal on
+	// RawSubject / RawIssuer: a CA that re-encoded its DN between
+	// issuing its own cert and signing the CRL (PrintableString vs
+	// UTF8String for the same ASCII text, swapped AVA order inside a
+	// multi-AVA RDN, whitespace / case drift in non-CN attributes - all
+	// permitted by RFC 5280 p4.1.2.4) would otherwise fail the
+	// byte-equal gate, drop the CRL at load time, and silently land in
+	// the "no CRL configured for this issuer" fail-open branch at
+	// lookup time. Anchoring both sides to canonicalIssuerKey() keeps
+	// the same canonicalisation invariant the runtime lookup path
+	// already uses, so a load-time accept implies a lookup-time hit
+	// for the same DN.
+	crlKey, err := canonicalIssuerKey(crl.RawIssuer)
+	if err != nil {
+		return fmt.Errorf("%s (block %d): canonicalise CRL issuer DN: %w",
+			path, idx, err)
+	}
+
 	var sigErr error
 	verified := false
 	for _, ca := range cas {
-		if !bytes.Equal(ca.RawSubject, crl.RawIssuer) {
+		caKey, err := canonicalIssuerKey(ca.RawSubject)
+		if err != nil {
+			// A CA whose Subject DN cannot be parsed should never
+			// have made it into the trust store; skip it rather
+			// than letting one malformed CA mask other roots.
+			sigErr = fmt.Errorf("canonicalise CA subject DN: %w", err)
+			continue
+		}
+		if caKey != crlKey {
 			continue
 		}
 		if err := crl.CheckSignatureFrom(ca); err != nil {
@@ -154,12 +179,7 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 		return fmt.Errorf("%w: %s (block %d)", ErrCRLNoIssuer, path, idx)
 	}
 
-	key, err := canonicalIssuerKey(crl.RawIssuer)
-	if err != nil {
-		return fmt.Errorf("%s (block %d): canonicalise issuer DN: %w",
-			path, idx, err)
-	}
-	s.byIssuer[key] = append(s.byIssuer[key], crl)
+	s.byIssuer[crlKey] = append(s.byIssuer[crlKey], crl)
 	return nil
 }
 
