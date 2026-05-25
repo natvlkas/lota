@@ -50,9 +50,6 @@
 #define PROTECT_PID_RATE_LIMIT 60      /* requests */
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
 
-/*
- * Per-UID rate limiter
- */
 struct uid_rate {
   uid_t uid;
   int count;
@@ -395,9 +392,6 @@ _Static_assert(
     LOTA_IPC_MAX_PAYLOAD <= 65536,
     "IPC payload cap must be bounded to prevent excessive memory use");
 
-/*
- * Set socket to non-blocking mode
- */
 static int set_nonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags < 0)
@@ -407,9 +401,6 @@ static int set_nonblocking(int fd) {
   return 0;
 }
 
-/*
- * Create socket directory if needed
- */
 static int ensure_socket_dir(void) {
   int dirfd;
   struct stat st;
@@ -467,9 +458,6 @@ static int ensure_socket_dir(void) {
   return 0;
 }
 
-/*
- * Find or create client slot
- */
 static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
                                         uid_t uid, gid_t gid, pid_t pid) {
   struct ipc_client *client;
@@ -501,16 +489,10 @@ static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
   return client;
 }
 
-/*
- * Find client by fd
- */
 static struct ipc_client *client_find(struct ipc_context *ctx, int fd) {
   return client_map_find(ctx, fd);
 }
 
-/*
- * Remove and free client
- */
 static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
   struct ipc_client **pp = &ctx->client_list;
 
@@ -532,9 +514,6 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
   }
 }
 
-/*
- * Build error response
- */
 static void build_error_response(struct ipc_client *client, uint32_t result) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
 
@@ -596,9 +575,6 @@ static int ipc_client_is_agent_self(const struct ipc_client *client) {
   return client->peer_pid == getpid();
 }
 
-/*
- * Build a notification frame in the client's send buffer.
- */
 static void build_notification(struct ipc_context *ctx,
                                struct ipc_client *client, uint32_t events) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
@@ -623,9 +599,6 @@ static void build_notification(struct ipc_context *ctx,
   client->send_offset = 0;
 }
 
-/*
- * Push notification to a single subscriber.
- */
 static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
                         uint32_t events) {
   uint32_t relevant = events & client->event_mask;
@@ -643,9 +616,6 @@ static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
   build_notification(ctx, client, relevant);
 }
 
-/*
- * Notify all subscribers about an event.
- */
 static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
   struct ipc_client *c = ctx->client_list;
   while (c) {
@@ -655,9 +625,6 @@ static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
   }
 }
 
-/*
- * Handle PING command
- */
 static void handle_ping(struct ipc_context *ctx, struct ipc_client *client) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
   struct lota_ipc_ping_response *ping;
@@ -679,9 +646,6 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client) {
   client->send_offset = 0;
 }
 
-/*
- * Handle GET_STATUS command
- */
 static void handle_get_status(struct ipc_context *ctx,
                               struct ipc_client *client) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
@@ -767,7 +731,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     has_req = true;
   }
 
-  /* build token header */
   token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 
   token->valid_until = ctx->valid_until;
@@ -894,7 +857,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     goto out;
   }
 
-  /* copy attest data and signature */
   data_ptr =
       client->send_buf + LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
   for (uint32_t i = 0; i < runtime_pid_count; i++) {
@@ -907,7 +869,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   data_ptr += quote.attest_size;
   memcpy(data_ptr, quote.signature, quote.signature_size);
 
-  /* build response */
   resp->magic = LOTA_IPC_MAGIC;
   resp->version = LOTA_IPC_VERSION;
   resp->result = LOTA_IPC_OK;
@@ -1315,9 +1276,6 @@ static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
               client->peer_uid, client->peer_pid);
 }
 
-/*
- * Validate request payload length before command dispatch.
- */
 static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len) {
   switch (cmd) {
   case LOTA_IPC_CMD_PING:
@@ -1353,9 +1311,6 @@ static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len) {
   }
 }
 
-/*
- * Process complete request
- */
 static void process_request(struct ipc_context *ctx,
                             struct ipc_client *client) {
   struct lota_ipc_request req;
@@ -1382,7 +1337,6 @@ static void process_request(struct ipc_context *ctx,
     return;
   }
 
-  /* dispatch command */
   switch (req.cmd) {
   case LOTA_IPC_CMD_PING:
     handle_ping(ctx, client);
@@ -1418,9 +1372,6 @@ static void process_request(struct ipc_context *ctx,
   }
 }
 
-/*
- * Handle client read event
- */
 static int handle_client_read(struct ipc_context *ctx,
                               struct ipc_client *client) {
   ssize_t n;
@@ -1447,7 +1398,6 @@ static int handle_client_read(struct ipc_context *ctx,
     goto have_request;
 
 do_recv:
-  /* read as much as possible */
   need = sizeof(client->recv_buf) - client->recv_len;
   n = recv(client->fd, client->recv_buf + client->recv_len, need, 0);
 
@@ -1462,7 +1412,6 @@ do_recv:
 
   client->recv_len += n;
 
-  /* complete header? */
   if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
     return 0;
 
@@ -1474,7 +1423,6 @@ do_recv:
     return -1; /* close: cannot recover from protocol desync */
   }
 
-  /* complete request? */
   need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
   if (client->recv_len < need)
     return 0;
@@ -1510,9 +1458,6 @@ have_request:
   return 1; /* response ready */
 }
 
-/*
- * Handle client write event
- */
 static int handle_client_write(struct ipc_context *ctx,
                                struct ipc_client *client) {
   ssize_t n;
@@ -1570,9 +1515,6 @@ static int handle_client_write(struct ipc_context *ctx,
   return 0;
 }
 
-/*
- * Accept new client with peer credential authentication
- */
 static int accept_client(struct ipc_context *ctx, int listen_fd) {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
@@ -1590,7 +1532,6 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
     return -errno;
   }
 
-  /* retrieve peer credentials */
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
     lota_err("SO_PEERCRED failed: %s", strerror(errno));
     close(fd);
@@ -1629,9 +1570,6 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
   return 0;
 }
 
-/*
- * Initialize IPC server
- */
 int ipc_init(struct ipc_context *ctx) {
   struct sockaddr_un addr;
   struct epoll_event ev;
@@ -1737,10 +1675,6 @@ err_close:
   return ret;
 }
 
-/*
- * just set it non-blocking, create an epoll, and register it
- * no bind/listen is needed because systemd already did that
- */
 int ipc_init_activated(struct ipc_context *ctx, int fd) {
   struct epoll_event ev;
   int ret;
@@ -1795,13 +1729,9 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   return 0;
 }
 
-/*
- * Cleanup IPC server
- */
 void ipc_cleanup(struct ipc_context *ctx) {
   ctx->running = false;
 
-  /* close all clients */
   while (ctx->client_list) {
     client_destroy(ctx, ctx->client_list);
   }
@@ -1823,7 +1753,6 @@ void ipc_cleanup(struct ipc_context *ctx) {
   if (!ctx->activated)
     unlink(LOTA_IPC_SOCKET_PATH);
 
-  /* close extra listener sockets */
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
     if (ctx->extra[i].fd >= 0) {
       close(ctx->extra[i].fd);
@@ -1839,9 +1768,6 @@ void ipc_cleanup(struct ipc_context *ctx) {
   lota_dbg("IPC cleaned up");
 }
 
-/*
- * Process IPC events
- */
 int ipc_process(struct ipc_context *ctx, int timeout_ms) {
   struct epoll_event events[MAX_EVENTS];
   int nfds;
@@ -1899,14 +1825,8 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
   return processed;
 }
 
-/*
- * Get epoll fd
- */
 int ipc_get_fd(struct ipc_context *ctx) { return ctx->epoll_fd; }
 
-/*
- * Update status
- */
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
                        uint64_t valid_until) {
   if (!ctx->running)
@@ -1924,9 +1844,6 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
   }
 }
 
-/*
- * Record attestation attempt
- */
 void ipc_record_attestation(struct ipc_context *ctx, bool success) {
   if (success)
     ctx->attest_count++;
@@ -1937,9 +1854,6 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success) {
   dbus_emit_attestation_result(ctx->dbus, success);
 }
 
-/*
- * Set mode
- */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) {
   uint8_t old_mode = ctx->mode;
 
@@ -1951,9 +1865,6 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) {
   }
 }
 
-/*
- * Set TPM context for token signing
- */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
                  uint32_t pcr_mask) {
   ctx->tpm = tpm;
@@ -1982,7 +1893,6 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
   if (ctx->extra_count >= IPC_MAX_EXTRA_LISTENERS)
     return -ENOSPC;
 
-  /* find free slot */
   slot = -1;
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
     if (ctx->extra[i].fd < 0) {
@@ -1993,7 +1903,6 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
   if (slot < 0)
     return -ENOSPC;
 
-  /* remove stale socket file */
   unlink(socket_path);
 
   fd = socket(AF_UNIX, SOCK_STREAM, 0);
