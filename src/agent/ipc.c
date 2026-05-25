@@ -405,9 +405,12 @@ static void client_map_remove(struct ipc_context *ctx, int fd)
 	}
 }
 
-_Static_assert(
-    LOTA_IPC_MAX_PAYLOAD <= 65536,
-    "IPC payload cap must be bounded to prevent excessive memory use");
+_Static_assert(LOTA_IPC_MAX_PAYLOAD == 8192,
+	       "IPC payload cap is the fixed 8 KiB practical socket limit");
+_Static_assert(LOTA_IPC_MAX_PAYLOAD <= UINT16_MAX,
+	       "IPC payload cap must fit legacy 16-bit token size fields");
+_Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
+	       "maximum GET_TOKEN payload must fit the IPC parser buffer");
 
 static int set_nonblocking(int fd)
 {
