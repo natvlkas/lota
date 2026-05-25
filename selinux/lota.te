@@ -3,7 +3,7 @@
 # LOTA SELinux policy - type enforcement
 #
 
-policy_module(lota, 1.0.0)
+policy_module(lota, 0.1.0)
 
 #
 # Tunables

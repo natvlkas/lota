@@ -30,6 +30,12 @@ BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
 INC_DIR := include
 BUILD_DIR := build
+VERSION_FILE := VERSION
+PROJECT_VERSION := $(strip $(shell sed -n '1p' $(VERSION_FILE) 2>/dev/null))
+
+ifeq ($(PROJECT_VERSION),)
+$(error VERSION file is missing or empty)
+endif
 
 # Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
@@ -51,7 +57,7 @@ CFLAGS += -fPIE
 CFLAGS += -Wformat -Wformat-security
 
 # Version string injected into the server-side SDK at build time.
-LOTA_VERSION_STRING ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
 SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 
 # Linker hardening
@@ -185,6 +191,7 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 
 # server SDK version string (liblotaserver + dependents)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
 # build SDK shared library
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
@@ -228,7 +235,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all
+.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all
 
 bpf: $(BPF_OBJ)
 
@@ -255,18 +262,32 @@ clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
 
+check-version-tag:
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
+		if [ -n "$$tag" ]; then \
+			version_tag="$${tag#v}"; \
+			if [ "$$version_tag" != "$(PROJECT_VERSION)" ]; then \
+				echo "ERROR: VERSION ($(PROJECT_VERSION)) does not match current git tag $$tag" >&2; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi
+
 # Install to system (requires root)
-install: all
+install: check-version-tag all
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
 	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
 	install -d $(DESTDIR)/usr/lib64
 	install -d $(DESTDIR)/usr/include/lota
+	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
+	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
 	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
@@ -387,16 +408,16 @@ $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c 
 	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $^ -lcrypto
+$(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $^ -lcrypto
+$(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
@@ -525,6 +546,8 @@ fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
 
 help:
+	@echo "LOTA $(PROJECT_VERSION)"
+	@echo ""
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Build targets:"
