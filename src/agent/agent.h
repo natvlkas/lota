@@ -108,6 +108,23 @@ struct agent_globals {
 
 extern struct agent_globals g_agent;
 
+/*
+ * Serialization markers for writes to agent_globals.
+ *
+ * The current daemon has exactly one event-loop thread, so these are no-ops.
+ * They deliberately live at every mutation boundary that would need a real
+ * lock if IPC, TPM quote handling, or D-Bus callbacks move to worker threads.
+ */
+static inline void agent_globals_lock(struct agent_globals *agent)
+{
+	(void)agent;
+}
+
+static inline void agent_globals_unlock(struct agent_globals *agent)
+{
+	(void)agent;
+}
+
 int self_measure(struct tpm_context *ctx);
 void setup_container_listener(struct ipc_context *ctx);
 void setup_dbus(struct ipc_context *ctx);

@@ -258,7 +258,9 @@ int handle_policy_ops(const struct policy_ops_args *args)
 
 void setup_dbus(struct ipc_context *ctx)
 {
+	agent_globals_lock(&g_agent);
 	g_agent.dbus_ctx = dbus_init(ctx);
+	agent_globals_unlock(&g_agent);
 	if (g_agent.dbus_ctx)
 		ipc_set_dbus(ctx, g_agent.dbus_ctx);
 	else

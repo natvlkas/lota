@@ -528,8 +528,11 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 		if (*pp == client) {
 			*pp = client->next;
 			ctx->client_count--;
-			if (client->shutdown_on_flush)
+			if (client->shutdown_on_flush) {
+				agent_globals_lock(&g_agent);
 				g_agent.running = 0;
+				agent_globals_unlock(&g_agent);
+			}
 			ipc_secure_bzero(client->recv_buf,
 					 sizeof(client->recv_buf));
 			ipc_secure_bzero(client->send_buf,
@@ -1266,6 +1269,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	/* commit runtime PID set while preserving startup-only policy_digest */
 	{
+		agent_globals_lock(&g_agent);
 		if (g_agent.policy_protect_pids) {
 			OPENSSL_cleanse(
 			    g_agent.policy_protect_pids,
@@ -1276,6 +1280,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		g_agent.policy_protect_pids = new_pids;
 		g_agent.policy_protect_pid_count = new_count;
 		g_agent.policy_protect_epoch += 1;
+		agent_globals_unlock(&g_agent);
 		new_pids = NULL;
 		new_count = 0;
 	}
@@ -1580,7 +1585,9 @@ static int handle_client_write(struct ipc_context *ctx,
 
 		if (client->shutdown_on_flush) {
 			client->shutdown_on_flush = false;
+			agent_globals_lock(&g_agent);
 			g_agent.running = 0;
+			agent_globals_unlock(&g_agent);
 			lota_info(
 			    "Graceful shutdown initiated via IPC command");
 		}

@@ -48,6 +48,7 @@ validate_protected_pid_capacity(const struct agent_startup_policy *policy);
 
 static void agent_policy_snapshot_clear(void)
 {
+	agent_globals_lock(&g_agent);
 	if (g_agent.policy_verity_digests) {
 		OPENSSL_cleanse(g_agent.policy_verity_digests,
 				(size_t)g_agent.policy_verity_digest_count *
@@ -77,6 +78,7 @@ static void agent_policy_snapshot_clear(void)
 	g_agent.policy_trust_lib_count = 0;
 
 	g_agent.policy_snapshot_set = 0;
+	agent_globals_unlock(&g_agent);
 }
 
 static int canonicalize_u32_set(const uint32_t *in, int in_count,
@@ -677,7 +679,9 @@ allowlist_done:
 	mode_applied = 1;
 	lota_info("Mode: %s", mode_to_string(mode));
 
+	agent_globals_lock(&g_agent);
 	g_agent.mode = mode;
+	agent_globals_unlock(&g_agent);
 	if (mode == LOTA_MODE_ENFORCE)
 		lota_notice("ENFORCE mode active");
 
@@ -763,6 +767,7 @@ allowlist_done:
 		}
 
 		agent_policy_snapshot_clear();
+		agent_globals_lock(&g_agent);
 		g_agent.policy_mode = mode;
 		g_agent.policy_strict_mmap = policy->strict_mmap;
 		g_agent.policy_strict_exec = policy->strict_exec;
@@ -778,10 +783,13 @@ allowlist_done:
 		g_agent.policy_trust_libs = canon_libs;
 		g_agent.policy_trust_lib_count = canon_lib_count;
 		g_agent.policy_snapshot_set = 1;
+		agent_globals_unlock(&g_agent);
 	}
 
+	agent_globals_lock(&g_agent);
 	memcpy(g_agent.policy_digest, computed_policy_digest, 32);
 	g_agent.policy_digest_set = 1;
+	agent_globals_unlock(&g_agent);
 
 	if (digests) {
 		OPENSSL_cleanse(digests,
@@ -833,8 +841,11 @@ out_fail:
 		if (rollback_ret < 0)
 			lota_warn("Failed to rollback mode to %u: %s",
 				  rollback_mode, strerror(-rollback_ret));
-		else
+		else {
+			agent_globals_lock(&g_agent);
 			g_agent.mode = (int)rollback_mode;
+			agent_globals_unlock(&g_agent);
+		}
 	}
 
 	if (cfg_lock_bpf_applied)

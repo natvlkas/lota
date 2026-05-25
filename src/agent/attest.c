@@ -808,7 +808,9 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
 		lota_notice(
 		    "TPM DA lockout cleared after successful TPM operation");
 	}
+	agent_globals_lock(&g_agent);
 	g_agent.tpm_lockout_last_known = now;
+	agent_globals_unlock(&g_agent);
 
 	if (now)
 		return flags | LOTA_STATUS_TPM_LOCKOUT;

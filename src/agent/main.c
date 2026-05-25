@@ -219,7 +219,9 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	bpf_path = params->bpf_path;
 	bpf_pubkey_path = params->bpf_pubkey_path;
+	agent_globals_lock(&g_agent);
 	g_agent.mode = params->mode;
+	agent_globals_unlock(&g_agent);
 	strict_mmap = params->strict_mmap;
 	strict_exec = params->strict_exec;
 	block_ptrace = params->block_ptrace;
@@ -713,7 +715,9 @@ int main(int argc, char *argv[])
 	{
 		int cfg_mode = parse_mode(cfg.mode);
 		if (cfg_mode >= 0) {
+			agent_globals_lock(&g_agent);
 			g_agent.mode = cfg_mode;
+			agent_globals_unlock(&g_agent);
 			config_file_mode = cfg_mode;
 		}
 	}
@@ -724,7 +728,9 @@ int main(int argc, char *argv[])
 	block_anon_exec = cfg.block_anon_exec;
 	attest_interval = cfg.attest_interval;
 	aik_ttl = cfg.aik_ttl;
+	agent_globals_lock(&g_agent);
 	g_agent.tpm_ctx.aik_handle = cfg.aik_handle;
+	agent_globals_unlock(&g_agent);
 	{
 		int kret = tpm_set_kernel_path(
 		    &g_agent.tpm_ctx,
@@ -855,16 +861,20 @@ int main(int argc, char *argv[])
 		case 'b':
 			bpf_path = optarg;
 			break;
-		case 'm':
-			g_agent.mode = parse_mode(optarg);
-			if (g_agent.mode < 0) {
+		case 'm': {
+			int opt_mode = parse_mode(optarg);
+			if (opt_mode < 0) {
 				fprintf(stderr, "Invalid mode: %s\n", optarg);
 				fprintf(stderr, "Valid modes: monitor, "
 						"enforce, maintenance\n");
 				return 1;
 			}
+			agent_globals_lock(&g_agent);
+			g_agent.mode = opt_mode;
+			agent_globals_unlock(&g_agent);
 			cli_mode_set = true;
 			break;
+		}
 		case 'M':
 			strict_mmap = true;
 			break;
