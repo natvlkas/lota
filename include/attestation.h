@@ -111,25 +111,33 @@ struct lota_tpm_evidence {
 
 	/*
 	 * AIK public key in DER-encoded SPKI format.
-	 * Used by verifier for TOFU registration and signature verification.
+	 * Verifier uses this for quote signature verification and as the
+	 * key bound into the hardware-id record at AIK registration.
 	 * Format: SubjectPublicKeyInfo (x509.MarshalPKIXPublicKey compatible)
 	 */
 	uint8_t aik_public[LOTA_MAX_AIK_PUB_SIZE];
 	uint16_t aik_public_size;
 
 	/*
-	 * AIK certificate in DER-encoded X.509 format (optional).
-	 * If present (aik_cert_size > 0), verifier validates the certificate
-	 * chain against trusted CAs before accepting the AIK.
-	 * If absent, TOFU mode is used for AIK registration.
+	 * AIK certificate in DER-encoded X.509 format.
+	 * Required under the production verifier default
+	 * (VerifierConfig.RequireCert=true): the verifier validates the
+	 * certificate chain against the configured trusted CAs before
+	 * binding the AIK to the host's hardware id. Reports that arrive
+	 * without an AIK certificate are rejected under the production
+	 * default; the closed-fixture opt-out is reserved for test
+	 * deployments and is not the documented production mode.
 	 */
 	uint8_t aik_certificate[LOTA_MAX_AIK_CERT_SIZE];
 	uint16_t aik_cert_size;
 
 	/*
-	 * EK certificate in DER-encoded X.509 format (optional).
-	 * Used for TPM identity verification. The EK certificate is issued
-	 * by the TPM manufacturer and proves the TPM is genuine.
+	 * EK certificate in DER-encoded X.509 format.
+	 * Required under the production verifier default
+	 * (VerifierConfig.RequireCert=true). The verifier binds
+	 * SHA-256(EK modulus) as the host hardware identifier and accepts a
+	 * new AIK registration only when the EK certificate chains to the
+	 * configured TPM manufacturer trust anchors.
 	 */
 	uint8_t ek_certificate[LOTA_MAX_EK_CERT_SIZE];
 	uint16_t ek_cert_size;

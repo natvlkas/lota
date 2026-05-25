@@ -467,9 +467,10 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	       quote_resp.attest_size);
 
 	/*
-	 * Export AIK public key for TOFU registration.
-	 * Verifier stores this on first attestation and uses it
-	 * to verify signatures on subsequent attestations.
+	 * Export AIK public key for cert-backed registration.
+	 * The verifier binds this key to the host hardware id derived
+	 * from SHA-256(EK modulus) at first registration and reuses it
+	 * to verify quote signatures on subsequent attestations.
 	 */
 	{
 		size_t aik_size = 0;
@@ -504,9 +505,10 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 			    "EK certificate exported (%zu bytes, DER X.509)",
 			    ek_cert_size);
 		} else if (ret == -ENOENT) {
-			lota_dbg("No EK certificate found (TOFU will require "
-				 "approval if strict "
-				 "mode)");
+			lota_dbg(
+			    "No EK certificate found; verifier will reject "
+			    "registration under the production "
+			    "RequireCert=true default");
 			report->tpm.ek_cert_size = 0;
 		} else {
 			fprintf(stderr,
