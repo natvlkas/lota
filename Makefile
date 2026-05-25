@@ -335,9 +335,9 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
-	$(TEST_BIN_DIR)/sdk_demo \
-	$(TEST_BIN_DIR)/lota_ipc_test \
-	$(TEST_BIN_DIR)/cross_lang_verify \
+	$(TEST_BIN_DIR)/demo_sdk \
+	$(TEST_BIN_DIR)/test_ipc_client \
+	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
@@ -419,7 +419,7 @@ $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.
 	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
@@ -427,11 +427,11 @@ $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat
 	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/cross_lang_verify: tests/cross_lang_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(CURDIR)/$(BUILD_DIR) -lcrypto
 	@echo "Built: $@"
 
@@ -472,8 +472,8 @@ test-unit: all $(TEST_BINS)
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -S /run/lota/lota.sock ]; then \
 		./build/test_sdk_ipc; \
-		./build/lota_ipc_test status; \
-		./build/sdk_demo; \
+		./build/test_ipc_client status; \
+		./build/demo_sdk; \
 	else \
 		echo "SKIP: SDK/IPC tests (agent socket not found)"; \
 	fi
@@ -491,10 +491,10 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
 	fi
 	@if command -v go >/dev/null 2>&1; then \
-		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang_gen.go && \
-		cd $(CURDIR) && ./build/cross_lang_verify; \
+		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang/test_gen.go && \
+		cd $(CURDIR) && ./build/test_cross_lang_verify; \
 	else \
-		echo "SKIP: cross_lang_gen (go not installed)"; \
+		echo "SKIP: test_gen.go (go not installed)"; \
 	fi
 	@echo ""
 	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."

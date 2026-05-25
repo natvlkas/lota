@@ -6,13 +6,13 @@
  * to verify system attestation before connecting to a server.
  *
  * Build:
- *   gcc -o sdk_demo sdk_demo.c -L../build -llotagaming -Wl,-rpath,../build
+ *   gcc -o demo_sdk demo_sdk.c -L../build -llotagaming -Wl,-rpath,../build
  *
  * Run:
  *   # First start the agent with --test-ipc
  *   sudo ../build/lota-agent --test-ipc
  *   # Then run this demo
- *   ./sdk_demo
+ *   ./demo_sdk
  */
 
 #include <stdio.h>
