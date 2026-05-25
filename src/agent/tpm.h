@@ -93,7 +93,7 @@ const char *tpm_strerror(int err);
  * alongside the new one for continuity verification.
  */
 #define TPM_AIK_DEFAULT_TTL_SEC (30 * 24 * 3600) /* 30 days */
-#define TPM_AIK_GRACE_PERIOD_SEC 3600            /* 1 hour */
+#define TPM_AIK_GRACE_PERIOD_SEC 3600		 /* 1 hour */
 
 /* AIK metadata file magic and version */
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
@@ -151,15 +151,16 @@ const char *tpm_strerror(int err);
  * extension.
  */
 struct lota_clock_state {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t reset_count;          /* TPM clockInfo.resetCount at last extend */
-  uint32_t restart_count;        /* TPM clockInfo.restartCount at last extend */
-  uint8_t pcr14[LOTA_HASH_SIZE]; /* PCR14 value AFTER the extend */
-  uint8_t self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
-  int64_t saved_at;                  /* time_t when the snapshot was written */
-  uint8_t flags;
-  uint8_t _reserved[31];
+	uint32_t magic;
+	uint32_t version;
+	uint32_t reset_count;	/* TPM clockInfo.resetCount at last extend */
+	uint32_t restart_count; /* TPM clockInfo.restartCount at last extend */
+	uint8_t pcr14[LOTA_HASH_SIZE]; /* PCR14 value AFTER the extend */
+	uint8_t
+	    self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
+	int64_t saved_at; /* time_t when the snapshot was written */
+	uint8_t flags;
+	uint8_t _reserved[31];
 } __attribute__((packed));
 
 #define TPM_AIK_AUTH_MAGIC 0x41545541 /* "AUTA" */
@@ -167,11 +168,11 @@ struct lota_clock_state {
 #define TPM_AIK_AUTH_SIZE 32
 
 struct aik_auth_record {
-  uint32_t magic;
-  uint32_t version;
-  uint16_t size;
-  uint8_t auth[TPM_AIK_AUTH_SIZE];
-  uint8_t _reserved[22];
+	uint32_t magic;
+	uint32_t version;
+	uint16_t size;
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	uint8_t _reserved[22];
 } __attribute__((packed));
 
 /*
@@ -185,12 +186,12 @@ struct aik_auth_record {
  * clock (which may drift or be unavailable).
  */
 struct aik_metadata {
-  uint32_t magic;
-  uint32_t version;
-  uint64_t generation;     /* monotonic rotation counter */
-  int64_t provisioned_at;  /* time_t: current AIK creation */
-  int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
-  uint8_t _reserved[64];
+	uint32_t magic;
+	uint32_t version;
+	uint64_t generation;	 /* monotonic rotation counter */
+	int64_t provisioned_at;	 /* time_t: current AIK creation */
+	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
+	uint8_t _reserved[64];
 } __attribute__((packed));
 
 /*
@@ -198,78 +199,78 @@ struct aik_metadata {
  * Opaque to callers, accessed via tpm_* functions.
  */
 struct tpm_context {
-  ESYS_CONTEXT *esys_ctx;
-  TSS2_TCTI_CONTEXT *tcti_ctx;
-  bool initialized;
+	ESYS_CONTEXT *esys_ctx;
+	TSS2_TCTI_CONTEXT *tcti_ctx;
+	bool initialized;
 
-  /* Optional explicit kernel image path override */
-  char kernel_path_override[PATH_MAX];
+	/* Optional explicit kernel image path override */
+	char kernel_path_override[PATH_MAX];
 
-  /* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
-  uint32_t aik_handle;
+	/* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
+	uint32_t aik_handle;
 
-  /* AIK rotation state */
-  struct aik_metadata aik_meta;
-  bool aik_meta_loaded;
-  char aik_meta_path[256];
+	/* AIK rotation state */
+	struct aik_metadata aik_meta;
+	bool aik_meta_loaded;
+	char aik_meta_path[256];
 
-  /*
-   * Persistent PCR14 clock-state snapshot path. Empty string selects
-   * TPM_CLOCK_STATE_PATH at runtime; tests override per fixture.
-   */
-  char clock_state_path[256];
+	/*
+	 * Persistent PCR14 clock-state snapshot path. Empty string selects
+	 * TPM_CLOCK_STATE_PATH at runtime; tests override per fixture.
+	 */
+	char clock_state_path[256];
 
-  /* AIK userAuth loaded from root-only sidecar file */
-  uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
-  bool aik_auth_loaded;
+	/* AIK userAuth loaded from root-only sidecar file */
+	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
+	bool aik_auth_loaded;
 
-  /* Grace period: previous AIK public key kept after rotation */
-  uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
-  size_t prev_aik_public_size;
-  time_t grace_deadline; /* 0 if no grace period active */
+	/* Grace period: previous AIK public key kept after rotation */
+	uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
+	size_t prev_aik_public_size;
+	time_t grace_deadline; /* 0 if no grace period active */
 
-  /*
-   * Dictionary-attack lockout state.
-   *
-   * lockout_active is sticky: it is set the first time a TPM call returns
-   * TPM2_RC_LOCKOUT (regardless of TSS2 layer wrapping) and only cleared
-   * by a subsequent successful TPM operation. It allows the agent to
-   * surface a stable "TPM locked" signal over IPC / D-Bus instead of
-   * flapping on transient lockout windows.
-   */
-  bool lockout_active;
-  time_t lockout_first_seen; /* time_t; 0 if not in lockout */
-  uint32_t lockout_event_count;
+	/*
+	 * Dictionary-attack lockout state.
+	 *
+	 * lockout_active is sticky: it is set the first time a TPM call returns
+	 * TPM2_RC_LOCKOUT (regardless of TSS2 layer wrapping) and only cleared
+	 * by a subsequent successful TPM operation. It allows the agent to
+	 * surface a stable "TPM locked" signal over IPC / D-Bus instead of
+	 * flapping on transient lockout windows.
+	 */
+	bool lockout_active;
+	time_t lockout_first_seen; /* time_t; 0 if not in lockout */
+	uint32_t lockout_event_count;
 
-  /*
-   * Boot-time SHA-256 of the running agent binary.
-   *
-   * Captured once by self_measure() at agent startup, both for the
-   * PCR14 boot-commitment extend and for every outgoing attestation
-   * report. A single read of /proc/self/exe per agent lifetime keeps
-   * the value extended into PCR14 and the value carried in
-   * report.system.agent_hash bit-identical, even if a package manager
-   * replaces the on-disk binary inode while the agent process keeps
-   * running.
-   *
-   * self_hash_ready guards the buffer: callers that touch self_hash
-   * before self_measure() has succeeded receive -ENODATA.
-   */
-  uint8_t self_hash[LOTA_HASH_SIZE];
-  bool self_hash_ready;
+	/*
+	 * Boot-time SHA-256 of the running agent binary.
+	 *
+	 * Captured once by self_measure() at agent startup, both for the
+	 * PCR14 boot-commitment extend and for every outgoing attestation
+	 * report. A single read of /proc/self/exe per agent lifetime keeps
+	 * the value extended into PCR14 and the value carried in
+	 * report.system.agent_hash bit-identical, even if a package manager
+	 * replaces the on-disk binary inode while the agent process keeps
+	 * running.
+	 *
+	 * self_hash_ready guards the buffer: callers that touch self_hash
+	 * before self_measure() has succeeded receive -ENODATA.
+	 */
+	uint8_t self_hash[LOTA_HASH_SIZE];
+	bool self_hash_ready;
 
-  /*
-   * Set to true by tpm_extend_boot_commitment() when PCR14 already
-   * carried the initramfs-lock value at agent start (i.e. the
-   * lota-pcr14-lock helper ran inside the initramfs and locked
-   * PCR14 before any userspace daemon could touch it). The
-   * attestation report builder mirrors this into
-   * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 so the verifier picks the
-   * two-hop derivation. Carried on tpm_context (not g_agent) so the
-   * value is naturally per-TPM-session and survives across the
-   * single agent lifecycle.
-   */
-  bool boot_commitment_locked;
+	/*
+	 * Set to true by tpm_extend_boot_commitment() when PCR14 already
+	 * carried the initramfs-lock value at agent start (i.e. the
+	 * lota-pcr14-lock helper ran inside the initramfs and locked
+	 * PCR14 before any userspace daemon could touch it). The
+	 * attestation report builder mirrors this into
+	 * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 so the verifier picks the
+	 * two-hop derivation. Carried on tpm_context (not g_agent) so the
+	 * value is naturally per-TPM-session and survives across the
+	 * single agent lifecycle.
+	 */
+	bool boot_commitment_locked;
 };
 
 /*
@@ -299,7 +300,7 @@ void tpm_cleanup(struct tpm_context *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
-                 TPM2_ALG_ID hash_alg, uint8_t *value);
+		 TPM2_ALG_ID hash_alg, uint8_t *value);
 
 /*
  * tpm_read_pcrs_batch - Read multiple PCRs at once
@@ -310,7 +311,7 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
-                        uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE]);
+			uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE]);
 
 /*
  * tpm_quote - Generate TPM Quote with nonce
@@ -331,7 +332,7 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
  * failure
  */
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
-              struct tpm_quote_response *response);
+	      struct tpm_quote_response *response);
 
 /*
  * tpm_provision_aik - Create and persist Attestation Identity Key
@@ -399,7 +400,7 @@ int tpm_set_kernel_path(struct tpm_context *ctx, const char *path);
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_get_current_kernel_path(struct tpm_context *ctx, char *buf,
-                                size_t buf_len);
+				size_t buf_len);
 
 /*
  * tpm_self_test - Run TPM self-test
@@ -421,7 +422,7 @@ int tpm_self_test(struct tpm_context *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
-                   const uint8_t *digest);
+		   const uint8_t *digest);
 
 /*
  * tpm_boot_commitment_digest - Compute the boot-bound PCR14 commit
@@ -438,7 +439,7 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
-                               uint32_t restart_count, uint8_t out_digest[]);
+			       uint32_t restart_count, uint8_t out_digest[]);
 
 /*
  * tpm_initramfs_lock_digest - reproduce the digest the initramfs lock
@@ -459,7 +460,7 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
  * Returns: 0 on success, negative errno on failure.
  */
 int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
-                              uint8_t out_digest[]);
+			      uint8_t out_digest[]);
 
 /*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
@@ -479,7 +480,7 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
-                               const uint8_t self_hash[]);
+			       const uint8_t self_hash[]);
 
 /*
  * tpm_get_self_hash - Return the boot-time agent self-hash captured by
@@ -516,7 +517,7 @@ int tpm_get_self_hash(const struct tpm_context *ctx, uint8_t out[]);
  * NOT as a fatal error: a fresh host has nothing to compare against.
  */
 int tpm_clock_state_load(const struct tpm_context *ctx,
-                         struct lota_clock_state *out);
+			 struct lota_clock_state *out);
 
 /*
  * tpm_clock_state_save - atomically persist the post-extend PCR14
@@ -528,7 +529,7 @@ int tpm_clock_state_load(const struct tpm_context *ctx,
  * Returns: 0 on success, negative errno on failure.
  */
 int tpm_clock_state_save(const struct tpm_context *ctx,
-                         const struct lota_clock_state *in);
+			 const struct lota_clock_state *in);
 
 /*
  * tpm_get_aik_public - Export AIK public key in DER SPKI format
@@ -544,7 +545,7 @@ int tpm_clock_state_save(const struct tpm_context *ctx,
  * failure
  */
 int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
-                       size_t *out_size);
+		       size_t *out_size);
 
 /*
  * tpm_get_ek_cert - Read Endorsement Key certificate from NVRAM
@@ -559,7 +560,7 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
  * Returns: 0 on success, -ENOENT if not found, negative errno on failure
  */
 int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
-                    size_t *out_size);
+		    size_t *out_size);
 
 /*
  * tpm_get_hardware_id - Compute unique hardware identifier
@@ -655,15 +656,15 @@ int tpm_aik_in_grace_period(struct tpm_context *ctx);
  * Returns: 0 on success, -ENOENT if no previous key, negative errno
  */
 int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
-                            size_t buf_size, size_t *out_size);
+			    size_t buf_size, size_t *out_size);
 
 /*
  * TPM Event Log paths (tried in order)
  */
 #define TPM_EVENTLOG_PATH_BIOS                                                 \
-  "/sys/kernel/security/tpm0/binary_bios_measurements"
+	"/sys/kernel/security/tpm0/binary_bios_measurements"
 #define TPM_EVENTLOG_PATH_IMA                                                  \
-  "/sys/kernel/security/ima/binary_runtime_measurements"
+	"/sys/kernel/security/ima/binary_runtime_measurements"
 
 /* Maximum event log size (512 KB) */
 #define TPM_MAX_EVENT_LOG_SIZE (512 * 1024)
@@ -705,7 +706,7 @@ void tpm_reset_lockout_state(struct tpm_context *ctx);
 
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
-                                       uint32_t *out_val);
+				       uint32_t *out_val);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);
@@ -730,9 +731,9 @@ typedef TSS2_RC (*tpm_esys_thunk)(void *userdata);
  * without a real TPM transient.
  */
 int tpm_test_call_with_backoff_array(struct tpm_context *ctx,
-                                     tpm_esys_thunk thunk, void *userdata,
-                                     uint32_t *out_rc, void **slots[],
-                                     size_t out_slot_count);
+				     tpm_esys_thunk thunk, void *userdata,
+				     uint32_t *out_rc, void **slots[],
+				     size_t out_slot_count);
 #endif
 
 #endif /* LOTA_TPM_H */

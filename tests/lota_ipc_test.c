@@ -15,255 +15,270 @@
 
 #include "../include/lota_ipc.h"
 
-static int connect_to_agent(void) {
-  struct sockaddr_un addr;
-  int fd;
+static int connect_to_agent(void)
+{
+	struct sockaddr_un addr;
+	int fd;
 
-  fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) {
-    perror("socket");
-    return -1;
-  }
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		perror("socket");
+		return -1;
+	}
 
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    perror("connect");
-    close(fd);
-    return -1;
-  }
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("connect");
+		close(fd);
+		return -1;
+	}
 
-  return fd;
+	return fd;
 }
 
-static int send_request(int fd, uint32_t cmd, const void *payload,
-                        uint32_t len) {
-  struct lota_ipc_request req = {
-      .magic = LOTA_IPC_MAGIC,
-      .version = LOTA_IPC_VERSION,
-      .cmd = cmd,
-      .payload_len = len,
-  };
+static int send_request(int fd, uint32_t cmd, const void *payload, uint32_t len)
+{
+	struct lota_ipc_request req = {
+	    .magic = LOTA_IPC_MAGIC,
+	    .version = LOTA_IPC_VERSION,
+	    .cmd = cmd,
+	    .payload_len = len,
+	};
 
-  if (send(fd, &req, sizeof(req), 0) != sizeof(req)) {
-    perror("send header");
-    return -1;
-  }
+	if (send(fd, &req, sizeof(req), 0) != sizeof(req)) {
+		perror("send header");
+		return -1;
+	}
 
-  if (len > 0 && payload) {
-    if (send(fd, payload, len, 0) != (ssize_t)len) {
-      perror("send payload");
-      return -1;
-    }
-  }
+	if (len > 0 && payload) {
+		if (send(fd, payload, len, 0) != (ssize_t)len) {
+			perror("send payload");
+			return -1;
+		}
+	}
 
-  return 0;
+	return 0;
 }
 
 static int recv_response(int fd, struct lota_ipc_response *resp, void *payload,
-                         uint32_t max_payload) {
-  ssize_t n;
+			 uint32_t max_payload)
+{
+	ssize_t n;
 
-  n = recv(fd, resp, sizeof(*resp), 0);
-  if (n != sizeof(*resp)) {
-    if (n < 0)
-      perror("recv header");
-    else
-      fprintf(stderr, "Short read: %zd\n", n);
-    return -1;
-  }
+	n = recv(fd, resp, sizeof(*resp), 0);
+	if (n != sizeof(*resp)) {
+		if (n < 0)
+			perror("recv header");
+		else
+			fprintf(stderr, "Short read: %zd\n", n);
+		return -1;
+	}
 
-  if (resp->magic != LOTA_IPC_MAGIC) {
-    fprintf(stderr, "Bad magic: 0x%08X\n", resp->magic);
-    return -1;
-  }
+	if (resp->magic != LOTA_IPC_MAGIC) {
+		fprintf(stderr, "Bad magic: 0x%08X\n", resp->magic);
+		return -1;
+	}
 
-  if (resp->payload_len > 0 && payload) {
-    uint32_t to_read = resp->payload_len;
-    if (to_read > max_payload)
-      to_read = max_payload;
+	if (resp->payload_len > 0 && payload) {
+		uint32_t to_read = resp->payload_len;
+		if (to_read > max_payload)
+			to_read = max_payload;
 
-    n = recv(fd, payload, to_read, 0);
-    if (n != (ssize_t)to_read) {
-      perror("recv payload");
-      return -1;
-    }
-  }
+		n = recv(fd, payload, to_read, 0);
+		if (n != (ssize_t)to_read) {
+			perror("recv payload");
+			return -1;
+		}
+	}
 
-  return 0;
+	return 0;
 }
 
-static const char *result_str(uint32_t result) {
-  switch (result) {
-  case LOTA_IPC_OK:
-    return "OK";
-  case LOTA_IPC_ERR_UNKNOWN_CMD:
-    return "UNKNOWN_CMD";
-  case LOTA_IPC_ERR_BAD_REQUEST:
-    return "BAD_REQUEST";
-  case LOTA_IPC_ERR_NOT_ATTESTED:
-    return "NOT_ATTESTED";
-  case LOTA_IPC_ERR_TPM_FAILURE:
-    return "TPM_FAILURE";
-  case LOTA_IPC_ERR_INTERNAL:
-    return "INTERNAL";
-  default:
-    return "???";
-  }
+static const char *result_str(uint32_t result)
+{
+	switch (result) {
+	case LOTA_IPC_OK:
+		return "OK";
+	case LOTA_IPC_ERR_UNKNOWN_CMD:
+		return "UNKNOWN_CMD";
+	case LOTA_IPC_ERR_BAD_REQUEST:
+		return "BAD_REQUEST";
+	case LOTA_IPC_ERR_NOT_ATTESTED:
+		return "NOT_ATTESTED";
+	case LOTA_IPC_ERR_TPM_FAILURE:
+		return "TPM_FAILURE";
+	case LOTA_IPC_ERR_INTERNAL:
+		return "INTERNAL";
+	default:
+		return "???";
+	}
 }
 
-static int do_ping(int fd) {
-  struct lota_ipc_response resp;
-  struct lota_ipc_ping_response ping;
+static int do_ping(int fd)
+{
+	struct lota_ipc_response resp;
+	struct lota_ipc_ping_response ping;
 
-  printf("Sending PING...\n");
+	printf("Sending PING...\n");
 
-  if (send_request(fd, LOTA_IPC_CMD_PING, NULL, 0) < 0)
-    return 1;
+	if (send_request(fd, LOTA_IPC_CMD_PING, NULL, 0) < 0)
+		return 1;
 
-  if (recv_response(fd, &resp, &ping, sizeof(ping)) < 0)
-    return 1;
+	if (recv_response(fd, &resp, &ping, sizeof(ping)) < 0)
+		return 1;
 
-  printf("Response: %s\n", result_str(resp.result));
-  if (resp.result == LOTA_IPC_OK) {
-    printf("  Agent PID: %u\n", ping.pid);
-    printf("  Uptime: %lu seconds\n", (unsigned long)ping.uptime_sec);
-  }
+	printf("Response: %s\n", result_str(resp.result));
+	if (resp.result == LOTA_IPC_OK) {
+		printf("  Agent PID: %u\n", ping.pid);
+		printf("  Uptime: %lu seconds\n",
+		       (unsigned long)ping.uptime_sec);
+	}
 
-  return resp.result == LOTA_IPC_OK ? 0 : 1;
+	return resp.result == LOTA_IPC_OK ? 0 : 1;
 }
 
-static int do_status(int fd) {
-  struct lota_ipc_response resp;
-  struct lota_ipc_status status;
+static int do_status(int fd)
+{
+	struct lota_ipc_response resp;
+	struct lota_ipc_status status;
 
-  printf("Sending GET_STATUS...\n");
+	printf("Sending GET_STATUS...\n");
 
-  if (send_request(fd, LOTA_IPC_CMD_GET_STATUS, NULL, 0) < 0)
-    return 1;
+	if (send_request(fd, LOTA_IPC_CMD_GET_STATUS, NULL, 0) < 0)
+		return 1;
 
-  if (recv_response(fd, &resp, &status, sizeof(status)) < 0)
-    return 1;
+	if (recv_response(fd, &resp, &status, sizeof(status)) < 0)
+		return 1;
 
-  printf("Response: %s\n", result_str(resp.result));
-  if (resp.result == LOTA_IPC_OK) {
-    printf("  Flags: 0x%08X\n", status.flags);
-    printf("    ATTESTED:    %s\n",
-           (status.flags & LOTA_STATUS_ATTESTED) ? "YES" : "no");
-    printf("    TPM_OK:      %s\n",
-           (status.flags & LOTA_STATUS_TPM_OK) ? "YES" : "no");
-    printf("    IOMMU_OK:    %s\n",
-           (status.flags & LOTA_STATUS_IOMMU_OK) ? "YES" : "no");
-    printf("    BPF_LOADED:  %s\n",
-           (status.flags & LOTA_STATUS_BPF_LOADED) ? "YES" : "no");
-    printf("    SECURE_BOOT: %s\n",
-           (status.flags & LOTA_STATUS_SECURE_BOOT) ? "YES" : "no");
-    printf("  Mode: %u\n", status.mode);
-    printf("  Last attestation: %lu\n", (unsigned long)status.last_attest_time);
-    printf("  Valid until: %lu\n", (unsigned long)status.valid_until);
-    printf("  Success count: %u\n", status.attest_count);
-    printf("  Failure count: %u\n", status.fail_count);
-  }
+	printf("Response: %s\n", result_str(resp.result));
+	if (resp.result == LOTA_IPC_OK) {
+		printf("  Flags: 0x%08X\n", status.flags);
+		printf("    ATTESTED:    %s\n",
+		       (status.flags & LOTA_STATUS_ATTESTED) ? "YES" : "no");
+		printf("    TPM_OK:      %s\n",
+		       (status.flags & LOTA_STATUS_TPM_OK) ? "YES" : "no");
+		printf("    IOMMU_OK:    %s\n",
+		       (status.flags & LOTA_STATUS_IOMMU_OK) ? "YES" : "no");
+		printf("    BPF_LOADED:  %s\n",
+		       (status.flags & LOTA_STATUS_BPF_LOADED) ? "YES" : "no");
+		printf("    SECURE_BOOT: %s\n",
+		       (status.flags & LOTA_STATUS_SECURE_BOOT) ? "YES" : "no");
+		printf("  Mode: %u\n", status.mode);
+		printf("  Last attestation: %lu\n",
+		       (unsigned long)status.last_attest_time);
+		printf("  Valid until: %lu\n",
+		       (unsigned long)status.valid_until);
+		printf("  Success count: %u\n", status.attest_count);
+		printf("  Failure count: %u\n", status.fail_count);
+	}
 
-  return resp.result == LOTA_IPC_OK ? 0 : 1;
+	return resp.result == LOTA_IPC_OK ? 0 : 1;
 }
 
-static int do_token(int fd) {
-  struct lota_ipc_response resp;
-  struct lota_ipc_token token;
+static int do_token(int fd)
+{
+	struct lota_ipc_response resp;
+	struct lota_ipc_token token;
 
-  printf("Sending GET_TOKEN...\n");
+	printf("Sending GET_TOKEN...\n");
 
-  if (send_request(fd, LOTA_IPC_CMD_GET_TOKEN, NULL, 0) < 0)
-    return 1;
+	if (send_request(fd, LOTA_IPC_CMD_GET_TOKEN, NULL, 0) < 0)
+		return 1;
 
-  if (recv_response(fd, &resp, &token, sizeof(token)) < 0)
-    return 1;
+	if (recv_response(fd, &resp, &token, sizeof(token)) < 0)
+		return 1;
 
-  printf("Response: %s\n", result_str(resp.result));
-  if (resp.result == LOTA_IPC_OK) {
-    printf("  Valid until: %lu\n", (unsigned long)token.valid_until);
-    printf("  Flags: 0x%08X\n", token.flags);
-    printf("  Signature length: %u\n", token.sig_size);
-  }
+	printf("Response: %s\n", result_str(resp.result));
+	if (resp.result == LOTA_IPC_OK) {
+		printf("  Valid until: %lu\n",
+		       (unsigned long)token.valid_until);
+		printf("  Flags: 0x%08X\n", token.flags);
+		printf("  Signature length: %u\n", token.sig_size);
+	}
 
-  return resp.result == LOTA_IPC_OK ? 0 : 1;
+	return resp.result == LOTA_IPC_OK ? 0 : 1;
 }
 
-static int do_badlen(int fd) {
-  struct lota_ipc_response resp;
-  uint8_t junk = 0x41;
+static int do_badlen(int fd)
+{
+	struct lota_ipc_response resp;
+	uint8_t junk = 0x41;
 
-  printf("Sending malformed PING with unexpected payload...\n");
-  if (send_request(fd, LOTA_IPC_CMD_PING, &junk, sizeof(junk)) < 0)
-    return 1;
+	printf("Sending malformed PING with unexpected payload...\n");
+	if (send_request(fd, LOTA_IPC_CMD_PING, &junk, sizeof(junk)) < 0)
+		return 1;
 
-  if (recv_response(fd, &resp, NULL, 0) < 0)
-    return 1;
+	if (recv_response(fd, &resp, NULL, 0) < 0)
+		return 1;
 
-  printf("Response: %s\n", result_str(resp.result));
-  if (resp.result != LOTA_IPC_ERR_BAD_REQUEST)
-    return 1;
+	printf("Response: %s\n", result_str(resp.result));
+	if (resp.result != LOTA_IPC_ERR_BAD_REQUEST)
+		return 1;
 
-  printf("Sending malformed GET_TOKEN with invalid payload length...\n");
-  if (send_request(fd, LOTA_IPC_CMD_GET_TOKEN, &junk, sizeof(junk)) < 0)
-    return 1;
+	printf("Sending malformed GET_TOKEN with invalid payload length...\n");
+	if (send_request(fd, LOTA_IPC_CMD_GET_TOKEN, &junk, sizeof(junk)) < 0)
+		return 1;
 
-  if (recv_response(fd, &resp, NULL, 0) < 0)
-    return 1;
+	if (recv_response(fd, &resp, NULL, 0) < 0)
+		return 1;
 
-  printf("Response: %s\n", result_str(resp.result));
-  return resp.result == LOTA_IPC_ERR_BAD_REQUEST ? 0 : 1;
+	printf("Response: %s\n", result_str(resp.result));
+	return resp.result == LOTA_IPC_ERR_BAD_REQUEST ? 0 : 1;
 }
 
-static void usage(const char *prog) {
-  fprintf(stderr, "Usage: %s [ping|status|token|badlen]\n", prog);
-  fprintf(stderr, "\nCommands:\n");
-  fprintf(stderr, "  ping   - Check if agent is alive\n");
-  fprintf(stderr, "  status - Get attestation status\n");
-  fprintf(stderr, "  token  - Get attestation token\n");
-  fprintf(stderr,
-          "  badlen - Send malformed payload lengths (expect BAD_REQUEST)\n");
+static void usage(const char *prog)
+{
+	fprintf(stderr, "Usage: %s [ping|status|token|badlen]\n", prog);
+	fprintf(stderr, "\nCommands:\n");
+	fprintf(stderr, "  ping   - Check if agent is alive\n");
+	fprintf(stderr, "  status - Get attestation status\n");
+	fprintf(stderr, "  token  - Get attestation token\n");
+	fprintf(
+	    stderr,
+	    "  badlen - Send malformed payload lengths (expect BAD_REQUEST)\n");
 }
 
-int main(int argc, char *argv[]) {
-  const char *cmd = "status";
-  int fd;
-  int ret;
+int main(int argc, char *argv[])
+{
+	const char *cmd = "status";
+	int fd;
+	int ret;
 
-  if (argc > 1) {
-    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-      usage(argv[0]);
-      return 0;
-    }
-    cmd = argv[1];
-  }
+	if (argc > 1) {
+		if (strcmp(argv[1], "--help") == 0 ||
+		    strcmp(argv[1], "-h") == 0) {
+			usage(argv[0]);
+			return 0;
+		}
+		cmd = argv[1];
+	}
 
-  printf("Connecting to %s...\n", LOTA_IPC_SOCKET_PATH);
-  fd = connect_to_agent();
-  if (fd < 0) {
-    fprintf(stderr, "Failed to connect to LOTA agent.\n");
-    fprintf(stderr, "Is lota-agent running?\n");
-    return 1;
-  }
-  printf("Connected!\n\n");
+	printf("Connecting to %s...\n", LOTA_IPC_SOCKET_PATH);
+	fd = connect_to_agent();
+	if (fd < 0) {
+		fprintf(stderr, "Failed to connect to LOTA agent.\n");
+		fprintf(stderr, "Is lota-agent running?\n");
+		return 1;
+	}
+	printf("Connected!\n\n");
 
-  if (strcmp(cmd, "ping") == 0) {
-    ret = do_ping(fd);
-  } else if (strcmp(cmd, "status") == 0) {
-    ret = do_status(fd);
-  } else if (strcmp(cmd, "token") == 0) {
-    ret = do_token(fd);
-  } else if (strcmp(cmd, "badlen") == 0) {
-    ret = do_badlen(fd);
-  } else {
-    fprintf(stderr, "Unknown command: %s\n", cmd);
-    usage(argv[0]);
-    ret = 1;
-  }
+	if (strcmp(cmd, "ping") == 0) {
+		ret = do_ping(fd);
+	} else if (strcmp(cmd, "status") == 0) {
+		ret = do_status(fd);
+	} else if (strcmp(cmd, "token") == 0) {
+		ret = do_token(fd);
+	} else if (strcmp(cmd, "badlen") == 0) {
+		ret = do_badlen(fd);
+	} else {
+		fprintf(stderr, "Unknown command: %s\n", cmd);
+		usage(argv[0]);
+		ret = 1;
+	}
 
-  close(fd);
-  return ret;
+	close(fd);
+	return ret;
 }

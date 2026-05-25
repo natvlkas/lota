@@ -30,23 +30,23 @@
  *  - meta_fingerprint detects content changes (mtime, size, i_version)
  */
 struct hash_cache_entry {
-  uint64_t dev;                             /* device number (st_dev) */
-  uint64_t ino;                             /* inode number (st_ino) */
-  uint8_t meta_fingerprint[LOTA_HASH_SIZE]; /* BPF metadata fingerprint */
-  uint8_t content_sha256[LOTA_HASH_SIZE];   /* SHA-256 of file content */
-  uint64_t last_used;                       /* monotonic timestamp for LRU */
-  int valid;                                /* nonzero if entry is populated */
+	uint64_t dev;				  /* device number (st_dev) */
+	uint64_t ino;				  /* inode number (st_ino) */
+	uint8_t meta_fingerprint[LOTA_HASH_SIZE]; /* BPF metadata fingerprint */
+	uint8_t content_sha256[LOTA_HASH_SIZE];	  /* SHA-256 of file content */
+	uint64_t last_used; /* monotonic timestamp for LRU */
+	int valid;	    /* nonzero if entry is populated */
 };
 
 /*
  * Hash verification context.
  */
 struct hash_verify_ctx {
-  struct hash_cache_entry *cache;
-  size_t cache_capacity;
-  uint64_t hits;
-  uint64_t misses;
-  uint64_t errors;
+	struct hash_cache_entry *cache;
+	size_t cache_capacity;
+	uint64_t hits;
+	uint64_t misses;
+	uint64_t errors;
 };
 
 /*
@@ -89,8 +89,8 @@ int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]);
  *          negative errno on other errors
  */
 int hash_verify_event(struct hash_verify_ctx *ctx,
-                      const struct lota_exec_event *event,
-                      uint8_t sha256_out[LOTA_HASH_SIZE]);
+		      const struct lota_exec_event *event,
+		      uint8_t sha256_out[LOTA_HASH_SIZE]);
 
 /*
  * Get cache statistics.
@@ -101,6 +101,6 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
  * @errors: Output - hash computation errors (NULL to skip)
  */
 void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *hits,
-                       uint64_t *misses, uint64_t *errors);
+		       uint64_t *misses, uint64_t *errors);
 
 #endif /* LOTA_HASH_VERIFY_H */

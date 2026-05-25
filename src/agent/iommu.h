@@ -67,6 +67,6 @@ bool iommu_verify_full(struct iommu_status *status);
  * Returns: Number of bytes written (excluding null terminator)
  */
 int iommu_status_to_string(const struct iommu_status *status, char *buf,
-                           size_t buf_len);
+			   size_t buf_len);
 
 #endif /* LOTA_IOMMU_H */

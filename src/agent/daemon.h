@@ -76,7 +76,7 @@ void pidfile_remove(const char *path, int fd);
  * Returns: 0 on success, negative errno on failure
  */
 int daemon_install_signals(volatile sig_atomic_t *running,
-                           volatile sig_atomic_t *reload);
+			   volatile sig_atomic_t *reload);
 
 /*
  * Redirect stdout and stderr to a log file.

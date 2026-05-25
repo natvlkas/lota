@@ -28,9 +28,9 @@
 #define LOTA_MAGIC 0x41544F4C
 
 /* Cryptographic constants */
-#define LOTA_HASH_SIZE 32           /* SHA-256 digest size */
-#define LOTA_NONCE_SIZE 32          /* Challenge nonce size */
-#define LOTA_MAX_SIG_SIZE 512       /* Max TPM signature size (RSA-4096) */
+#define LOTA_HASH_SIZE 32	    /* SHA-256 digest size */
+#define LOTA_NONCE_SIZE 32	    /* Challenge nonce size */
+#define LOTA_MAX_SIG_SIZE 512	    /* Max TPM signature size (RSA-4096) */
 #define LOTA_MAX_AIK_PUB_SIZE 512   /* Max AIK public key (DER SPKI format) */
 #define LOTA_MAX_AIK_CERT_SIZE 2048 /* Max AIK certificate size (DER X.509) */
 #define LOTA_MAX_EK_CERT_SIZE 2048  /* Max EK certificate size (DER X.509) */
@@ -46,18 +46,18 @@
 
 /* Event types for ring buffer */
 enum lota_event_type {
-  LOTA_EVENT_EXEC = 1,          /* Binary execution */
-  LOTA_EVENT_EXEC_BLOCKED,      /* Execution blocked by policy */
-  LOTA_EVENT_MODULE_LOAD,       /* Kernel module load */
-  LOTA_EVENT_MODULE_BLOCKED,    /* Module load blocked by policy */
-  LOTA_EVENT_MMAP_EXEC,         /* Executable mmap (library load) */
-  LOTA_EVENT_MMAP_BLOCKED,      /* Executable mmap blocked by policy */
-  LOTA_EVENT_PTRACE,            /* ptrace access attempt */
-  LOTA_EVENT_PTRACE_BLOCKED,    /* ptrace access blocked by policy */
-  LOTA_EVENT_KILL_BLOCKED,      /* signal delivery to protected task blocked */
-  LOTA_EVENT_SETUID,            /* Privilege escalation (setuid) */
-  LOTA_EVENT_ANON_EXEC,         /* Anonymous executable mmap (JIT, shellcode) */
-  LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
+	LOTA_EVENT_EXEC = 1,	   /* Binary execution */
+	LOTA_EVENT_EXEC_BLOCKED,   /* Execution blocked by policy */
+	LOTA_EVENT_MODULE_LOAD,	   /* Kernel module load */
+	LOTA_EVENT_MODULE_BLOCKED, /* Module load blocked by policy */
+	LOTA_EVENT_MMAP_EXEC,	   /* Executable mmap (library load) */
+	LOTA_EVENT_MMAP_BLOCKED,   /* Executable mmap blocked by policy */
+	LOTA_EVENT_PTRACE,	   /* ptrace access attempt */
+	LOTA_EVENT_PTRACE_BLOCKED, /* ptrace access blocked by policy */
+	LOTA_EVENT_KILL_BLOCKED, /* signal delivery to protected task blocked */
+	LOTA_EVENT_SETUID,	 /* Privilege escalation (setuid) */
+	LOTA_EVENT_ANON_EXEC, /* Anonymous executable mmap (JIT, shellcode) */
+	LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
 };
 
 /*
@@ -65,17 +65,17 @@ enum lota_event_type {
  * Controls whether LSM hooks block or just monitor
  */
 enum lota_mode {
-  LOTA_MODE_MONITOR = 0,     /* Log only, allow everything */
-  LOTA_MODE_ENFORCE = 1,     /* Block unauthorized operations */
-  LOTA_MODE_MAINTENANCE = 2, /* Temporarily allow all (for updates) */
+	LOTA_MODE_MONITOR = 0,	   /* Log only, allow everything */
+	LOTA_MODE_ENFORCE = 1,	   /* Block unauthorized operations */
+	LOTA_MODE_MAINTENANCE = 2, /* Temporarily allow all (for updates) */
 };
 
 /* Config map keys */
-#define LOTA_CFG_MODE 0            /* enum lota_mode */
-#define LOTA_CFG_STRICT_MMAP 1     /* 1 = block mmap from untrusted paths */
-#define LOTA_CFG_BLOCK_PTRACE 2    /* 1 = block ptrace on protected pids */
+#define LOTA_CFG_MODE 0		   /* enum lota_mode */
+#define LOTA_CFG_STRICT_MMAP 1	   /* 1 = block mmap from untrusted paths */
+#define LOTA_CFG_BLOCK_PTRACE 2	   /* 1 = block ptrace on protected pids */
 #define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
-#define LOTA_CFG_STRICT_EXEC 4     /* 1 = block exec from untrusted paths */
+#define LOTA_CFG_STRICT_EXEC 4	   /* 1 = block exec from untrusted paths */
 #define LOTA_CFG_STRICT_MODULES 5  /* 1 = enforce verified modules/firmware */
 #define LOTA_CFG_LOCK_BPF 6 /* 1 = block non-agent writes to LOTA BPF maps */
 #define LOTA_CFG_MAX_ENTRIES 9
@@ -90,15 +90,15 @@ enum lota_mode {
  * len must be LOTA_VERITY_DIGEST_SHA512_SIZE.
  */
 struct lota_verity_digest_key {
-  __u32 len;
-  __u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+	__u32 len;
+	__u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 };
 
 _Static_assert(LOTA_VERITY_DIGEST_MAX_SIZE == LOTA_VERITY_DIGEST_SHA512_SIZE,
-               "fs-verity key width must remain SHA-512 sized");
+	       "fs-verity key width must remain SHA-512 sized");
 _Static_assert(sizeof(((struct lota_verity_digest_key *)0)->digest) ==
-                   LOTA_VERITY_DIGEST_SHA512_SIZE,
-               "fs-verity map key digest must support 64-byte SHA-512");
+		   LOTA_VERITY_DIGEST_SHA512_SIZE,
+	       "fs-verity map key digest must support 64-byte SHA-512");
 
 /*
  * Execution event - sent from eBPF to user-space via ring buffer.
@@ -114,20 +114,20 @@ _Static_assert(sizeof(((struct lota_verity_digest_key *)0)->digest) ==
  *   *_BLOCKED:      same as base type
  */
 struct lota_exec_event {
-  __u64 timestamp_ns; /* ktime_get_ns() */
-  __u32 event_type;   /* enum lota_event_type */
-  __u32 pid;
-  __u32 tgid;
-  __u32 uid;
-  __u32 gid;
-  union {
-    __u32 target_pid; /* ptrace: target process PID */
-    __u32 target_uid; /* setuid: new UID after transition */
-  };
-  __u32 _pad0;                      /* alignment */
-  __u8 hash[LOTA_HASH_SIZE];        /* inode metadata fingerprint (BPF) */
-  char comm[LOTA_MAX_COMM_LEN];     /* Process name */
-  char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
+	__u64 timestamp_ns; /* ktime_get_ns() */
+	__u32 event_type;   /* enum lota_event_type */
+	__u32 pid;
+	__u32 tgid;
+	__u32 uid;
+	__u32 gid;
+	union {
+		__u32 target_pid; /* ptrace: target process PID */
+		__u32 target_uid; /* setuid: new UID after transition */
+	};
+	__u32 _pad0;			  /* alignment */
+	__u8 hash[LOTA_HASH_SIZE];	  /* inode metadata fingerprint (BPF) */
+	char comm[LOTA_MAX_COMM_LEN];	  /* Process name */
+	char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
 } __attribute__((packed));
 
 /*
@@ -158,8 +158,8 @@ struct lota_exec_event {
  * Stores addresses of kernel symbols for direct memory verification.
  */
 struct integrity_data {
-  __u64 sig_enforce_addr;
-  __u64 lockdown_addr;
+	__u64 sig_enforce_addr;
+	__u64 lockdown_addr;
 };
 
 #endif /* LOTA_H */

@@ -21,38 +21,38 @@ typedef struct ssl_ctx_st SSL_CTX;
  * Network context - holds TLS connection state
  */
 struct net_context {
-  SSL_CTX *ssl_ctx;
-  SSL *ssl;
-  int socket_fd;
-  int connected;
-  char server_addr[256];
-  int server_port;
-  int skip_verify;
-  uint8_t pin_sha256[NET_PIN_SHA256_LEN];
-  int has_pin; /* nonzero if pin_sha256 is set */
+	SSL_CTX *ssl_ctx;
+	SSL *ssl;
+	int socket_fd;
+	int connected;
+	char server_addr[256];
+	int server_port;
+	int skip_verify;
+	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	int has_pin; /* nonzero if pin_sha256 is set */
 };
 
 /*
  * Challenge received from verifier
  */
 struct verifier_challenge {
-  uint32_t magic;
-  uint32_t version;
-  uint8_t nonce[32];
-  uint32_t pcr_mask;
-  uint32_t flags; /* LOTA_CHALLENGE_FLAG_* capability bitmask */
+	uint32_t magic;
+	uint32_t version;
+	uint8_t nonce[32];
+	uint32_t pcr_mask;
+	uint32_t flags; /* LOTA_CHALLENGE_FLAG_* capability bitmask */
 };
 
 /*
  * Result from verifier
  */
 struct verifier_result {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t result;
-  uint32_t flags;
-  uint64_t valid_until;
-  uint8_t session_token[32];
+	uint32_t magic;
+	uint32_t version;
+	uint32_t result;
+	uint32_t flags;
+	uint64_t valid_until;
+	uint8_t session_token[32];
 };
 
 /* Result codes */
@@ -103,8 +103,8 @@ void net_cleanup(void);
  * Returns: 0 on success, negative errno on failure
  */
 int net_context_init(struct net_context *ctx, const char *server, int port,
-                     const char *ca_cert_path, int skip_verify,
-                     const uint8_t *pin_sha256);
+		     const char *ca_cert_path, int skip_verify,
+		     const uint8_t *pin_sha256);
 
 /*
  * Parse hex-encoded SHA-256 fingerprint into binary.
@@ -145,7 +145,7 @@ void net_disconnect(struct net_context *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int net_recv_challenge(struct net_context *ctx,
-                       struct verifier_challenge *challenge);
+		       struct verifier_challenge *challenge);
 
 /*
  * Send attestation report to verifier.
@@ -157,7 +157,7 @@ int net_recv_challenge(struct net_context *ctx,
  * Returns: 0 on success, negative errno on failure
  */
 int net_send_report(struct net_context *ctx, const void *report,
-                    size_t report_size);
+		    size_t report_size);
 
 /*
  * Receive verification result.
@@ -181,11 +181,11 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result);
  * Returns: 0 on success, negative errno on failure
  */
 typedef int (*build_report_fn)(const struct verifier_challenge *challenge,
-                               void **report_out, size_t *report_size_out,
-                               void *user_data);
+			       void **report_out, size_t *report_size_out,
+			       void *user_data);
 
 int net_attest(struct net_context *ctx, build_report_fn build_report,
-               void *user_data, struct verifier_result *result);
+	       void *user_data, struct verifier_result *result);
 
 /*
  * Get human-readable result string.

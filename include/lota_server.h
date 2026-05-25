@@ -61,17 +61,17 @@ extern "C" {
  * Server-side error codes
  */
 enum lota_server_error {
-  LOTA_SERVER_OK = 0,
-  LOTA_SERVER_ERR_INVALID_ARG = -1,  /* NULL pointer or bad parameter */
-  LOTA_SERVER_ERR_BAD_TOKEN = -2,    /* Token parse error (bad magic/size) */
-  LOTA_SERVER_ERR_BAD_VERSION = -3,  /* Unsupported token version */
-  LOTA_SERVER_ERR_SIG_FAIL = -4,     /* RSA signature verification failed */
-  LOTA_SERVER_ERR_NONCE_FAIL = -5,   /* Nonce mismatch in TPMS_ATTEST */
-  LOTA_SERVER_ERR_EXPIRED = -6,      /* Token has expired */
-  LOTA_SERVER_ERR_ATTEST_PARSE = -7, /* Failed to parse TPMS_ATTEST */
-  LOTA_SERVER_ERR_CRYPTO = -8,       /* OpenSSL internal error */
-  LOTA_SERVER_ERR_BUFFER = -9,       /* Buffer too small */
-  LOTA_SERVER_ERR_FUTURE = -10,      /* valid_until too far in the future */
+	LOTA_SERVER_OK = 0,
+	LOTA_SERVER_ERR_INVALID_ARG = -1, /* NULL pointer or bad parameter */
+	LOTA_SERVER_ERR_BAD_TOKEN = -2, /* Token parse error (bad magic/size) */
+	LOTA_SERVER_ERR_BAD_VERSION = -3, /* Unsupported token version */
+	LOTA_SERVER_ERR_SIG_FAIL = -4,	 /* RSA signature verification failed */
+	LOTA_SERVER_ERR_NONCE_FAIL = -5, /* Nonce mismatch in TPMS_ATTEST */
+	LOTA_SERVER_ERR_EXPIRED = -6,	 /* Token has expired */
+	LOTA_SERVER_ERR_ATTEST_PARSE = -7, /* Failed to parse TPMS_ATTEST */
+	LOTA_SERVER_ERR_CRYPTO = -8,	   /* OpenSSL internal error */
+	LOTA_SERVER_ERR_BUFFER = -9,	   /* Buffer too small */
+	LOTA_SERVER_ERR_FUTURE = -10, /* valid_until too far in the future */
 };
 
 /*
@@ -81,17 +81,18 @@ enum lota_server_error {
  * that has been cryptographically validated.
  */
 struct lota_server_claims {
-  uint64_t valid_until;      /* Token expiry time (Unix timestamp) */
-  uint32_t flags;            /* LOTA_FLAG_* bitmask at issue time */
-  uint8_t nonce[32];         /* Client nonce echoed from token */
-  uint32_t pcr_mask;         /* PCRs included in TPM quote */
-  uint8_t policy_digest[32]; /* SHA-256 over startup enforcement policy */
-  uint8_t runtime_protect_digest[32];
-  uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
-  uint32_t protect_pid_count;
-  uint8_t pcr_digest[LOTA_SERVER_MAX_PCR_DIGEST_SIZE];
-  size_t pcr_digest_len; /* Actual length of pcr_digest (0 if absent) */
-  int expired;           /* 1 if token has expired, 0 otherwise */
+	uint64_t valid_until;	   /* Token expiry time (Unix timestamp) */
+	uint32_t flags;		   /* LOTA_FLAG_* bitmask at issue time */
+	uint8_t nonce[32];	   /* Client nonce echoed from token */
+	uint32_t pcr_mask;	   /* PCRs included in TPM quote */
+	uint8_t policy_digest[32]; /* SHA-256 over startup enforcement policy */
+	uint8_t runtime_protect_digest[32];
+	uint64_t
+	    runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
+	uint32_t protect_pid_count;
+	uint8_t pcr_digest[LOTA_SERVER_MAX_PCR_DIGEST_SIZE];
+	size_t pcr_digest_len; /* Actual length of pcr_digest (0 if absent) */
+	int expired;	       /* 1 if token has expired, 0 otherwise */
 };
 
 /*
@@ -127,9 +128,9 @@ struct lota_server_claims {
  *          Other negative error codes on verification failure.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
-                             const uint8_t *aik_pub_der, size_t aik_pub_len,
-                             const uint8_t *expected_nonce,
-                             struct lota_server_claims *claims);
+			     const uint8_t *aik_pub_der, size_t aik_pub_len,
+			     const uint8_t *expected_nonce,
+			     struct lota_server_claims *claims);
 
 /*
  * Parse token without cryptographic verification.
@@ -143,7 +144,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
  * Returns LOTA_SERVER_OK on success, negative error on parse failure.
  */
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
-                            struct lota_server_claims *claims);
+			    struct lota_server_claims *claims);
 
 /*
  * Get error description.

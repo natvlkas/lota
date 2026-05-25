@@ -35,7 +35,7 @@
  * Secure Boot gate against the same digest.
  */
 #define LOTA_TOKEN_QUOTE_PCR_MASK                                              \
-  ((1U << 0) | (1U << 1) | (1U << 7) | (1U << LOTA_PCR_SELF))
+	((1U << 0) | (1U << 1) | (1U << 7) | (1U << LOTA_PCR_SELF))
 
 /*
  * Agent global runtime state.
@@ -57,51 +57,53 @@
  *   owned unless the field documents a narrower rule.
  */
 struct agent_globals {
-  volatile sig_atomic_t running;
-  struct tpm_context tpm_ctx;
-  struct bpf_loader_ctx bpf_ctx;
-  struct ipc_context ipc_ctx;
-  struct hash_verify_ctx hash_ctx;
-  struct dbus_context *dbus_ctx;
-  int mode;
+	volatile sig_atomic_t running;
+	struct tpm_context tpm_ctx;
+	struct bpf_loader_ctx bpf_ctx;
+	struct ipc_context ipc_ctx;
+	struct hash_verify_ctx hash_ctx;
+	struct dbus_context *dbus_ctx;
+	int mode;
 
-  /*
-   * SHA-256 over enforcement-relevant startup policy state (includes allowlist)
-   */
-  uint8_t policy_digest[32];
-  int policy_digest_set;
+	/*
+	 * SHA-256 over enforcement-relevant startup policy state (includes
+	 * allowlist)
+	 */
+	uint8_t policy_digest[32];
+	int policy_digest_set;
 
-  /* Canonical snapshot of the current enforcement policy used for digest
-   * recompute */
-  int policy_snapshot_set;
-  int policy_mode;
-  bool policy_strict_mmap;
-  bool policy_strict_exec;
-  bool policy_block_ptrace;
-  bool policy_strict_modules;
-  bool policy_block_anon_exec;
+	/* Canonical snapshot of the current enforcement policy used for digest
+	 * recompute */
+	int policy_snapshot_set;
+	int policy_mode;
+	bool policy_strict_mmap;
+	bool policy_strict_exec;
+	bool policy_block_ptrace;
+	bool policy_strict_modules;
+	bool policy_block_anon_exec;
 
-  struct lota_verity_digest_key *policy_verity_digests;
-  int policy_verity_digest_count;
+	struct lota_verity_digest_key *policy_verity_digests;
+	int policy_verity_digest_count;
 
-  uint32_t *policy_protect_pids; /* sorted unique */
-  int policy_protect_pid_count;
-  uint64_t policy_protect_epoch; /* monotonic runtime PID set mutation id */
+	uint32_t *policy_protect_pids; /* sorted unique */
+	int policy_protect_pid_count;
+	uint64_t
+	    policy_protect_epoch; /* monotonic runtime PID set mutation id */
 
-  char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
-  int policy_trust_lib_count;
+	char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
+	int policy_trust_lib_count;
 
-  /*
-   * Edge-trigger cache for the TPM DA-lockout transition logger.
-   * reconcile_tpm_lockout() inspects this to decide whether the
-   * current observation crosses the cleared->locked or
-   * locked->cleared boundary. Lives on the globals struct (rather
-   * than as a function-static) so test harnesses can drive
-   * deterministic state and a hypothetical second reconciliation
-   * thread shares the same view; the existing single-threaded
-   * epoll loop is the only writer today.
-   */
-  bool tpm_lockout_last_known;
+	/*
+	 * Edge-trigger cache for the TPM DA-lockout transition logger.
+	 * reconcile_tpm_lockout() inspects this to decide whether the
+	 * current observation crosses the cleared->locked or
+	 * locked->cleared boundary. Lives on the globals struct (rather
+	 * than as a function-static) so test harnesses can drive
+	 * deterministic state and a hypothetical second reconciliation
+	 * thread shares the same view; the existing single-threaded
+	 * epoll loop is the only writer today.
+	 */
+	bool tpm_lockout_last_known;
 };
 
 extern struct agent_globals g_agent;

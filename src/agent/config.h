@@ -35,49 +35,49 @@
 #define LOTA_CONFIG_MAX_VERITY 256
 
 struct lota_config {
-  /* Verifier connection */
-  char server[256];
-  int port;
-  char ca_cert[PATH_MAX];
-  char pin_sha256[128]; /* hex string, parsed later */
+	/* Verifier connection */
+	char server[256];
+	int port;
+	char ca_cert[PATH_MAX];
+	char pin_sha256[128]; /* hex string, parsed later */
 
-  /* BPF / enforcement */
-  char bpf_path[PATH_MAX];
-  char mode[32]; /* "monitor", "enforce", "maintenance" */
-  bool strict_mmap;
-  bool strict_exec;
-  bool block_ptrace;
-  bool strict_modules;
-  bool block_anon_exec;
+	/* BPF / enforcement */
+	char bpf_path[PATH_MAX];
+	char mode[32]; /* "monitor", "enforce", "maintenance" */
+	bool strict_mmap;
+	bool strict_exec;
+	bool block_ptrace;
+	bool strict_modules;
+	bool block_anon_exec;
 
-  /* Attestation */
-  int attest_interval; /* 0 = one-shot */
-  uint32_t aik_ttl;    /* seconds, 0 = default */
-  uint32_t aik_handle; /* TPM persistent handle, 0 = default */
-  char kernel_path[PATH_MAX];
+	/* Attestation */
+	int attest_interval; /* 0 = one-shot */
+	uint32_t aik_ttl;    /* seconds, 0 = default */
+	uint32_t aik_handle; /* TPM persistent handle, 0 = default */
+	char kernel_path[PATH_MAX];
 
-  /* Daemon */
-  bool daemon;
-  char pid_file[PATH_MAX];
+	/* Daemon */
+	bool daemon;
+	char pid_file[PATH_MAX];
 
-  /* Policy signing */
-  char signing_key[PATH_MAX];
-  char policy_pubkey[PATH_MAX];
+	/* Policy signing */
+	char signing_key[PATH_MAX];
+	char policy_pubkey[PATH_MAX];
 
-  /* Trusted libraries */
-  char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
-  int trust_lib_count;
+	/* Trusted libraries */
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
+	int trust_lib_count;
 
-  /* Allowed fs-verity files (paths are measured to digests at startup) */
-  char allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
-  int allow_verity_count;
+	/* Allowed fs-verity files (paths are measured to digests at startup) */
+	char allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
+	int allow_verity_count;
 
-  /* Protected PIDs */
-  uint32_t *protect_pids;
-  int protect_pid_count;
+	/* Protected PIDs */
+	uint32_t *protect_pids;
+	int protect_pid_count;
 
-  /* Log level: "debug", "info", "warn", "error" */
-  char log_level[16];
+	/* Log level: "debug", "info", "warn", "error" */
+	char log_level[16];
 };
 
 /*

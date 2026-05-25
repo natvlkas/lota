@@ -50,18 +50,18 @@ extern "C" {
  * Error codes
  */
 enum lota_error {
-  LOTA_OK = 0,
-  LOTA_ERR_NOT_CONNECTED = -1,
-  LOTA_ERR_CONNECTION_FAILED = -2,
-  LOTA_ERR_TIMEOUT = -3,
-  LOTA_ERR_PROTOCOL = -4,
-  LOTA_ERR_NOT_ATTESTED = -5,
-  LOTA_ERR_INVALID_ARG = -6,
-  LOTA_ERR_BUFFER_TOO_SMALL = -7,
-  LOTA_ERR_AGENT_ERROR = -8,
-  LOTA_ERR_NO_MEMORY = -9,
-  LOTA_ERR_RATE_LIMITED = -10,
-  LOTA_ERR_ACCESS_DENIED = -11,
+	LOTA_OK = 0,
+	LOTA_ERR_NOT_CONNECTED = -1,
+	LOTA_ERR_CONNECTION_FAILED = -2,
+	LOTA_ERR_TIMEOUT = -3,
+	LOTA_ERR_PROTOCOL = -4,
+	LOTA_ERR_NOT_ATTESTED = -5,
+	LOTA_ERR_INVALID_ARG = -6,
+	LOTA_ERR_BUFFER_TOO_SMALL = -7,
+	LOTA_ERR_AGENT_ERROR = -8,
+	LOTA_ERR_NO_MEMORY = -9,
+	LOTA_ERR_RATE_LIMITED = -10,
+	LOTA_ERR_ACCESS_DENIED = -11,
 };
 
 /*
@@ -93,11 +93,12 @@ struct lota_client;
  * Status information
  */
 struct lota_status {
-  uint32_t flags;            /* LOTA_FLAG_* bitmask */
-  uint64_t last_attest_time; /* Unix timestamp of last successful attestation */
-  uint64_t valid_until;      /* Token validity expiration (Unix timestamp) */
-  uint32_t attest_count;     /* Total successful attestations */
-  uint32_t fail_count;       /* Total failed attestations */
+	uint32_t flags;		   /* LOTA_FLAG_* bitmask */
+	uint64_t last_attest_time; /* Unix timestamp of last successful
+				      attestation */
+	uint64_t valid_until;  /* Token validity expiration (Unix timestamp) */
+	uint32_t attest_count; /* Total successful attestations */
+	uint32_t fail_count;   /* Total failed attestations */
 };
 
 /*
@@ -112,38 +113,40 @@ struct lota_status {
  * - Verifying PCR digest matches expected policy
  */
 struct lota_token {
-  uint64_t valid_until; /* Token expiration (Unix timestamp) */
-  uint32_t flags;       /* Status flags at issue time */
-  uint8_t nonce[32];    /* Client nonce (if provided) */
+	uint64_t valid_until; /* Token expiration (Unix timestamp) */
+	uint32_t flags;	      /* Status flags at issue time */
+	uint8_t nonce[32];    /* Client nonce (if provided) */
 
-  /* TPM Quote data */
-  uint16_t sig_alg;  /* Signature algorithm (TPM2_ALG_RSASSA/RSAPSS) */
-  uint16_t hash_alg; /* Hash algorithm (TPM2_ALG_SHA256) */
-  uint32_t pcr_mask; /* PCRs included in quote */
+	/* TPM Quote data */
+	uint16_t sig_alg;  /* Signature algorithm (TPM2_ALG_RSASSA/RSAPSS) */
+	uint16_t hash_alg; /* Hash algorithm (TPM2_ALG_SHA256) */
+	uint32_t pcr_mask; /* PCRs included in quote */
 
-  /*
-   * SHA-256 over enforcement-relevant startup policy state (includes allowlist)
-   */
-  uint8_t policy_digest[32];
+	/*
+	 * SHA-256 over enforcement-relevant startup policy state (includes
+	 * allowlist)
+	 */
+	uint8_t policy_digest[32];
 
-  /* SHA-256 over canonical runtime protected PID set. */
-  uint8_t runtime_protect_digest[32];
-  uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
-  uint32_t protect_pid_count;
-  uint32_t *protected_pids; /* heap-allocated canonical list */
+	/* SHA-256 over canonical runtime protected PID set. */
+	uint8_t runtime_protect_digest[32];
+	uint64_t
+	    runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
+	uint32_t protect_pid_count;
+	uint32_t *protected_pids; /* heap-allocated canonical list */
 
-  uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
-  size_t attest_size;   /* Size of attest_data */
-  uint8_t *signature;   /* TPM signature (heap allocated) */
-  size_t signature_len; /* Signature length in bytes */
+	uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
+	size_t attest_size;   /* Size of attest_data */
+	uint8_t *signature;   /* TPM signature (heap allocated) */
+	size_t signature_len; /* Signature length in bytes */
 };
 
 /*
  * Connection options
  */
 struct lota_connect_opts {
-  const char *socket_path; /* Custom socket path (NULL = default) */
-  int timeout_ms;          /* Connection timeout in ms (0 = default 5000) */
+	const char *socket_path; /* Custom socket path (NULL = default) */
+	int timeout_ms; /* Connection timeout in ms (0 = default 5000) */
 };
 
 /*
@@ -219,7 +222,7 @@ int lota_is_attested(struct lota_client *client);
  * when done.
  */
 int lota_get_token(struct lota_client *client, const uint8_t *nonce,
-                   struct lota_token *token);
+		   struct lota_token *token);
 
 /*
  * lota_token_free - Free token resources
@@ -253,7 +256,7 @@ size_t lota_token_serialized_size(const struct lota_token *token);
  * is too small (use lota_token_serialized_size to check first).
  */
 int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
-                         size_t buflen, size_t *written);
+			 size_t buflen, size_t *written);
 
 /*
  * Status change callback type
@@ -263,7 +266,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
  * @user_data: Opaque pointer from lota_subscribe()
  */
 typedef void (*lota_status_callback_fn)(const struct lota_status *status,
-                                        uint32_t events, void *user_data);
+					uint32_t events, void *user_data);
 
 /*
  * lota_subscribe - Subscribe to status change notifications
@@ -279,7 +282,7 @@ typedef void (*lota_status_callback_fn)(const struct lota_status *status,
  * Returns LOTA_OK on success.
  */
 int lota_subscribe(struct lota_client *client, uint32_t event_mask,
-                   lota_status_callback_fn callback, void *user_data);
+		   lota_status_callback_fn callback, void *user_data);
 
 /*
  * lota_unsubscribe - Cancel status change subscription

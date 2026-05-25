@@ -25,54 +25,55 @@
 
 static struct lota_client *clients[TEST_CONNECTIONS];
 
-int main(void) {
-  int i;
-  int success_count = 0;
-  int ret;
-  struct lota_status status;
+int main(void)
+{
+	int i;
+	int success_count = 0;
+	int ret;
+	struct lota_status status;
 
-  printf("=== IPC DoS / Concurrency Test ===\n");
-  printf("Target: %d concurrent connections\n\n", TEST_CONNECTIONS);
+	printf("=== IPC DoS / Concurrency Test ===\n");
+	printf("Target: %d concurrent connections\n\n", TEST_CONNECTIONS);
 
-  printf("Opening connections...\n");
-  for (i = 0; i < TEST_CONNECTIONS; i++) {
-    clients[i] = lota_connect();
-    if (clients[i]) {
-      success_count++;
-      if (i % 10 == 0)
-        printf(".");
-    } else {
-      printf("X");
-      fprintf(stderr, "\nFailed to connect client %d\n", i);
-      break;
-    }
-  }
-  printf("\n\nEstablished %d/%d connections.\n", success_count,
-         TEST_CONNECTIONS);
+	printf("Opening connections...\n");
+	for (i = 0; i < TEST_CONNECTIONS; i++) {
+		clients[i] = lota_connect();
+		if (clients[i]) {
+			success_count++;
+			if (i % 10 == 0)
+				printf(".");
+		} else {
+			printf("X");
+			fprintf(stderr, "\nFailed to connect client %d\n", i);
+			break;
+		}
+	}
+	printf("\n\nEstablished %d/%d connections.\n", success_count,
+	       TEST_CONNECTIONS);
 
-  if (success_count < 65) {
-    printf("FAIL: Failed to exceed old limit of 64 connections.\n");
-    goto cleanup;
-  }
+	if (success_count < 65) {
+		printf("FAIL: Failed to exceed old limit of 64 connections.\n");
+		goto cleanup;
+	}
 
-  printf("Verifying last connection (%d)...\n", success_count - 1);
-  ret = lota_get_status(clients[success_count - 1], &status);
-  if (ret == 0) {
-    printf("PASS: Last connection is alive and responding.\n");
-  } else {
-    printf("FAIL: Last connection failed to query status: %s\n",
-           lota_strerror(ret));
-  }
+	printf("Verifying last connection (%d)...\n", success_count - 1);
+	ret = lota_get_status(clients[success_count - 1], &status);
+	if (ret == 0) {
+		printf("PASS: Last connection is alive and responding.\n");
+	} else {
+		printf("FAIL: Last connection failed to query status: %s\n",
+		       lota_strerror(ret));
+	}
 
-  printf("Closing connections...\n");
+	printf("Closing connections...\n");
 cleanup:
-  for (i = 0; i < success_count; i++) {
-    if (clients[i]) {
-      lota_disconnect(clients[i]);
-      clients[i] = NULL;
-    }
-  }
+	for (i = 0; i < success_count; i++) {
+		if (clients[i]) {
+			lota_disconnect(clients[i]);
+			clients[i] = NULL;
+		}
+	}
 
-  printf("Done.\n");
-  return (success_count == TEST_CONNECTIONS) ? 0 : 1;
+	printf("Done.\n");
+	return (success_count == TEST_CONNECTIONS) ? 0 : 1;
 }

@@ -17,17 +17,19 @@
  * Format SHA-256 hex string into buffer.
  * buf must be at least 65 bytes (64 hex + NUL).
  */
-static void format_sha256(const uint8_t hash[LOTA_HASH_SIZE], char *buf) {
-  for (int i = 0; i < LOTA_HASH_SIZE; i++)
-    snprintf(buf + i * 2, 3, "%02x", hash[i]);
+static void format_sha256(const uint8_t hash[LOTA_HASH_SIZE], char *buf)
+{
+	for (int i = 0; i < LOTA_HASH_SIZE; i++)
+		snprintf(buf + i * 2, 3, "%02x", hash[i]);
 }
 
-static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE]) {
-  for (int i = 0; i < LOTA_HASH_SIZE; i++) {
-    if (hash[i] != 0)
-      return true;
-  }
-  return false;
+static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE])
+{
+	for (int i = 0; i < LOTA_HASH_SIZE; i++) {
+		if (hash[i] != 0)
+			return true;
+	}
+	return false;
 }
 
 /*
@@ -37,122 +39,129 @@ static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE]) {
  * content hash via the hash verification cache and logs it alongside
  * the event metadata.
  */
-int handle_exec_event(void *ctx, void *data, size_t len) {
-  struct lota_exec_event *event = data;
-  const char *event_type_str;
-  uint8_t content_hash[LOTA_HASH_SIZE];
-  char hash_hex[LOTA_HASH_SIZE * 2 + 1];
-  int has_file = 0;
-  bool is_exec = false;
-  bool is_blocked = false;
-  int hash_ret;
-  (void)ctx;
+int handle_exec_event(void *ctx, void *data, size_t len)
+{
+	struct lota_exec_event *event = data;
+	const char *event_type_str;
+	uint8_t content_hash[LOTA_HASH_SIZE];
+	char hash_hex[LOTA_HASH_SIZE * 2 + 1];
+	int has_file = 0;
+	bool is_exec = false;
+	bool is_blocked = false;
+	int hash_ret;
+	(void)ctx;
 
-  if (len < sizeof(*event))
-    return 0;
+	if (len < sizeof(*event))
+		return 0;
 
-  event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
-  event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
+	event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
+	event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
 
-  switch (event->event_type) {
-  case LOTA_EVENT_EXEC:
-    event_type_str = "EXEC";
-    has_file = 1;
-    is_exec = true;
-    break;
-  case LOTA_EVENT_EXEC_BLOCKED:
-    event_type_str = "EXEC_BLOCKED";
-    has_file = 1;
-    is_exec = true;
-    is_blocked = true;
-    break;
-  case LOTA_EVENT_MODULE_LOAD:
-    event_type_str = "MODULE";
-    has_file = 1;
-    break;
-  case LOTA_EVENT_MODULE_BLOCKED:
-    event_type_str = "BLOCKED";
-    has_file = 1;
-    is_blocked = true;
-    break;
-  case LOTA_EVENT_MMAP_EXEC:
-    event_type_str = "MMAP_EXEC";
-    has_file = 1;
-    break;
-  case LOTA_EVENT_MMAP_BLOCKED:
-    event_type_str = "MMAP_BLOCKED";
-    has_file = 1;
-    is_blocked = true;
-    break;
-  case LOTA_EVENT_PTRACE:
-    event_type_str = "PTRACE";
-    lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
-              (unsigned long long)event->timestamp_ns, event_type_str,
-              event->comm, event->target_pid, event->filename, event->pid,
-              event->uid);
-    return 0;
-  case LOTA_EVENT_PTRACE_BLOCKED:
-    event_type_str = "PTRACE_BLOCKED";
-    lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
-              (unsigned long long)event->timestamp_ns, event_type_str,
-              event->comm, event->target_pid, event->filename, event->pid,
-              event->uid);
-    return 0;
-  case LOTA_EVENT_KILL_BLOCKED:
-    lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",
-              (unsigned long long)event->timestamp_ns, event->comm,
-              event->target_pid, event->pid, event->uid);
-    return 0;
-  case LOTA_EVENT_SETUID:
-    lota_info("[%llu] SETUID %s: uid %u -> %u (pid=%u)",
-              (unsigned long long)event->timestamp_ns, event->comm, event->uid,
-              event->target_uid, event->pid);
-    return 0;
-  case LOTA_EVENT_ANON_EXEC:
-    event_type_str = "ANON_EXEC";
-    break;
-  case LOTA_EVENT_ANON_EXEC_BLOCKED:
-    event_type_str = "ANON_EXEC_BLOCKED";
-    break;
-  default:
-    event_type_str = "UNKNOWN";
-    break;
-  }
+	switch (event->event_type) {
+	case LOTA_EVENT_EXEC:
+		event_type_str = "EXEC";
+		has_file = 1;
+		is_exec = true;
+		break;
+	case LOTA_EVENT_EXEC_BLOCKED:
+		event_type_str = "EXEC_BLOCKED";
+		has_file = 1;
+		is_exec = true;
+		is_blocked = true;
+		break;
+	case LOTA_EVENT_MODULE_LOAD:
+		event_type_str = "MODULE";
+		has_file = 1;
+		break;
+	case LOTA_EVENT_MODULE_BLOCKED:
+		event_type_str = "BLOCKED";
+		has_file = 1;
+		is_blocked = true;
+		break;
+	case LOTA_EVENT_MMAP_EXEC:
+		event_type_str = "MMAP_EXEC";
+		has_file = 1;
+		break;
+	case LOTA_EVENT_MMAP_BLOCKED:
+		event_type_str = "MMAP_BLOCKED";
+		has_file = 1;
+		is_blocked = true;
+		break;
+	case LOTA_EVENT_PTRACE:
+		event_type_str = "PTRACE";
+		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns,
+			  event_type_str, event->comm, event->target_pid,
+			  event->filename, event->pid, event->uid);
+		return 0;
+	case LOTA_EVENT_PTRACE_BLOCKED:
+		event_type_str = "PTRACE_BLOCKED";
+		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns,
+			  event_type_str, event->comm, event->target_pid,
+			  event->filename, event->pid, event->uid);
+		return 0;
+	case LOTA_EVENT_KILL_BLOCKED:
+		lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns, event->comm,
+			  event->target_pid, event->pid, event->uid);
+		return 0;
+	case LOTA_EVENT_SETUID:
+		lota_info("[%llu] SETUID %s: uid %u -> %u (pid=%u)",
+			  (unsigned long long)event->timestamp_ns, event->comm,
+			  event->uid, event->target_uid, event->pid);
+		return 0;
+	case LOTA_EVENT_ANON_EXEC:
+		event_type_str = "ANON_EXEC";
+		break;
+	case LOTA_EVENT_ANON_EXEC_BLOCKED:
+		event_type_str = "ANON_EXEC_BLOCKED";
+		break;
+	default:
+		event_type_str = "UNKNOWN";
+		break;
+	}
 
-  /*
-   * For events with a file path, attempt to resolve the content
-   * SHA-256 hash. This uses the LRU cache so unchanged files
-   * are not re-hashed on every event.
-   */
-  if (has_file && event->filename[0] == '/') {
-    if (is_exec && hash_is_nonzero(event->hash)) {
-      format_sha256(event->hash, hash_hex);
-      lota_info("[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-                (unsigned long long)event->timestamp_ns, event_type_str,
-                event->comm, event->filename, hash_hex, event->pid, event->uid);
-      return 0;
-    }
+	/*
+	 * For events with a file path, attempt to resolve the content
+	 * SHA-256 hash. This uses the LRU cache so unchanged files
+	 * are not re-hashed on every event.
+	 */
+	if (has_file && event->filename[0] == '/') {
+		if (is_exec && hash_is_nonzero(event->hash)) {
+			format_sha256(event->hash, hash_hex);
+			lota_info(
+			    "[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
+			    (unsigned long long)event->timestamp_ns,
+			    event_type_str, event->comm, event->filename,
+			    hash_hex, event->pid, event->uid);
+			return 0;
+		}
 
-    /* never hash blocked exec events: /proc/<pid>/exe is not the new image */
-    if (is_exec && is_blocked)
-      goto log_no_hash;
+		/* never hash blocked exec events: /proc/<pid>/exe is not the
+		 * new image */
+		if (is_exec && is_blocked)
+			goto log_no_hash;
 
-    hash_ret = hash_verify_event(&g_agent.hash_ctx, event, content_hash);
-    if (hash_ret == 0) {
-      format_sha256(content_hash, hash_hex);
-      lota_info("[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-                (unsigned long long)event->timestamp_ns, event_type_str,
-                event->comm, event->filename, hash_hex, event->pid, event->uid);
-      return 0;
-    }
-    /* hash failed -> fall through to log without hash */
-  }
+		hash_ret =
+		    hash_verify_event(&g_agent.hash_ctx, event, content_hash);
+		if (hash_ret == 0) {
+			format_sha256(content_hash, hash_hex);
+			lota_info(
+			    "[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
+			    (unsigned long long)event->timestamp_ns,
+			    event_type_str, event->comm, event->filename,
+			    hash_hex, event->pid, event->uid);
+			return 0;
+		}
+		/* hash failed -> fall through to log without hash */
+	}
 
 log_no_hash:
 
-  lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
-            (unsigned long long)event->timestamp_ns, event_type_str,
-            event->comm, event->filename, event->pid, event->uid);
+	lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
+		  (unsigned long long)event->timestamp_ns, event_type_str,
+		  event->comm, event->filename, event->pid, event->uid);
 
-  return 0;
+	return 0;
 }

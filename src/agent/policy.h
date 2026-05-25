@@ -46,36 +46,36 @@
  * Collected system snapshot for policy generation.
  */
 struct policy_snapshot {
-  /* Policy metadata */
-  char name[64];
-  char description[256];
-  char hostname[64];
-  char timestamp[32]; /* ISO-8601 */
+	/* Policy metadata */
+	char name[64];
+	char description[256];
+	char hostname[64];
+	char timestamp[32]; /* ISO-8601 */
 
-  /* PCR values (SHA-256, LOTA_HASH_SIZE bytes each) */
-  struct {
-    int index;
-    uint8_t value[LOTA_HASH_SIZE];
-    bool valid;
-  } pcrs[POLICY_MAX_PCRS];
-  int pcr_count;
+	/* PCR values (SHA-256, LOTA_HASH_SIZE bytes each) */
+	struct {
+		int index;
+		uint8_t value[LOTA_HASH_SIZE];
+		bool valid;
+	} pcrs[POLICY_MAX_PCRS];
+	int pcr_count;
 
-  /* Boot-chain measurement digest (kernel-relevant measured-boot PCR) */
-  char kernel_path[LOTA_MAX_PATH_LEN];
-  uint8_t kernel_hash[LOTA_HASH_SIZE];
-  bool kernel_hash_valid;
+	/* Boot-chain measurement digest (kernel-relevant measured-boot PCR) */
+	char kernel_path[LOTA_MAX_PATH_LEN];
+	uint8_t kernel_hash[LOTA_HASH_SIZE];
+	bool kernel_hash_valid;
 
-  /* Agent binary hash */
-  char agent_path[LOTA_MAX_PATH_LEN];
-  uint8_t agent_hash[LOTA_HASH_SIZE];
-  bool agent_hash_valid;
+	/* Agent binary hash */
+	char agent_path[LOTA_MAX_PATH_LEN];
+	uint8_t agent_hash[LOTA_HASH_SIZE];
+	bool agent_hash_valid;
 
-  /* Security feature detection */
-  bool iommu_enabled;
-  bool enforce_mode;
-  bool module_sig;
-  bool secureboot;
-  bool lockdown;
+	/* Security feature detection */
+	bool iommu_enabled;
+	bool enforce_mode;
+	bool module_sig;
+	bool secureboot;
+	bool lockdown;
 };
 
 /*
@@ -104,6 +104,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out);
  * Returns: 0 on success, -ENOSPC if buffer too small, negative errno otherwise
  */
 int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
-                       size_t buf_size, size_t *written);
+		       size_t buf_size, size_t *written);
 
 #endif /* LOTA_POLICY_H */

@@ -36,30 +36,32 @@
 #define TPM_ALG_SHA384 0x000C
 #define TPM_ALG_SHA512 0x000D
 
-static const EVP_MD *select_hash_md(uint16_t hash_alg) {
-  switch (hash_alg) {
-  case TPM_ALG_SHA256:
-    return EVP_sha256();
-  case TPM_ALG_SHA384:
-    return EVP_sha384();
-  case TPM_ALG_SHA512:
-    return EVP_sha512();
-  default:
-    return NULL;
-  }
+static const EVP_MD *select_hash_md(uint16_t hash_alg)
+{
+	switch (hash_alg) {
+	case TPM_ALG_SHA256:
+		return EVP_sha256();
+	case TPM_ALG_SHA384:
+		return EVP_sha384();
+	case TPM_ALG_SHA512:
+		return EVP_sha512();
+	default:
+		return NULL;
+	}
 }
 
-static size_t hash_alg_digest_len(uint16_t hash_alg) {
-  switch (hash_alg) {
-  case TPM_ALG_SHA256:
-    return SHA256_DIGEST_LENGTH;
-  case TPM_ALG_SHA384:
-    return SHA384_DIGEST_LENGTH;
-  case TPM_ALG_SHA512:
-    return SHA512_DIGEST_LENGTH;
-  default:
-    return 0;
-  }
+static size_t hash_alg_digest_len(uint16_t hash_alg)
+{
+	switch (hash_alg) {
+	case TPM_ALG_SHA256:
+		return SHA256_DIGEST_LENGTH;
+	case TPM_ALG_SHA384:
+		return SHA384_DIGEST_LENGTH;
+	case TPM_ALG_SHA512:
+		return SHA512_DIGEST_LENGTH;
+	default:
+		return 0;
+	}
 }
 
 /*
@@ -70,38 +72,43 @@ static size_t hash_alg_digest_len(uint16_t hash_alg) {
 /*
  * Read big-endian uint16 from buffer
  */
-static uint16_t read_be16(const uint8_t *p) {
-  return (uint16_t)((uint16_t)p[0] << 8 | (uint16_t)p[1]);
+static uint16_t read_be16(const uint8_t *p)
+{
+	return (uint16_t)((uint16_t)p[0] << 8 | (uint16_t)p[1]);
 }
 
 /*
  * Read big-endian uint32 from buffer
  */
-static uint32_t read_be32(const uint8_t *p) {
-  return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
-         (uint32_t)p[3];
+static uint32_t read_be32(const uint8_t *p)
+{
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+	       (uint32_t)p[2] << 8 | (uint32_t)p[3];
 }
 
 /*
  * Read little-endian uint16 from buffer
  */
-static uint16_t read_le16(const uint8_t *p) {
-  return (uint16_t)((uint16_t)p[1] << 8 | (uint16_t)p[0]);
+static uint16_t read_le16(const uint8_t *p)
+{
+	return (uint16_t)((uint16_t)p[1] << 8 | (uint16_t)p[0]);
 }
 
 /*
  * Read little-endian uint32 from buffer
  */
-static uint32_t read_le32(const uint8_t *p) {
-  return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 |
-         (uint32_t)p[0];
+static uint32_t read_le32(const uint8_t *p)
+{
+	return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 |
+	       (uint32_t)p[1] << 8 | (uint32_t)p[0];
 }
 
 /*
  * Read little-endian uint64 from buffer
  */
-static uint64_t read_le64(const uint8_t *p) {
-  return (uint64_t)read_le32(p) | ((uint64_t)read_le32(p + 4) << 32);
+static uint64_t read_le64(const uint8_t *p)
+{
+	return (uint64_t)read_le32(p) | ((uint64_t)read_le32(p + 4) << 32);
 }
 
 /*
@@ -122,510 +129,540 @@ static uint64_t read_le64(const uint8_t *p) {
  * Returns 0 on success, -1 on parse error.
  */
 static int parse_tpms_attest(const uint8_t *data, size_t len,
-                             const uint8_t **extra_data, size_t *extra_data_len,
-                             const uint8_t **pcr_digest, size_t *pcr_digest_len,
-                             uint32_t *pcr_mask_out) {
-  size_t off = 0;
+			     const uint8_t **extra_data, size_t *extra_data_len,
+			     const uint8_t **pcr_digest, size_t *pcr_digest_len,
+			     uint32_t *pcr_mask_out)
+{
+	size_t off = 0;
 
-  /* minimum: magic(4) + type(2) + signer_size(2) + extra_size(2) */
-  if (len < 10)
-    return -1;
+	/* minimum: magic(4) + type(2) + signer_size(2) + extra_size(2) */
+	if (len < 10)
+		return -1;
 
-  /* magic */
-  uint32_t magic = read_be32(data + off);
-  off += 4;
-  if (magic != TPM_GENERATED_VALUE)
-    return -1;
+	/* magic */
+	uint32_t magic = read_be32(data + off);
+	off += 4;
+	if (magic != TPM_GENERATED_VALUE)
+		return -1;
 
-  /* type */
-  uint16_t type = read_be16(data + off);
-  off += 2;
+	/* type */
+	uint16_t type = read_be16(data + off);
+	off += 2;
 
-  /* qualifiedSigner (TPM2B_NAME) */
-  if (off + 2 > len)
-    return -1;
-  uint16_t signer_size = read_be16(data + off);
-  off += 2;
-  if (off + signer_size > len)
-    return -1;
-  off += signer_size;
+	/* qualifiedSigner (TPM2B_NAME) */
+	if (off + 2 > len)
+		return -1;
+	uint16_t signer_size = read_be16(data + off);
+	off += 2;
+	if (off + signer_size > len)
+		return -1;
+	off += signer_size;
 
-  /* extraData (TPM2B_DATA) - nonce lives here */
-  if (off + 2 > len)
-    return -1;
-  uint16_t ed_size = read_be16(data + off);
-  off += 2;
-  if (off + ed_size > len)
-    return -1;
+	/* extraData (TPM2B_DATA) - nonce lives here */
+	if (off + 2 > len)
+		return -1;
+	uint16_t ed_size = read_be16(data + off);
+	off += 2;
+	if (off + ed_size > len)
+		return -1;
 
-  if (extra_data)
-    *extra_data = data + off;
-  if (extra_data_len)
-    *extra_data_len = ed_size;
-  off += ed_size;
+	if (extra_data)
+		*extra_data = data + off;
+	if (extra_data_len)
+		*extra_data_len = ed_size;
+	off += ed_size;
 
-  /* clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 */
-  if (off + 17 > len)
-    return -1;
-  off += 17;
+	/* clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17
+	 */
+	if (off + 17 > len)
+		return -1;
+	off += 17;
 
-  /* firmwareVersion (8 bytes) */
-  if (off + 8 > len)
-    return -1;
-  off += 8;
+	/* firmwareVersion (8 bytes) */
+	if (off + 8 > len)
+		return -1;
+	off += 8;
 
-  if (type == TPM_ST_ATTEST_QUOTE) {
-    uint32_t parsed_pcr_mask = 0;
-    uint16_t pcr_bank_alg = 0;
-    /* TPML_PCR_SELECTION: count(4) + array */
-    if (off + 4 > len)
-      return -1;
-    uint32_t pcr_sel_count = read_be32(data + off);
-    off += 4;
+	if (type == TPM_ST_ATTEST_QUOTE) {
+		uint32_t parsed_pcr_mask = 0;
+		uint16_t pcr_bank_alg = 0;
+		/* TPML_PCR_SELECTION: count(4) + array */
+		if (off + 4 > len)
+			return -1;
+		uint32_t pcr_sel_count = read_be32(data + off);
+		off += 4;
 
-    /* TPM 2.0 spec: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS */
-    if (pcr_sel_count > 16)
-      return -1;
+		/* TPM 2.0 spec: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS
+		 */
+		if (pcr_sel_count > 16)
+			return -1;
 
-    /* each TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[] */
-    for (uint32_t i = 0; i < pcr_sel_count; i++) {
-      uint16_t hash_alg;
-      if (off + 3 > len)
-        return -1;
-      hash_alg = read_be16(data + off);
-      off += 2;
+		/* each TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[]
+		 */
+		for (uint32_t i = 0; i < pcr_sel_count; i++) {
+			uint16_t hash_alg;
+			if (off + 3 > len)
+				return -1;
+			hash_alg = read_be16(data + off);
+			off += 2;
 
-      if (i == 0) {
-        pcr_bank_alg = hash_alg;
-      } else if (hash_alg != pcr_bank_alg) {
-        /* mixed-bank selections are not representable in single-bank wire */
-        return -1;
-      }
+			if (i == 0) {
+				pcr_bank_alg = hash_alg;
+			} else if (hash_alg != pcr_bank_alg) {
+				/* mixed-bank selections are not representable
+				 * in single-bank wire */
+				return -1;
+			}
 
-      if (hash_alg != TPM_ALG_SHA256) {
-        /* LOTA token wire carries a single SHA-256 PCR mask domain */
-        return -1;
-      }
+			if (hash_alg != TPM_ALG_SHA256) {
+				/* LOTA token wire carries a single SHA-256 PCR
+				 * mask domain */
+				return -1;
+			}
 
-      uint8_t select_size = data[off];
-      off += 1;
-      if (off + select_size > len)
-        return -1;
+			uint8_t select_size = data[off];
+			off += 1;
+			if (off + select_size > len)
+				return -1;
 
-      for (uint8_t j = 0; j < select_size; j++) {
-        uint8_t sel = data[off + j];
+			for (uint8_t j = 0; j < select_size; j++) {
+				uint8_t sel = data[off + j];
 
-        if (j < 3) {
-          parsed_pcr_mask |= ((uint32_t)sel) << (8U * j);
-        } else if (sel != 0) {
-          /* Cannot represent PCR >= 24 in current wire format. */
-          return -1;
-        }
-      }
-      off += select_size;
-    }
+				if (j < 3) {
+					parsed_pcr_mask |= ((uint32_t)sel)
+							   << (8U * j);
+				} else if (sel != 0) {
+					/* Cannot represent PCR >= 24 in current
+					 * wire format. */
+					return -1;
+				}
+			}
+			off += select_size;
+		}
 
-    /* pcrDigest (TPM2B_DIGEST) */
-    if (off + 2 > len)
-      return -1;
-    uint16_t digest_size = read_be16(data + off);
-    off += 2;
-    if (off + digest_size > len)
-      return -1;
+		/* pcrDigest (TPM2B_DIGEST) */
+		if (off + 2 > len)
+			return -1;
+		uint16_t digest_size = read_be16(data + off);
+		off += 2;
+		if (off + digest_size > len)
+			return -1;
 
-    if (digest_size == 0 || digest_size > LOTA_SERVER_MAX_PCR_DIGEST_SIZE)
-      return -1;
+		if (digest_size == 0 ||
+		    digest_size > LOTA_SERVER_MAX_PCR_DIGEST_SIZE)
+			return -1;
 
-    if (pcr_digest)
-      *pcr_digest = data + off;
-    if (pcr_digest_len)
-      *pcr_digest_len = digest_size;
-    if (pcr_mask_out)
-      *pcr_mask_out = parsed_pcr_mask;
-  } else {
-    /* Not a quote - no PCR digest */
-    if (pcr_digest)
-      *pcr_digest = NULL;
-    if (pcr_digest_len)
-      *pcr_digest_len = 0;
-    if (pcr_mask_out)
-      *pcr_mask_out = 0;
-  }
+		if (pcr_digest)
+			*pcr_digest = data + off;
+		if (pcr_digest_len)
+			*pcr_digest_len = digest_size;
+		if (pcr_mask_out)
+			*pcr_mask_out = parsed_pcr_mask;
+	} else {
+		/* Not a quote - no PCR digest */
+		if (pcr_digest)
+			*pcr_digest = NULL;
+		if (pcr_digest_len)
+			*pcr_digest_len = 0;
+		if (pcr_mask_out)
+			*pcr_mask_out = 0;
+	}
 
-  return 0;
+	return 0;
 }
 
 /*
  * Verify RSA signature over SHA-256(attest_data) using AIK public key
  */
 static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
-                                const uint8_t *signature, size_t sig_len,
-                                uint16_t sig_alg, uint16_t hash_alg,
-                                const uint8_t *aik_pub_der,
-                                size_t aik_pub_len) {
-  EVP_PKEY *pkey = NULL;
-  EVP_MD_CTX *md_ctx = NULL;
-  EVP_PKEY_CTX *pkey_ctx = NULL;
-  const uint8_t *der_ptr;
-  int ret = LOTA_SERVER_ERR_SIG_FAIL;
+				const uint8_t *signature, size_t sig_len,
+				uint16_t sig_alg, uint16_t hash_alg,
+				const uint8_t *aik_pub_der, size_t aik_pub_len)
+{
+	EVP_PKEY *pkey = NULL;
+	EVP_MD_CTX *md_ctx = NULL;
+	EVP_PKEY_CTX *pkey_ctx = NULL;
+	const uint8_t *der_ptr;
+	int ret = LOTA_SERVER_ERR_SIG_FAIL;
 
-  if (!aik_pub_der || aik_pub_len == 0)
-    return LOTA_SERVER_ERR_INVALID_ARG;
-  if (aik_pub_len > (size_t)LONG_MAX)
-    return LOTA_SERVER_ERR_INVALID_ARG;
-  if (aik_pub_len > LOTA_MAX_AIK_PUB_DER_SIZE)
-    return LOTA_SERVER_ERR_INVALID_ARG;
+	if (!aik_pub_der || aik_pub_len == 0)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	if (aik_pub_len > (size_t)LONG_MAX)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	if (aik_pub_len > LOTA_MAX_AIK_PUB_DER_SIZE)
+		return LOTA_SERVER_ERR_INVALID_ARG;
 
-  /* parse DER-encoded public key (PKIX / SubjectPublicKeyInfo) */
-  der_ptr = aik_pub_der;
-  pkey = d2i_PUBKEY(NULL, &der_ptr, (long)aik_pub_len);
-  if (!pkey)
-    return LOTA_SERVER_ERR_CRYPTO;
+	/* parse DER-encoded public key (PKIX / SubjectPublicKeyInfo) */
+	der_ptr = aik_pub_der;
+	pkey = d2i_PUBKEY(NULL, &der_ptr, (long)aik_pub_len);
+	if (!pkey)
+		return LOTA_SERVER_ERR_CRYPTO;
 
-  /* verify RSA type */
-  if (EVP_PKEY_base_id(pkey) != EVP_PKEY_RSA) {
-    ret = LOTA_SERVER_ERR_CRYPTO;
-    goto out;
-  }
+	/* verify RSA type */
+	if (EVP_PKEY_base_id(pkey) != EVP_PKEY_RSA) {
+		ret = LOTA_SERVER_ERR_CRYPTO;
+		goto out;
+	}
 
-  /* reject weak RSA keys (< 2048 bits) */
-  if (EVP_PKEY_get_bits(pkey) < 2048) {
-    ret = LOTA_SERVER_ERR_CRYPTO;
-    goto out;
-  }
+	/* reject weak RSA keys (< 2048 bits) */
+	if (EVP_PKEY_get_bits(pkey) < 2048) {
+		ret = LOTA_SERVER_ERR_CRYPTO;
+		goto out;
+	}
 
-  md_ctx = EVP_MD_CTX_new();
-  if (!md_ctx) {
-    ret = LOTA_SERVER_ERR_CRYPTO;
-    goto out;
-  }
+	md_ctx = EVP_MD_CTX_new();
+	if (!md_ctx) {
+		ret = LOTA_SERVER_ERR_CRYPTO;
+		goto out;
+	}
 
-  const EVP_MD *md = select_hash_md(hash_alg);
-  if (!md) {
-    ret = LOTA_SERVER_ERR_SIG_FAIL;
-    goto out;
-  }
+	const EVP_MD *md = select_hash_md(hash_alg);
+	if (!md) {
+		ret = LOTA_SERVER_ERR_SIG_FAIL;
+		goto out;
+	}
 
-  if (sig_alg == TPM_ALG_RSAPSS) {
-    /* RSASSA-PSS verification */
-    if (EVP_DigestVerifyInit(md_ctx, &pkey_ctx, md, NULL, pkey) != 1)
-      goto out;
+	if (sig_alg == TPM_ALG_RSAPSS) {
+		/* RSASSA-PSS verification */
+		if (EVP_DigestVerifyInit(md_ctx, &pkey_ctx, md, NULL, pkey) !=
+		    1)
+			goto out;
 
-    if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) != 1)
-      goto out;
+		if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx,
+						 RSA_PKCS1_PSS_PADDING) != 1)
+			goto out;
 
-    if (EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
-      goto out;
-  } else if (sig_alg == TPM_ALG_RSASSA) {
-    /* RSASSA-PKCS1-v1_5 */
-    if (EVP_DigestVerifyInit(md_ctx, NULL, md, NULL, pkey) != 1)
-      goto out;
-  } else {
-    /* reject unknown signature algorithms */
-    ret = LOTA_SERVER_ERR_SIG_FAIL;
-    goto out;
-  }
+		if (EVP_PKEY_CTX_set_rsa_pss_saltlen(
+			pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
+			goto out;
+	} else if (sig_alg == TPM_ALG_RSASSA) {
+		/* RSASSA-PKCS1-v1_5 */
+		if (EVP_DigestVerifyInit(md_ctx, NULL, md, NULL, pkey) != 1)
+			goto out;
+	} else {
+		/* reject unknown signature algorithms */
+		ret = LOTA_SERVER_ERR_SIG_FAIL;
+		goto out;
+	}
 
-  if (EVP_DigestVerifyUpdate(md_ctx, attest_data, attest_len) != 1)
-    goto out;
+	if (EVP_DigestVerifyUpdate(md_ctx, attest_data, attest_len) != 1)
+		goto out;
 
-  if (EVP_DigestVerifyFinal(md_ctx, signature, sig_len) == 1)
-    ret = LOTA_SERVER_OK;
+	if (EVP_DigestVerifyFinal(md_ctx, signature, sig_len) == 1)
+		ret = LOTA_SERVER_OK;
 
 out:
-  EVP_MD_CTX_free(md_ctx);
-  /* Key material cleanup is delegated to OpenSSL via EVP_PKEY_free(). */
-  EVP_PKEY_free(pkey);
-  return ret;
+	EVP_MD_CTX_free(md_ctx);
+	/* Key material cleanup is delegated to OpenSSL via EVP_PKEY_free(). */
+	EVP_PKEY_free(pkey);
+	return ret;
 }
 
 /*
  * Parse token header from wire format
  */
 static int parse_wire_header(const uint8_t *data, size_t len,
-                             struct lota_token_wire *hdr) {
-  if (len < LOTA_TOKEN_HEADER_SIZE)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+			     struct lota_token_wire *hdr)
+{
+	if (len < LOTA_TOKEN_HEADER_SIZE)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  hdr->magic = read_le32(data + 0);
-  if (hdr->magic != LOTA_TOKEN_MAGIC)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	hdr->magic = read_le32(data + 0);
+	if (hdr->magic != LOTA_TOKEN_MAGIC)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  hdr->version = read_le16(data + 4);
-  if (hdr->version != LOTA_TOKEN_VERSION)
-    return LOTA_SERVER_ERR_BAD_VERSION;
+	hdr->version = read_le16(data + 4);
+	if (hdr->version != LOTA_TOKEN_VERSION)
+		return LOTA_SERVER_ERR_BAD_VERSION;
 
-  hdr->total_size = read_le16(data + 6);
-  if (hdr->total_size > len || hdr->total_size < LOTA_TOKEN_HEADER_SIZE)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	hdr->total_size = read_le16(data + 6);
+	if (hdr->total_size > len || hdr->total_size < LOTA_TOKEN_HEADER_SIZE)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  hdr->valid_until = read_le64(data + 8);
-  hdr->flags = read_le32(data + 16);
-  memcpy(hdr->nonce, data + 20, 32);
-  hdr->sig_alg = read_le16(data + 52);
-  hdr->hash_alg = read_le16(data + 54);
-  hdr->pcr_mask = read_le32(data + 56);
-  memcpy(hdr->policy_digest, data + 60, 32);
-  memcpy(hdr->runtime_protect_digest, data + 92, 32);
-  hdr->protect_pid_count = read_le32(data + 124);
-  hdr->runtime_protect_epoch = read_le64(data + 128);
-  hdr->pid_list_size = read_le16(data + 136);
-  hdr->attest_size = read_le16(data + 138);
-  hdr->sig_size = read_le16(data + 140);
-  hdr->reserved = read_le16(data + 142);
+	hdr->valid_until = read_le64(data + 8);
+	hdr->flags = read_le32(data + 16);
+	memcpy(hdr->nonce, data + 20, 32);
+	hdr->sig_alg = read_le16(data + 52);
+	hdr->hash_alg = read_le16(data + 54);
+	hdr->pcr_mask = read_le32(data + 56);
+	memcpy(hdr->policy_digest, data + 60, 32);
+	memcpy(hdr->runtime_protect_digest, data + 92, 32);
+	hdr->protect_pid_count = read_le32(data + 124);
+	hdr->runtime_protect_epoch = read_le64(data + 128);
+	hdr->pid_list_size = read_le16(data + 136);
+	hdr->attest_size = read_le16(data + 138);
+	hdr->sig_size = read_le16(data + 140);
+	hdr->reserved = read_le16(data + 142);
 
-  if (hash_alg_digest_len(hdr->hash_alg) == 0)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr->reserved != 0)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr->pid_list_size > LOTA_TOKEN_MAX_PID_LIST_SIZE)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr->pid_list_size !=
-      (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hash_alg_digest_len(hdr->hash_alg) == 0)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hdr->reserved != 0)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hdr->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hdr->pid_list_size > LOTA_TOKEN_MAX_PID_LIST_SIZE)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hdr->pid_list_size !=
+	    (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  /* validate sizes */
-  size_t expected = (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->pid_list_size +
-                    hdr->attest_size + hdr->sig_size;
-  if (expected > (size_t)hdr->total_size)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr->attest_size > 1024 || hdr->sig_size > 512)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	/* validate sizes */
+	size_t expected = (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->pid_list_size +
+			  hdr->attest_size + hdr->sig_size;
+	if (expected > (size_t)hdr->total_size)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (hdr->attest_size > 1024 || hdr->sig_size > 512)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  return LOTA_SERVER_OK;
+	return LOTA_SERVER_OK;
 }
 
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
-                             const uint8_t *aik_pub_der, size_t aik_pub_len,
-                             const uint8_t *expected_nonce,
-                             struct lota_server_claims *claims) {
-  struct lota_token_wire hdr;
-  int ret;
+			     const uint8_t *aik_pub_der, size_t aik_pub_len,
+			     const uint8_t *expected_nonce,
+			     struct lota_server_claims *claims)
+{
+	struct lota_token_wire hdr;
+	int ret;
 
-  if (!token_data || !aik_pub_der || !expected_nonce || !claims)
-    return LOTA_SERVER_ERR_INVALID_ARG;
-  if (token_len == 0 || aik_pub_len == 0)
-    return LOTA_SERVER_ERR_INVALID_ARG;
+	if (!token_data || !aik_pub_der || !expected_nonce || !claims)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	if (token_len == 0 || aik_pub_len == 0)
+		return LOTA_SERVER_ERR_INVALID_ARG;
 
-  memset(claims, 0, sizeof(*claims));
+	memset(claims, 0, sizeof(*claims));
 
-  /* parse wire format */
-  ret = parse_wire_header(token_data, token_len, &hdr);
-  if (ret != LOTA_SERVER_OK)
-    return ret;
+	/* parse wire format */
+	ret = parse_wire_header(token_data, token_len, &hdr);
+	if (ret != LOTA_SERVER_OK)
+		return ret;
 
-  const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
-  const uint8_t *attest_data = pid_list_bytes + hdr.pid_list_size;
-  const uint8_t *signature = attest_data + hdr.attest_size;
-  uint8_t runtime_protect_digest[32];
-  uint32_t *pid_list = NULL;
+	const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
+	const uint8_t *attest_data = pid_list_bytes + hdr.pid_list_size;
+	const uint8_t *signature = attest_data + hdr.attest_size;
+	uint8_t runtime_protect_digest[32];
+	uint32_t *pid_list = NULL;
 
-  /* verify RSA signature over attest_data */
-  if (hdr.attest_size == 0 || hdr.sig_size == 0)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	/* verify RSA signature over attest_data */
+	if (hdr.attest_size == 0 || hdr.sig_size == 0)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  if (hdr.protect_pid_count > 0) {
-    pid_list = calloc(hdr.protect_pid_count, sizeof(uint32_t));
-    if (!pid_list)
-      return LOTA_SERVER_ERR_CRYPTO;
+	if (hdr.protect_pid_count > 0) {
+		pid_list = calloc(hdr.protect_pid_count, sizeof(uint32_t));
+		if (!pid_list)
+			return LOTA_SERVER_ERR_CRYPTO;
 
-    for (uint32_t i = 0; i < hdr.protect_pid_count; i++)
-      pid_list[i] = read_le32(pid_list_bytes + ((size_t)i * sizeof(uint32_t)));
+		for (uint32_t i = 0; i < hdr.protect_pid_count; i++)
+			pid_list[i] = read_le32(pid_list_bytes +
+						((size_t)i * sizeof(uint32_t)));
 
-    if (lota_validate_canonical_protect_pid_list(pid_list,
-                                                 hdr.protect_pid_count) != 0) {
-      OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
-      free(pid_list);
-      return LOTA_SERVER_ERR_BAD_TOKEN;
-    }
-  }
+		if (lota_validate_canonical_protect_pid_list(
+			pid_list, hdr.protect_pid_count) != 0) {
+			OPENSSL_cleanse(pid_list, hdr.protect_pid_count *
+						      sizeof(uint32_t));
+			free(pid_list);
+			return LOTA_SERVER_ERR_BAD_TOKEN;
+		}
+	}
 
-  if (lota_compute_runtime_protect_digest(pid_list, hdr.protect_pid_count,
-                                          runtime_protect_digest) != 0) {
-    if (pid_list) {
-      OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
-      free(pid_list);
-    }
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  }
-  if (memcmp(runtime_protect_digest, hdr.runtime_protect_digest, 32) != 0)
-    ret = LOTA_SERVER_ERR_NONCE_FAIL;
-  else
-    ret = LOTA_SERVER_OK;
+	if (lota_compute_runtime_protect_digest(pid_list, hdr.protect_pid_count,
+						runtime_protect_digest) != 0) {
+		if (pid_list) {
+			OPENSSL_cleanse(pid_list, hdr.protect_pid_count *
+						      sizeof(uint32_t));
+			free(pid_list);
+		}
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	}
+	if (memcmp(runtime_protect_digest, hdr.runtime_protect_digest, 32) != 0)
+		ret = LOTA_SERVER_ERR_NONCE_FAIL;
+	else
+		ret = LOTA_SERVER_OK;
 
-  if (pid_list) {
-    OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
-    free(pid_list);
-  }
-  if (ret != LOTA_SERVER_OK)
-    return ret;
+	if (pid_list) {
+		OPENSSL_cleanse(pid_list,
+				hdr.protect_pid_count * sizeof(uint32_t));
+		free(pid_list);
+	}
+	if (ret != LOTA_SERVER_OK)
+		return ret;
 
-  ret = verify_rsa_signature(attest_data, hdr.attest_size, signature,
-                             hdr.sig_size, hdr.sig_alg, hdr.hash_alg,
-                             aik_pub_der, aik_pub_len);
-  if (ret != LOTA_SERVER_OK)
-    return ret;
+	ret = verify_rsa_signature(attest_data, hdr.attest_size, signature,
+				   hdr.sig_size, hdr.sig_alg, hdr.hash_alg,
+				   aik_pub_der, aik_pub_len);
+	if (ret != LOTA_SERVER_OK)
+		return ret;
 
-  /* parse TPMS_ATTEST - extract extraData and PCR digest */
-  const uint8_t *extra_data = NULL;
-  size_t extra_data_len = 0;
-  const uint8_t *pcr_digest = NULL;
-  size_t pcr_digest_len = 0;
-  uint32_t quoted_pcr_mask = 0;
-  size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);
+	/* parse TPMS_ATTEST - extract extraData and PCR digest */
+	const uint8_t *extra_data = NULL;
+	size_t extra_data_len = 0;
+	const uint8_t *pcr_digest = NULL;
+	size_t pcr_digest_len = 0;
+	uint32_t quoted_pcr_mask = 0;
+	size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);
 
-  if (parse_tpms_attest(attest_data, hdr.attest_size, &extra_data,
-                        &extra_data_len, &pcr_digest, &pcr_digest_len,
-                        &quoted_pcr_mask) != 0) {
-    return LOTA_SERVER_ERR_ATTEST_PARSE;
-  }
+	if (parse_tpms_attest(attest_data, hdr.attest_size, &extra_data,
+			      &extra_data_len, &pcr_digest, &pcr_digest_len,
+			      &quoted_pcr_mask) != 0) {
+		return LOTA_SERVER_ERR_ATTEST_PARSE;
+	}
 
-  if (quoted_pcr_mask != hdr.pcr_mask)
-    return LOTA_SERVER_ERR_NONCE_FAIL;
+	if (quoted_pcr_mask != hdr.pcr_mask)
+		return LOTA_SERVER_ERR_NONCE_FAIL;
 
-  /* verify nonce binding: extraData ==
-   * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
-   * runtime_protect_digest||runtime_protect_epoch) */
-  uint8_t computed_nonce[32];
-  if (lota_compute_token_quote_nonce(
-          hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
-          hdr.policy_digest, hdr.runtime_protect_digest,
-          hdr.runtime_protect_epoch, computed_nonce) != 0) {
-    return LOTA_SERVER_ERR_NONCE_FAIL;
-  }
+	/* verify nonce binding: extraData ==
+	 * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
+	 * runtime_protect_digest||runtime_protect_epoch) */
+	uint8_t computed_nonce[32];
+	if (lota_compute_token_quote_nonce(
+		hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
+		hdr.policy_digest, hdr.runtime_protect_digest,
+		hdr.runtime_protect_epoch, computed_nonce) != 0) {
+		return LOTA_SERVER_ERR_NONCE_FAIL;
+	}
 
-  if (extra_data_len != 32 || memcmp(extra_data, computed_nonce, 32) != 0) {
-    return LOTA_SERVER_ERR_NONCE_FAIL;
-  }
+	if (extra_data_len != 32 ||
+	    memcmp(extra_data, computed_nonce, 32) != 0) {
+		return LOTA_SERVER_ERR_NONCE_FAIL;
+	}
 
-  /* verify caller-provided challenge nonce */
-  if (memcmp(hdr.nonce, expected_nonce, 32) != 0)
-    return LOTA_SERVER_ERR_NONCE_FAIL;
+	/* verify caller-provided challenge nonce */
+	if (memcmp(hdr.nonce, expected_nonce, 32) != 0)
+		return LOTA_SERVER_ERR_NONCE_FAIL;
 
-  if (expected_pcr_digest_len == 0)
-    return LOTA_SERVER_ERR_SIG_FAIL;
+	if (expected_pcr_digest_len == 0)
+		return LOTA_SERVER_ERR_SIG_FAIL;
 
-  /* fill claims */
-  claims->valid_until = hdr.valid_until;
-  claims->flags = hdr.flags;
-  memcpy(claims->nonce, hdr.nonce, 32);
-  claims->pcr_mask = hdr.pcr_mask;
-  memcpy(claims->policy_digest, hdr.policy_digest, 32);
-  memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
-  claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
-  claims->protect_pid_count = hdr.protect_pid_count;
+	/* fill claims */
+	claims->valid_until = hdr.valid_until;
+	claims->flags = hdr.flags;
+	memcpy(claims->nonce, hdr.nonce, 32);
+	claims->pcr_mask = hdr.pcr_mask;
+	memcpy(claims->policy_digest, hdr.policy_digest, 32);
+	memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+	claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
+	claims->protect_pid_count = hdr.protect_pid_count;
 
-  if (!pcr_digest || pcr_digest_len != expected_pcr_digest_len)
-    return LOTA_SERVER_ERR_ATTEST_PARSE;
+	if (!pcr_digest || pcr_digest_len != expected_pcr_digest_len)
+		return LOTA_SERVER_ERR_ATTEST_PARSE;
 
-  if (pcr_digest_len > sizeof(claims->pcr_digest))
-    return LOTA_SERVER_ERR_ATTEST_PARSE;
+	if (pcr_digest_len > sizeof(claims->pcr_digest))
+		return LOTA_SERVER_ERR_ATTEST_PARSE;
 
-  memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
-  claims->pcr_digest_len = pcr_digest_len;
+	memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
+	claims->pcr_digest_len = pcr_digest_len;
 
-  /* check expiry */
-  uint64_t now = (uint64_t)time(NULL);
+	/* check expiry */
+	uint64_t now = (uint64_t)time(NULL);
 
-  {
-    uint64_t future_cutoff = now;
-    if (future_cutoff <=
-        UINT64_MAX - (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
-      future_cutoff += (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
-    else
-      future_cutoff = UINT64_MAX;
+	{
+		uint64_t future_cutoff = now;
+		if (future_cutoff <=
+		    UINT64_MAX -
+			(uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
+			future_cutoff +=
+			    (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
+		else
+			future_cutoff = UINT64_MAX;
 
-    if (hdr.valid_until > future_cutoff)
-      return LOTA_SERVER_ERR_FUTURE;
-  }
+		if (hdr.valid_until > future_cutoff)
+			return LOTA_SERVER_ERR_FUTURE;
+	}
 
-  claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
+	claims->expired =
+	    (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
-  if (claims->expired)
-    return LOTA_SERVER_ERR_EXPIRED;
+	if (claims->expired)
+		return LOTA_SERVER_ERR_EXPIRED;
 
-  return LOTA_SERVER_OK;
+	return LOTA_SERVER_OK;
 }
 
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
-                            struct lota_server_claims *claims) {
-  struct lota_token_wire hdr;
-  int ret;
+			    struct lota_server_claims *claims)
+{
+	struct lota_token_wire hdr;
+	int ret;
 
-  if (!token_data || !claims)
-    return LOTA_SERVER_ERR_INVALID_ARG;
+	if (!token_data || !claims)
+		return LOTA_SERVER_ERR_INVALID_ARG;
 
-  memset(claims, 0, sizeof(*claims));
+	memset(claims, 0, sizeof(*claims));
 
-  ret = parse_wire_header(token_data, token_len, &hdr);
-  if (ret != LOTA_SERVER_OK)
-    return ret;
+	ret = parse_wire_header(token_data, token_len, &hdr);
+	if (ret != LOTA_SERVER_OK)
+		return ret;
 
-  claims->valid_until = hdr.valid_until;
-  claims->flags = hdr.flags;
-  memcpy(claims->nonce, hdr.nonce, 32);
-  claims->pcr_mask = hdr.pcr_mask;
-  memcpy(claims->policy_digest, hdr.policy_digest, 32);
-  memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
-  claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
-  claims->protect_pid_count = hdr.protect_pid_count;
+	claims->valid_until = hdr.valid_until;
+	claims->flags = hdr.flags;
+	memcpy(claims->nonce, hdr.nonce, 32);
+	claims->pcr_mask = hdr.pcr_mask;
+	memcpy(claims->policy_digest, hdr.policy_digest, 32);
+	memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+	claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
+	claims->protect_pid_count = hdr.protect_pid_count;
 
-  /* try to extract PCR digest from TPMS_ATTEST */
-  if (hdr.attest_size > 0) {
-    const uint8_t *attest_data =
-        token_data + LOTA_TOKEN_HEADER_SIZE + hdr.pid_list_size;
-    const uint8_t *pcr_digest = NULL;
-    size_t pcr_digest_len = 0;
-    size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);
+	/* try to extract PCR digest from TPMS_ATTEST */
+	if (hdr.attest_size > 0) {
+		const uint8_t *attest_data =
+		    token_data + LOTA_TOKEN_HEADER_SIZE + hdr.pid_list_size;
+		const uint8_t *pcr_digest = NULL;
+		size_t pcr_digest_len = 0;
+		size_t expected_pcr_digest_len =
+		    hash_alg_digest_len(hdr.hash_alg);
 
-    if (parse_tpms_attest(attest_data, hdr.attest_size, NULL, NULL, &pcr_digest,
-                          &pcr_digest_len, NULL) == 0) {
-      if (pcr_digest && pcr_digest_len <= sizeof(claims->pcr_digest) &&
-          pcr_digest_len == expected_pcr_digest_len) {
-        memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
-        claims->pcr_digest_len = pcr_digest_len;
-      }
-    }
-  }
+		if (parse_tpms_attest(attest_data, hdr.attest_size, NULL, NULL,
+				      &pcr_digest, &pcr_digest_len,
+				      NULL) == 0) {
+			if (pcr_digest &&
+			    pcr_digest_len <= sizeof(claims->pcr_digest) &&
+			    pcr_digest_len == expected_pcr_digest_len) {
+				memcpy(claims->pcr_digest, pcr_digest,
+				       pcr_digest_len);
+				claims->pcr_digest_len = pcr_digest_len;
+			}
+		}
+	}
 
-  uint64_t now = (uint64_t)time(NULL);
-  claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
+	uint64_t now = (uint64_t)time(NULL);
+	claims->expired =
+	    (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
-  return LOTA_SERVER_OK;
+	return LOTA_SERVER_OK;
 }
 
-const char *lota_server_strerror(int error) {
-  switch (error) {
-  case LOTA_SERVER_OK:
-    return "Success";
-  case LOTA_SERVER_ERR_INVALID_ARG:
-    return "Invalid argument";
-  case LOTA_SERVER_ERR_BAD_TOKEN:
-    return "Malformed token";
-  case LOTA_SERVER_ERR_BAD_VERSION:
-    return "Unsupported token version";
-  case LOTA_SERVER_ERR_SIG_FAIL:
-    return "Signature verification failed";
-  case LOTA_SERVER_ERR_NONCE_FAIL:
-    return "Nonce mismatch";
-  case LOTA_SERVER_ERR_EXPIRED:
-    return "Token expired";
-  case LOTA_SERVER_ERR_ATTEST_PARSE:
-    return "Failed to parse TPMS_ATTEST";
-  case LOTA_SERVER_ERR_CRYPTO:
-    return "Cryptographic error";
-  case LOTA_SERVER_ERR_BUFFER:
-    return "Buffer too small";
-  case LOTA_SERVER_ERR_FUTURE:
-    return "Token valid_until too far in the future";
+const char *lota_server_strerror(int error)
+{
+	switch (error) {
+	case LOTA_SERVER_OK:
+		return "Success";
+	case LOTA_SERVER_ERR_INVALID_ARG:
+		return "Invalid argument";
+	case LOTA_SERVER_ERR_BAD_TOKEN:
+		return "Malformed token";
+	case LOTA_SERVER_ERR_BAD_VERSION:
+		return "Unsupported token version";
+	case LOTA_SERVER_ERR_SIG_FAIL:
+		return "Signature verification failed";
+	case LOTA_SERVER_ERR_NONCE_FAIL:
+		return "Nonce mismatch";
+	case LOTA_SERVER_ERR_EXPIRED:
+		return "Token expired";
+	case LOTA_SERVER_ERR_ATTEST_PARSE:
+		return "Failed to parse TPMS_ATTEST";
+	case LOTA_SERVER_ERR_CRYPTO:
+		return "Cryptographic error";
+	case LOTA_SERVER_ERR_BUFFER:
+		return "Buffer too small";
+	case LOTA_SERVER_ERR_FUTURE:
+		return "Token valid_until too far in the future";
 
-  default:
-    return "Unknown error";
-  }
+	default:
+		return "Unknown error";
+	}
 }
 
-const char *lota_server_sdk_version(void) {
-  return LOTA_SERVER_SDK_VERSION_STRING;
+const char *lota_server_sdk_version(void)
+{
+	return LOTA_SERVER_SDK_VERSION_STRING;
 }

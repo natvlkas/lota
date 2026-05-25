@@ -43,7 +43,7 @@
 #define LOTA_GROUP_NAME "lota"
 
 /* Rate limiting: max GET_TOKEN requests per UID per window */
-#define TOKEN_RATE_LIMIT 10      /* requests */
+#define TOKEN_RATE_LIMIT 10	 /* requests */
 #define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
 
 /* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
@@ -51,9 +51,9 @@
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
 
 struct uid_rate {
-  uid_t uid;
-  int count;
-  uint64_t window_start_sec;
+	uid_t uid;
+	int count;
+	uint64_t window_start_sec;
 };
 
 #define MAX_RATE_ENTRIES 256
@@ -67,20 +67,23 @@ static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
-                                            uint32_t *out_count);
+					    uint32_t *out_count);
 
-static void ipc_secure_bzero(void *ptr, size_t len) {
-  if (ptr && len)
-    OPENSSL_cleanse(ptr, len);
+static void ipc_secure_bzero(void *ptr, size_t len)
+{
+	if (ptr && len)
+		OPENSSL_cleanse(ptr, len);
 }
 
-static uint64_t monotonic_now_sec(void) {
-  struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-    return (uint64_t)ts.tv_sec;
+static uint64_t monotonic_now_sec(void)
+{
+	struct timespec ts;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+		return (uint64_t)ts.tv_sec;
 
-  /* fallback only if CLOCK_MONOTONIC is unavailable (should not happen) */
-  return (uint64_t)time(NULL);
+	/* fallback only if CLOCK_MONOTONIC is unavailable (should not happen)
+	 */
+	return (uint64_t)time(NULL);
 }
 
 /*
@@ -88,80 +91,84 @@ static uint64_t monotonic_now_sec(void) {
  * Returns 0 if allowed, -1 if rate limited.
  */
 static int check_rate_limit(struct uid_rate *table, int *entry_count,
-                            int request_limit, int window_sec,
-                            uint64_t *last_table_full_warn_sec, uid_t uid,
-                            const char *name) {
-  uint64_t now = monotonic_now_sec();
+			    int request_limit, int window_sec,
+			    uint64_t *last_table_full_warn_sec, uid_t uid,
+			    const char *name)
+{
+	uint64_t now = monotonic_now_sec();
 
-  if (!table || !entry_count || request_limit <= 0 || window_sec <= 0 ||
-      !last_table_full_warn_sec || !name)
-    return -1;
+	if (!table || !entry_count || request_limit <= 0 || window_sec <= 0 ||
+	    !last_table_full_warn_sec || !name)
+		return -1;
 
-  /* existing entry */
-  for (int i = 0; i < *entry_count; i++) {
-    if (table[i].uid == uid) {
-      /* reset window if expired */
-      if (now < table[i].window_start_sec ||
-          now - table[i].window_start_sec >= (uint64_t)window_sec) {
-        table[i].count = 1;
-        table[i].window_start_sec = now;
-        return 0;
-      }
-      /* within window: check limit */
-      if (table[i].count >= request_limit)
-        return -1;
-      table[i].count++;
-      return 0;
-    }
-  }
+	/* existing entry */
+	for (int i = 0; i < *entry_count; i++) {
+		if (table[i].uid == uid) {
+			/* reset window if expired */
+			if (now < table[i].window_start_sec ||
+			    now - table[i].window_start_sec >=
+				(uint64_t)window_sec) {
+				table[i].count = 1;
+				table[i].window_start_sec = now;
+				return 0;
+			}
+			/* within window: check limit */
+			if (table[i].count >= request_limit)
+				return -1;
+			table[i].count++;
+			return 0;
+		}
+	}
 
-  /* new entry */
-  if (*entry_count < MAX_RATE_ENTRIES) {
-    table[*entry_count].uid = uid;
-    table[*entry_count].count = 1;
-    table[*entry_count].window_start_sec = now;
-    (*entry_count)++;
-    return 0;
-  }
+	/* new entry */
+	if (*entry_count < MAX_RATE_ENTRIES) {
+		table[*entry_count].uid = uid;
+		table[*entry_count].count = 1;
+		table[*entry_count].window_start_sec = now;
+		(*entry_count)++;
+		return 0;
+	}
 
-  /*
-   * Table full: do NOT evict an active UID entry.
-   * Reuse only an entry whose window has already expired; otherwise
-   * refuse the request to prevent trivial UID-exhaustion bypass
-   * (an attacker filling the table to evict legitimate rate state).
-   */
-  for (int i = 0; i < *entry_count; i++) {
-    if (now < table[i].window_start_sec ||
-        now - table[i].window_start_sec >= (uint64_t)window_sec) {
-      table[i].uid = uid;
-      table[i].count = 1;
-      table[i].window_start_sec = now;
-      return 0;
-    }
-  }
+	/*
+	 * Table full: do NOT evict an active UID entry.
+	 * Reuse only an entry whose window has already expired; otherwise
+	 * refuse the request to prevent trivial UID-exhaustion bypass
+	 * (an attacker filling the table to evict legitimate rate state).
+	 */
+	for (int i = 0; i < *entry_count; i++) {
+		if (now < table[i].window_start_sec ||
+		    now - table[i].window_start_sec >= (uint64_t)window_sec) {
+			table[i].uid = uid;
+			table[i].count = 1;
+			table[i].window_start_sec = now;
+			return 0;
+		}
+	}
 
-  if (now >= *last_table_full_warn_sec + 60) {
-    *last_table_full_warn_sec = now;
-    lota_warn(
-        "%s rate limiter table exhausted (%d entries); refusing new UID %u",
-        name, *entry_count, (unsigned)uid);
-  }
+	if (now >= *last_table_full_warn_sec + 60) {
+		*last_table_full_warn_sec = now;
+		lota_warn("%s rate limiter table exhausted (%d entries); "
+			  "refusing new UID %u",
+			  name, *entry_count, (unsigned)uid);
+	}
 
-  return -1;
+	return -1;
 }
 
-static int check_get_token_rate_limit(uid_t uid) {
-  return check_rate_limit(token_rate_table, &token_rate_count, TOKEN_RATE_LIMIT,
-                          TOKEN_RATE_WINDOW_SEC,
-                          &token_last_table_full_warn_sec, uid,
-                          "IPC GET_TOKEN");
+static int check_get_token_rate_limit(uid_t uid)
+{
+	return check_rate_limit(token_rate_table, &token_rate_count,
+				TOKEN_RATE_LIMIT, TOKEN_RATE_WINDOW_SEC,
+				&token_last_table_full_warn_sec, uid,
+				"IPC GET_TOKEN");
 }
 
-static int check_protect_pid_rate_limit(uid_t uid) {
-  return check_rate_limit(protect_pid_rate_table, &protect_pid_rate_count,
-                          PROTECT_PID_RATE_LIMIT, PROTECT_PID_RATE_WINDOW_SEC,
-                          &protect_pid_last_table_full_warn_sec, uid,
-                          "IPC PROTECT_PID");
+static int check_protect_pid_rate_limit(uid_t uid)
+{
+	return check_rate_limit(
+	    protect_pid_rate_table, &protect_pid_rate_count,
+	    PROTECT_PID_RATE_LIMIT, PROTECT_PID_RATE_WINDOW_SEC,
+	    &protect_pid_last_table_full_warn_sec, uid, "IPC PROTECT_PID");
 }
 
 /*
@@ -172,360 +179,379 @@ static int check_protect_pid_rate_limit(uid_t uid) {
  * untrusted clients cannot trigger allocations beyond these buffers.
  */
 struct ipc_client {
-  int fd;
-  uid_t peer_uid;                 /* authenticated peer UID via SO_PEERCRED */
-  gid_t peer_gid;                 /* authenticated peer GID */
-  pid_t peer_pid;                 /* authenticated peer PID */
-  uint64_t peer_start_time_ticks; /* /proc/<pid>/stat field 22 */
-  uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
-  size_t recv_len;
-  uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
-  size_t send_len;
-  size_t send_offset;
-  bool subscribed;         /* client subscribed to notifications */
-  uint32_t event_mask;     /* LOTA_IPC_EVENT_* subscription mask */
-  bool notify_pending;     /* notification queued behind current send */
-  uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
-  bool shutdown_on_flush;  /* trigger graceful daemon stop after reply */
-  struct ipc_client *next;
+	int fd;
+	uid_t peer_uid; /* authenticated peer UID via SO_PEERCRED */
+	gid_t peer_gid; /* authenticated peer GID */
+	pid_t peer_pid; /* authenticated peer PID */
+	uint64_t peer_start_time_ticks; /* /proc/<pid>/stat field 22 */
+	uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
+	size_t recv_len;
+	uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
+	size_t send_len;
+	size_t send_offset;
+	bool subscribed;	 /* client subscribed to notifications */
+	uint32_t event_mask;	 /* LOTA_IPC_EVENT_* subscription mask */
+	bool notify_pending;	 /* notification queued behind current send */
+	uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
+	bool shutdown_on_flush;	 /* trigger graceful daemon stop after reply */
+	struct ipc_client *next;
 };
 
-static int read_pid_start_time_ticks(pid_t pid, uint64_t *start_time_ticks) {
-  char path[64];
-  FILE *fp;
-  char line[4096];
-  char *rparen;
-  char *field;
-  char *saveptr = NULL;
-  int field_index = 3;
+static int read_pid_start_time_ticks(pid_t pid, uint64_t *start_time_ticks)
+{
+	char path[64];
+	FILE *fp;
+	char line[4096];
+	char *rparen;
+	char *field;
+	char *saveptr = NULL;
+	int field_index = 3;
 
-  if (!start_time_ticks || pid <= 0)
-    return -EINVAL;
+	if (!start_time_ticks || pid <= 0)
+		return -EINVAL;
 
-  snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-  fp = fopen(path, "r");
-  if (!fp)
-    return -errno;
+	snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+	fp = fopen(path, "r");
+	if (!fp)
+		return -errno;
 
-  if (!fgets(line, sizeof(line), fp)) {
-    int err = ferror(fp) ? -errno : -EIO;
-    fclose(fp);
-    return err;
-  }
-  fclose(fp);
+	if (!fgets(line, sizeof(line), fp)) {
+		int err = ferror(fp) ? -errno : -EIO;
+		fclose(fp);
+		return err;
+	}
+	fclose(fp);
 
-  rparen = strrchr(line, ')');
-  if (!rparen)
-    return -EINVAL;
+	rparen = strrchr(line, ')');
+	if (!rparen)
+		return -EINVAL;
 
-  field = rparen + 2;
-  if (*field == '\0')
-    return -EINVAL;
+	field = rparen + 2;
+	if (*field == '\0')
+		return -EINVAL;
 
-  for (char *tok = strtok_r(field, " ", &saveptr); tok;
-       tok = strtok_r(NULL, " ", &saveptr), field_index++) {
-    if (field_index == 22) {
-      char *end = NULL;
-      unsigned long long val;
+	for (char *tok = strtok_r(field, " ", &saveptr); tok;
+	     tok = strtok_r(NULL, " ", &saveptr), field_index++) {
+		if (field_index == 22) {
+			char *end = NULL;
+			unsigned long long val;
 
-      errno = 0;
-      val = strtoull(tok, &end, 10);
-      if (errno != 0 || end == tok || (end && *end != '\0'))
-        return -EINVAL;
+			errno = 0;
+			val = strtoull(tok, &end, 10);
+			if (errno != 0 || end == tok || (end && *end != '\0'))
+				return -EINVAL;
 
-      *start_time_ticks = (uint64_t)val;
-      return 0;
-    }
-  }
+			*start_time_ticks = (uint64_t)val;
+			return 0;
+		}
+	}
 
-  return -EINVAL;
+	return -EINVAL;
 }
 
-static int read_pid_exe_path(pid_t pid, char *out, size_t out_len) {
-  char proc_path[64];
-  ssize_t n;
+static int read_pid_exe_path(pid_t pid, char *out, size_t out_len)
+{
+	char proc_path[64];
+	ssize_t n;
 
-  if (!out || out_len < 2 || pid <= 0)
-    return -EINVAL;
+	if (!out || out_len < 2 || pid <= 0)
+		return -EINVAL;
 
-  snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", (int)pid);
-  n = readlink(proc_path, out, out_len - 1);
-  if (n < 0)
-    return -errno;
-  if (n == 0)
-    return -EINVAL;
+	snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", (int)pid);
+	n = readlink(proc_path, out, out_len - 1);
+	if (n < 0)
+		return -errno;
+	if (n == 0)
+		return -EINVAL;
 
-  out[n] = '\0';
+	out[n] = '\0';
 
-  /* refuse inaccessible/deleted executable targets */
-  if (strstr(out, " (deleted)") != NULL)
-    return -ENOENT;
+	/* refuse inaccessible/deleted executable targets */
+	if (strstr(out, " (deleted)") != NULL)
+		return -ENOENT;
 
-  if (out[0] != '/')
-    return -EINVAL;
+	if (out[0] != '/')
+		return -EINVAL;
 
-  return 0;
+	return 0;
 }
 
-static int is_allowed_verity_digest(const struct lota_verity_digest_key *key) {
-  if (!key || key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
-    return 0;
+static int is_allowed_verity_digest(const struct lota_verity_digest_key *key)
+{
+	if (!key || key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+		return 0;
 
-  if (!g_agent.policy_verity_digests || g_agent.policy_verity_digest_count <= 0)
-    return 0;
+	if (!g_agent.policy_verity_digests ||
+	    g_agent.policy_verity_digest_count <= 0)
+		return 0;
 
-  for (int i = 0; i < g_agent.policy_verity_digest_count; i++) {
-    const struct lota_verity_digest_key *allowed =
-        &g_agent.policy_verity_digests[i];
-    if (!allowed || allowed->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
-      continue;
-    if (CRYPTO_memcmp(allowed->digest, key->digest,
-                      LOTA_VERITY_DIGEST_SHA512_SIZE) == 0)
-      return 1;
-  }
+	for (int i = 0; i < g_agent.policy_verity_digest_count; i++) {
+		const struct lota_verity_digest_key *allowed =
+		    &g_agent.policy_verity_digests[i];
+		if (!allowed || allowed->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+			continue;
+		if (CRYPTO_memcmp(allowed->digest, key->digest,
+				  LOTA_VERITY_DIGEST_SHA512_SIZE) == 0)
+			return 1;
+	}
 
-  return 0;
+	return 0;
 }
 
-static int ipc_client_has_trusted_executable(const struct ipc_client *client) {
-  char exe_path[PATH_MAX];
-  struct lota_verity_digest_key digest = {0};
-  int ret;
+static int ipc_client_has_trusted_executable(const struct ipc_client *client)
+{
+	char exe_path[PATH_MAX];
+	struct lota_verity_digest_key digest = {0};
+	int ret;
 
-  if (!client)
-    return 0;
+	if (!client)
+		return 0;
 
-  ret = read_pid_exe_path(client->peer_pid, exe_path, sizeof(exe_path));
-  if (ret < 0)
-    return 0;
+	ret = read_pid_exe_path(client->peer_pid, exe_path, sizeof(exe_path));
+	if (ret < 0)
+		return 0;
 
-  ret = bpf_loader_measure_verity_digest(exe_path, &digest);
-  if (ret < 0)
-    return 0;
+	ret = bpf_loader_measure_verity_digest(exe_path, &digest);
+	if (ret < 0)
+		return 0;
 
-  return is_allowed_verity_digest(&digest);
+	return is_allowed_verity_digest(&digest);
 }
 
-static uint32_t client_map_hash_fd(int fd) {
-  return (uint32_t)fd * 2654435761u;
+static uint32_t client_map_hash_fd(int fd)
+{
+	return (uint32_t)fd * 2654435761u;
 }
 
-static void client_map_init(struct ipc_context *ctx) {
-  for (size_t i = 0; i < IPC_CLIENT_MAP_SIZE; i++) {
-    ctx->client_map[i].fd = IPC_CLIENT_FD_EMPTY;
-    ctx->client_map[i].client = NULL;
-  }
+static void client_map_init(struct ipc_context *ctx)
+{
+	for (size_t i = 0; i < IPC_CLIENT_MAP_SIZE; i++) {
+		ctx->client_map[i].fd = IPC_CLIENT_FD_EMPTY;
+		ctx->client_map[i].client = NULL;
+	}
 }
 
 static int client_map_insert(struct ipc_context *ctx, int fd,
-                             struct ipc_client *client) {
-  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
-  uint32_t idx = client_map_hash_fd(fd) & mask;
-  int tomb = -1;
+			     struct ipc_client *client)
+{
+	uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+	uint32_t idx = client_map_hash_fd(fd) & mask;
+	int tomb = -1;
 
-  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
-    struct ipc_client_map_entry *e = &ctx->client_map[idx];
+	for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+		struct ipc_client_map_entry *e = &ctx->client_map[idx];
 
-    if (e->fd == fd) {
-      e->client = client;
-      return 0;
-    }
+		if (e->fd == fd) {
+			e->client = client;
+			return 0;
+		}
 
-    if (e->fd == IPC_CLIENT_FD_EMPTY) {
-      if (tomb >= 0)
-        e = &ctx->client_map[tomb];
-      e->fd = fd;
-      e->client = client;
-      return 0;
-    }
+		if (e->fd == IPC_CLIENT_FD_EMPTY) {
+			if (tomb >= 0)
+				e = &ctx->client_map[tomb];
+			e->fd = fd;
+			e->client = client;
+			return 0;
+		}
 
-    if (e->fd == IPC_CLIENT_FD_TOMB && tomb < 0)
-      tomb = (int)idx;
+		if (e->fd == IPC_CLIENT_FD_TOMB && tomb < 0)
+			tomb = (int)idx;
 
-    idx = (idx + 1) & mask;
-  }
+		idx = (idx + 1) & mask;
+	}
 
-  if (tomb >= 0) {
-    struct ipc_client_map_entry *e = &ctx->client_map[tomb];
-    e->fd = fd;
-    e->client = client;
-    return 0;
-  }
+	if (tomb >= 0) {
+		struct ipc_client_map_entry *e = &ctx->client_map[tomb];
+		e->fd = fd;
+		e->client = client;
+		return 0;
+	}
 
-  return -1;
+	return -1;
 }
 
-static struct ipc_client *client_map_find(struct ipc_context *ctx, int fd) {
-  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
-  uint32_t idx = client_map_hash_fd(fd) & mask;
+static struct ipc_client *client_map_find(struct ipc_context *ctx, int fd)
+{
+	uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+	uint32_t idx = client_map_hash_fd(fd) & mask;
 
-  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
-    struct ipc_client_map_entry *e = &ctx->client_map[idx];
-    if (e->fd == fd)
-      return e->client;
-    if (e->fd == IPC_CLIENT_FD_EMPTY)
-      return NULL;
-    idx = (idx + 1) & mask;
-  }
+	for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+		struct ipc_client_map_entry *e = &ctx->client_map[idx];
+		if (e->fd == fd)
+			return e->client;
+		if (e->fd == IPC_CLIENT_FD_EMPTY)
+			return NULL;
+		idx = (idx + 1) & mask;
+	}
 
-  return NULL;
+	return NULL;
 }
 
-static void client_map_remove(struct ipc_context *ctx, int fd) {
-  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
-  uint32_t idx = client_map_hash_fd(fd) & mask;
+static void client_map_remove(struct ipc_context *ctx, int fd)
+{
+	uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+	uint32_t idx = client_map_hash_fd(fd) & mask;
 
-  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
-    struct ipc_client_map_entry *e = &ctx->client_map[idx];
-    if (e->fd == fd) {
-      e->fd = IPC_CLIENT_FD_TOMB;
-      e->client = NULL;
-      return;
-    }
-    if (e->fd == IPC_CLIENT_FD_EMPTY)
-      return;
-    idx = (idx + 1) & mask;
-  }
+	for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+		struct ipc_client_map_entry *e = &ctx->client_map[idx];
+		if (e->fd == fd) {
+			e->fd = IPC_CLIENT_FD_TOMB;
+			e->client = NULL;
+			return;
+		}
+		if (e->fd == IPC_CLIENT_FD_EMPTY)
+			return;
+		idx = (idx + 1) & mask;
+	}
 }
 
 _Static_assert(
     LOTA_IPC_MAX_PAYLOAD <= 65536,
     "IPC payload cap must be bounded to prevent excessive memory use");
 
-static int set_nonblocking(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0)
-    return -errno;
-  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-    return -errno;
-  return 0;
+static int set_nonblocking(int fd)
+{
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return -errno;
+	if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+		return -errno;
+	return 0;
 }
 
-static int ensure_socket_dir(void) {
-  int dirfd;
-  struct stat st;
-  struct group *grp;
-  gid_t lota_gid = (gid_t)-1;
-  int err;
+static int ensure_socket_dir(void)
+{
+	int dirfd;
+	struct stat st;
+	struct group *grp;
+	gid_t lota_gid = (gid_t)-1;
+	int err;
 
-  grp = getgrnam(LOTA_GROUP_NAME);
-  if (grp)
-    lota_gid = grp->gr_gid;
+	grp = getgrnam(LOTA_GROUP_NAME);
+	if (grp)
+		lota_gid = grp->gr_gid;
 
-  if (mkdir(SOCKET_DIR, 0750) < 0 && errno != EEXIST)
-    return -errno;
+	if (mkdir(SOCKET_DIR, 0750) < 0 && errno != EEXIST)
+		return -errno;
 
-  dirfd = open(SOCKET_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (dirfd < 0)
-    return -errno;
+	dirfd =
+	    open(SOCKET_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (dirfd < 0)
+		return -errno;
 
-  if (fstat(dirfd, &st) < 0) {
-    err = errno;
-    close(dirfd);
-    return -err;
-  }
+	if (fstat(dirfd, &st) < 0) {
+		err = errno;
+		close(dirfd);
+		return -err;
+	}
 
-  if (!S_ISDIR(st.st_mode)) {
-    close(dirfd);
-    return -ENOTDIR;
-  }
+	if (!S_ISDIR(st.st_mode)) {
+		close(dirfd);
+		return -ENOTDIR;
+	}
 
-  if (st.st_uid != 0) {
-    close(dirfd);
-    return -EACCES;
-  }
+	if (st.st_uid != 0) {
+		close(dirfd);
+		return -EACCES;
+	}
 
-  if ((st.st_mode & 0777) != 0750) {
-    if (fchmod(dirfd, 0750) < 0) {
-      err = errno;
-      close(dirfd);
-      return -err;
-    }
-  }
+	if ((st.st_mode & 0777) != 0750) {
+		if (fchmod(dirfd, 0750) < 0) {
+			err = errno;
+			close(dirfd);
+			return -err;
+		}
+	}
 
-  if (lota_gid != (gid_t)-1 && st.st_gid != lota_gid) {
-    if (fchown(dirfd, (uid_t)-1, lota_gid) < 0) {
-      err = errno;
-      close(dirfd);
-      lota_warn("fchown(%s, -1, %u) failed: %s", SOCKET_DIR, (unsigned)lota_gid,
-                strerror(err));
-      return -err;
-    }
-  }
+	if (lota_gid != (gid_t)-1 && st.st_gid != lota_gid) {
+		if (fchown(dirfd, (uid_t)-1, lota_gid) < 0) {
+			err = errno;
+			close(dirfd);
+			lota_warn("fchown(%s, -1, %u) failed: %s", SOCKET_DIR,
+				  (unsigned)lota_gid, strerror(err));
+			return -err;
+		}
+	}
 
-  close(dirfd);
+	close(dirfd);
 
-  return 0;
+	return 0;
 }
 
 static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
-                                        uid_t uid, gid_t gid, pid_t pid) {
-  struct ipc_client *client;
+					uid_t uid, gid_t gid, pid_t pid)
+{
+	struct ipc_client *client;
 
-  if (ctx->client_count >= MAX_CONNECTED_CLIENTS) {
-    lota_warn("Max clients (%d) reached, rejecting connection",
-              MAX_CONNECTED_CLIENTS);
-    return NULL;
-  }
+	if (ctx->client_count >= MAX_CONNECTED_CLIENTS) {
+		lota_warn("Max clients (%d) reached, rejecting connection",
+			  MAX_CONNECTED_CLIENTS);
+		return NULL;
+	}
 
-  client = calloc(1, sizeof(*client));
-  if (!client)
-    return NULL;
+	client = calloc(1, sizeof(*client));
+	if (!client)
+		return NULL;
 
-  client->fd = fd;
-  client->peer_uid = uid;
-  client->peer_gid = gid;
-  client->peer_pid = pid;
+	client->fd = fd;
+	client->peer_uid = uid;
+	client->peer_gid = gid;
+	client->peer_pid = pid;
 
-  if (client_map_insert(ctx, fd, client) < 0) {
-    free(client);
-    return NULL;
-  }
+	if (client_map_insert(ctx, fd, client) < 0) {
+		free(client);
+		return NULL;
+	}
 
-  client->next = ctx->client_list;
-  ctx->client_list = client;
-  ctx->client_count++;
+	client->next = ctx->client_list;
+	ctx->client_list = client;
+	ctx->client_count++;
 
-  return client;
+	return client;
 }
 
-static struct ipc_client *client_find(struct ipc_context *ctx, int fd) {
-  return client_map_find(ctx, fd);
+static struct ipc_client *client_find(struct ipc_context *ctx, int fd)
+{
+	return client_map_find(ctx, fd);
 }
 
-static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
-  struct ipc_client **pp = &ctx->client_list;
+static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
+{
+	struct ipc_client **pp = &ctx->client_list;
 
-  client_map_remove(ctx, client->fd);
+	client_map_remove(ctx, client->fd);
 
-  while (*pp) {
-    if (*pp == client) {
-      *pp = client->next;
-      ctx->client_count--;
-      if (client->shutdown_on_flush)
-        g_agent.running = 0;
-      ipc_secure_bzero(client->recv_buf, sizeof(client->recv_buf));
-      ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
-      close(client->fd);
-      free(client);
-      return;
-    }
-    pp = &(*pp)->next;
-  }
+	while (*pp) {
+		if (*pp == client) {
+			*pp = client->next;
+			ctx->client_count--;
+			if (client->shutdown_on_flush)
+				g_agent.running = 0;
+			ipc_secure_bzero(client->recv_buf,
+					 sizeof(client->recv_buf));
+			ipc_secure_bzero(client->send_buf,
+					 sizeof(client->send_buf));
+			close(client->fd);
+			free(client);
+			return;
+		}
+		pp = &(*pp)->next;
+	}
 }
 
-static void build_error_response(struct ipc_client *client, uint32_t result) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
+static void build_error_response(struct ipc_client *client, uint32_t result)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
 
-  ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
+	ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = result;
-  resp->payload_len = 0;
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = result;
+	resp->payload_len = 0;
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE;
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE;
+	client->send_offset = 0;
 }
 
 /*
@@ -535,28 +561,29 @@ static void build_error_response(struct ipc_client *client, uint32_t result) {
  * - executable fs-verity digest present in current policy allowlist.
  */
 static int ipc_client_is_privileged(struct ipc_context *ctx,
-                                    const struct ipc_client *client) {
-  uint64_t current_ticks = 0;
+				    const struct ipc_client *client)
+{
+	uint64_t current_ticks = 0;
 
-  if (!ctx || !client)
-    return 0;
+	if (!ctx || !client)
+		return 0;
 
-  if (client->peer_uid != geteuid())
-    return 0;
+	if (client->peer_uid != geteuid())
+		return 0;
 
-  if (client->peer_start_time_ticks == 0)
-    return 0;
+	if (client->peer_start_time_ticks == 0)
+		return 0;
 
-  if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
-    return 0;
+	if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
+		return 0;
 
-  if (current_ticks != client->peer_start_time_ticks)
-    return 0;
+	if (current_ticks != client->peer_start_time_ticks)
+		return 0;
 
-  if (!ipc_client_has_trusted_executable(client))
-    return 0;
+	if (!ipc_client_has_trusted_executable(client))
+		return 0;
 
-  return 1;
+	return 1;
 }
 
 /*
@@ -565,109 +592,116 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
  * Same-UID authorization is too broad when the agent runs as root because it
  * allows any root peer to passively monitor enforcement transitions.
  */
-static int ipc_client_is_agent_self(const struct ipc_client *client) {
-  if (!client)
-    return 0;
+static int ipc_client_is_agent_self(const struct ipc_client *client)
+{
+	if (!client)
+		return 0;
 
-  if (client->peer_uid != geteuid())
-    return 0;
+	if (client->peer_uid != geteuid())
+		return 0;
 
-  return client->peer_pid == getpid();
+	return client->peer_pid == getpid();
 }
 
 static void build_notification(struct ipc_context *ctx,
-                               struct ipc_client *client, uint32_t events) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_notify *notify;
+			       struct ipc_client *client, uint32_t events)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_notify *notify;
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_NOTIFY;
-  resp->payload_len = sizeof(*notify);
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_NOTIFY;
+	resp->payload_len = sizeof(*notify);
 
-  notify = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  notify->events = events;
-  notify->flags = ctx->status_flags;
-  notify->last_attest_time = ctx->last_attest_time;
-  notify->valid_until = ctx->valid_until;
-  notify->attest_count = ctx->attest_count;
-  notify->fail_count = ctx->fail_count;
-  notify->mode = ctx->mode;
-  memset(notify->reserved, 0, sizeof(notify->reserved));
+	notify = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	notify->events = events;
+	notify->flags = ctx->status_flags;
+	notify->last_attest_time = ctx->last_attest_time;
+	notify->valid_until = ctx->valid_until;
+	notify->attest_count = ctx->attest_count;
+	notify->fail_count = ctx->fail_count;
+	notify->mode = ctx->mode;
+	memset(notify->reserved, 0, sizeof(notify->reserved));
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*notify);
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*notify);
+	client->send_offset = 0;
 }
 
 static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
-                        uint32_t events) {
-  uint32_t relevant = events & client->event_mask;
+			uint32_t events)
+{
+	uint32_t relevant = events & client->event_mask;
 
-  if (!relevant)
-    return;
+	if (!relevant)
+		return;
 
-  if (client->send_len > client->send_offset) {
-    /* send in progress -> accumulate */
-    client->notify_pending = true;
-    client->pending_events |= relevant;
-    return;
-  }
+	if (client->send_len > client->send_offset) {
+		/* send in progress -> accumulate */
+		client->notify_pending = true;
+		client->pending_events |= relevant;
+		return;
+	}
 
-  build_notification(ctx, client, relevant);
+	build_notification(ctx, client, relevant);
 }
 
-static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
-  struct ipc_client *c = ctx->client_list;
-  while (c) {
-    if (c->subscribed)
-      push_notify(ctx, c, events);
-    c = c->next;
-  }
+static void notify_subscribers(struct ipc_context *ctx, uint32_t events)
+{
+	struct ipc_client *c = ctx->client_list;
+	while (c) {
+		if (c->subscribed)
+			push_notify(ctx, c, events);
+		c = c->next;
+	}
 }
 
-static void handle_ping(struct ipc_context *ctx, struct ipc_client *client) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_ping_response *ping;
+static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_ping_response *ping;
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = sizeof(*ping);
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = sizeof(*ping);
 
-  ping = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  {
-    uint64_t now = monotonic_now_sec();
-    ping->uptime_sec =
-        (now >= ctx->start_time_sec) ? (now - ctx->start_time_sec) : 0;
-  }
-  ping->pid = (uint32_t)getpid();
+	ping = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	{
+		uint64_t now = monotonic_now_sec();
+		ping->uptime_sec = (now >= ctx->start_time_sec)
+				       ? (now - ctx->start_time_sec)
+				       : 0;
+	}
+	ping->pid = (uint32_t)getpid();
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*ping);
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*ping);
+	client->send_offset = 0;
 }
 
 static void handle_get_status(struct ipc_context *ctx,
-                              struct ipc_client *client) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_status *status;
+			      struct ipc_client *client)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_status *status;
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = sizeof(*status);
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = sizeof(*status);
 
-  status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  status->flags = ctx->status_flags;
-  status->last_attest_time = ctx->last_attest_time;
-  status->valid_until = ctx->valid_until;
-  status->attest_count = ctx->attest_count;
-  status->fail_count = ctx->fail_count;
-  status->mode = ctx->mode;
-  status->_reserved1 = 0;
-  memset(status->reserved, 0, sizeof(status->reserved));
+	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	status->flags = ctx->status_flags;
+	status->last_attest_time = ctx->last_attest_time;
+	status->valid_until = ctx->valid_until;
+	status->attest_count = ctx->attest_count;
+	status->fail_count = ctx->fail_count;
+	status->mode = ctx->mode;
+	status->_reserved1 = 0;
+	memset(status->reserved, 0, sizeof(status->reserved));
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*status);
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*status);
+	client->send_offset = 0;
 }
 
 /*
@@ -680,213 +714,223 @@ static void handle_get_status(struct ipc_context *ctx,
  * binding the signature to both the token metadata and the client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
-                             const uint8_t *payload, uint32_t payload_len) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_token *token;
-  struct lota_ipc_token_request req_local;
-  bool has_req = false;
-  uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
-  uint8_t runtime_protect_digest[32] = {0};
-  struct tpm_quote_response quote;
-  uint8_t *data_ptr;
-  uint32_t *runtime_pids = NULL;
-  uint32_t runtime_pid_count = 0;
-  uint16_t pid_list_size = 0;
-  size_t total_size;
-  int ret;
-  bool fail = false;
-  uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
+			     const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_token *token;
+	struct lota_ipc_token_request req_local;
+	bool has_req = false;
+	uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
+	uint8_t runtime_protect_digest[32] = {0};
+	struct tpm_quote_response quote;
+	uint8_t *data_ptr;
+	uint32_t *runtime_pids = NULL;
+	uint32_t runtime_pid_count = 0;
+	uint16_t pid_list_size = 0;
+	size_t total_size;
+	int ret;
+	bool fail = false;
+	uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
 
-  memset(&quote, 0, sizeof(quote));
+	memset(&quote, 0, sizeof(quote));
 
-  if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
-    fail = true;
-    fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
-    goto out;
-  }
+	if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
+		goto out;
+	}
 
-  /*
-   * Refuse to issue tokens while the TPM is in DA lockout: a Quote
-   * attempt would either hang the IPC thread on retry or surface a
-   * second-class error to the client. Fail closed with a dedicated
-   * status code so SDK consumers can back off coherently.
-   */
-  if (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) {
-    fail = true;
-    fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
-    goto out;
-  }
+	/*
+	 * Refuse to issue tokens while the TPM is in DA lockout: a Quote
+	 * attempt would either hang the IPC thread on retry or surface a
+	 * second-class error to the client. Fail closed with a dedicated
+	 * status code so SDK consumers can back off coherently.
+	 */
+	if (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
+		goto out;
+	}
 
-  /* rate limit GET_TOKEN per peer UID */
-  if (check_get_token_rate_limit(client->peer_uid) < 0) {
-    lota_warn("rate limited GET_TOKEN for uid=%d pid=%d", client->peer_uid,
-              client->peer_pid);
-    fail = true;
-    fail_code = LOTA_IPC_ERR_RATE_LIMITED;
-    goto out;
-  }
+	/* rate limit GET_TOKEN per peer UID */
+	if (check_get_token_rate_limit(client->peer_uid) < 0) {
+		lota_warn("rate limited GET_TOKEN for uid=%d pid=%d",
+			  client->peer_uid, client->peer_pid);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_RATE_LIMITED;
+		goto out;
+	}
 
-  if (payload_len >= sizeof(req_local)) {
-    memcpy(&req_local, payload, sizeof(req_local));
-    has_req = true;
-  }
+	if (payload_len >= sizeof(req_local)) {
+		memcpy(&req_local, payload, sizeof(req_local));
+		has_req = true;
+	}
 
-  token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 
-  token->valid_until = ctx->valid_until;
-  token->flags = ctx->status_flags;
-  token->pcr_mask = ctx->quote_pcr_mask;
+	token->valid_until = ctx->valid_until;
+	token->flags = ctx->status_flags;
+	token->pcr_mask = ctx->quote_pcr_mask;
 
-  if (!g_agent.policy_digest_set) {
-    lota_err("Refusing GET_TOKEN: policy_digest is not set");
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
-  memcpy(token->policy_digest, g_agent.policy_digest,
-         sizeof(token->policy_digest));
+	if (!g_agent.policy_digest_set) {
+		lota_err("Refusing GET_TOKEN: policy_digest is not set");
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
+	memcpy(token->policy_digest, g_agent.policy_digest,
+	       sizeof(token->policy_digest));
 
-  ret = build_canonical_runtime_pid_list(&runtime_pids, &runtime_pid_count);
-  if (ret < 0) {
-    lota_err("failed to canonicalize protected PID set: %s", strerror(-ret));
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
+	ret =
+	    build_canonical_runtime_pid_list(&runtime_pids, &runtime_pid_count);
+	if (ret < 0) {
+		lota_err("failed to canonicalize protected PID set: %s",
+			 strerror(-ret));
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
 
-  if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
-    lota_err("runtime protected PID count too large: %u", runtime_pid_count);
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
+	if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
+		lota_err("runtime protected PID count too large: %u",
+			 runtime_pid_count);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
 
-  {
-    size_t pid_bytes = (size_t)runtime_pid_count * sizeof(uint32_t);
-    if (pid_bytes > UINT16_MAX) {
-      fail = true;
-      fail_code = LOTA_IPC_ERR_INTERNAL;
-      goto out;
-    }
-    pid_list_size = (uint16_t)pid_bytes;
-  }
+	{
+		size_t pid_bytes = (size_t)runtime_pid_count * sizeof(uint32_t);
+		if (pid_bytes > UINT16_MAX) {
+			fail = true;
+			fail_code = LOTA_IPC_ERR_INTERNAL;
+			goto out;
+		}
+		pid_list_size = (uint16_t)pid_bytes;
+	}
 
-  ret = lota_compute_runtime_protect_digest(runtime_pids, runtime_pid_count,
-                                            runtime_protect_digest);
-  if (ret < 0) {
-    lota_err("runtime protected PID digest computation failed: %s",
-             strerror(-ret));
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
+	ret = lota_compute_runtime_protect_digest(
+	    runtime_pids, runtime_pid_count, runtime_protect_digest);
+	if (ret < 0) {
+		lota_err("runtime protected PID digest computation failed: %s",
+			 strerror(-ret));
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
 
-  memcpy(token->runtime_protect_digest, runtime_protect_digest,
-         sizeof(token->runtime_protect_digest));
-  token->runtime_protect_epoch = g_agent.policy_protect_epoch;
-  token->protect_pid_count = runtime_pid_count;
-  token->pid_list_size = pid_list_size;
-  token->_reserved1 = 0;
+	memcpy(token->runtime_protect_digest, runtime_protect_digest,
+	       sizeof(token->runtime_protect_digest));
+	token->runtime_protect_epoch = g_agent.policy_protect_epoch;
+	token->protect_pid_count = runtime_pid_count;
+	token->pid_list_size = pid_list_size;
+	token->_reserved1 = 0;
 
-  if (has_req)
-    memcpy(token->client_nonce, req_local.nonce, 32);
-  else
-    memset(token->client_nonce, 0, 32);
+	if (has_req)
+		memcpy(token->client_nonce, req_local.nonce, 32);
+	else
+		memset(token->client_nonce, 0, 32);
 
-  /* TPM context is required - refuse to issue unsigned tokens */
-  if (!ctx->tpm) {
-    fail = true;
-    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
-    goto out;
-  }
+	/* TPM context is required - refuse to issue unsigned tokens */
+	if (!ctx->tpm) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+		goto out;
+	}
 
-  ret = lota_compute_token_quote_nonce(
-      token->valid_until, token->flags, token->pcr_mask, token->client_nonce,
-      token->policy_digest, token->runtime_protect_digest,
-      token->runtime_protect_epoch, binding_nonce);
-  if (ret < 0) {
-    lota_err("token quote nonce computation failed: %s", strerror(-ret));
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
+	ret = lota_compute_token_quote_nonce(
+	    token->valid_until, token->flags, token->pcr_mask,
+	    token->client_nonce, token->policy_digest,
+	    token->runtime_protect_digest, token->runtime_protect_epoch,
+	    binding_nonce);
+	if (ret < 0) {
+		lota_err("token quote nonce computation failed: %s",
+			 strerror(-ret));
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
 
-  ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
-  if (ret < 0) {
-    lota_err("tpm_quote failed: %s", tpm_strerror(ret));
-    fail = true;
-    /*
-     * tpm_quote() latches lockout_active on the tpm_context the
-     * first time TPM2_RC_LOCKOUT is observed. The continuous
-     * attestation loop folds that bit into ctx->status_flags on
-     * its next round, but GET_TOKEN may be the path that triggered
-     * the transition. Surface LOTA_IPC_ERR_TPM_LOCKOUT directly
-     * and seed the IPC status so the next request short-circuits
-     * at the early-reject branch above instead of repeating the
-     * doomed quote.
-     */
-    if (tpm_is_locked_out(ctx->tpm)) {
-      fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
-      ipc_update_status(ctx, ctx->status_flags | LOTA_STATUS_TPM_LOCKOUT,
-                        ctx->valid_until);
-    } else {
-      fail_code = LOTA_IPC_ERR_TPM_FAILURE;
-    }
-    goto out;
-  }
+	ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
+	if (ret < 0) {
+		lota_err("tpm_quote failed: %s", tpm_strerror(ret));
+		fail = true;
+		/*
+		 * tpm_quote() latches lockout_active on the tpm_context the
+		 * first time TPM2_RC_LOCKOUT is observed. The continuous
+		 * attestation loop folds that bit into ctx->status_flags on
+		 * its next round, but GET_TOKEN may be the path that triggered
+		 * the transition. Surface LOTA_IPC_ERR_TPM_LOCKOUT directly
+		 * and seed the IPC status so the next request short-circuits
+		 * at the early-reject branch above instead of repeating the
+		 * doomed quote.
+		 */
+		if (tpm_is_locked_out(ctx->tpm)) {
+			fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
+			ipc_update_status(
+			    ctx, ctx->status_flags | LOTA_STATUS_TPM_LOCKOUT,
+			    ctx->valid_until);
+		} else {
+			fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+		}
+		goto out;
+	}
 
-  /* check buffer space */
-  total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size + quote.attest_size +
-               quote.signature_size;
-  if (total_size > LOTA_IPC_MAX_PAYLOAD) {
-    lota_err("token too large (%zu bytes)", total_size);
-    fail = true;
-    fail_code = LOTA_IPC_ERR_INTERNAL;
-    goto out;
-  }
+	/* check buffer space */
+	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
+		     quote.attest_size + quote.signature_size;
+	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
+		lota_err("token too large (%zu bytes)", total_size);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
 
-  token->attest_size = quote.attest_size;
-  token->sig_size = quote.signature_size;
-  token->sig_alg = quote.sig_alg;
-  token->hash_alg = quote.hash_alg;
-  if (quote.pcr_mask != token->pcr_mask) {
-    lota_err("tpm_quote returned unexpected pcr_mask=0x%X (expected 0x%X)",
-             quote.pcr_mask, token->pcr_mask);
-    fail = true;
-    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
-    goto out;
-  }
+	token->attest_size = quote.attest_size;
+	token->sig_size = quote.signature_size;
+	token->sig_alg = quote.sig_alg;
+	token->hash_alg = quote.hash_alg;
+	if (quote.pcr_mask != token->pcr_mask) {
+		lota_err("tpm_quote returned unexpected pcr_mask=0x%X "
+			 "(expected 0x%X)",
+			 quote.pcr_mask, token->pcr_mask);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+		goto out;
+	}
 
-  data_ptr =
-      client->send_buf + LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
-  for (uint32_t i = 0; i < runtime_pid_count; i++) {
-    uint8_t pid_le[4];
-    lota__write_le32(pid_le, runtime_pids[i]);
-    memcpy(data_ptr, pid_le, sizeof(pid_le));
-    data_ptr += sizeof(pid_le);
-  }
-  memcpy(data_ptr, quote.attest_data, quote.attest_size);
-  data_ptr += quote.attest_size;
-  memcpy(data_ptr, quote.signature, quote.signature_size);
+	data_ptr = client->send_buf + LOTA_IPC_RESPONSE_SIZE +
+		   LOTA_IPC_TOKEN_HEADER_SIZE;
+	for (uint32_t i = 0; i < runtime_pid_count; i++) {
+		uint8_t pid_le[4];
+		lota__write_le32(pid_le, runtime_pids[i]);
+		memcpy(data_ptr, pid_le, sizeof(pid_le));
+		data_ptr += sizeof(pid_le);
+	}
+	memcpy(data_ptr, quote.attest_data, quote.attest_size);
+	data_ptr += quote.attest_size;
+	memcpy(data_ptr, quote.signature, quote.signature_size);
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = (uint32_t)total_size;
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = (uint32_t)total_size;
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + total_size;
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + total_size;
+	client->send_offset = 0;
 
 out:
-  ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
-  ipc_secure_bzero(runtime_protect_digest, sizeof(runtime_protect_digest));
-  if (runtime_pids) {
-    OPENSSL_cleanse(runtime_pids, (size_t)runtime_pid_count * sizeof(uint32_t));
-    free(runtime_pids);
-  }
-  ipc_secure_bzero(&quote, sizeof(quote));
-  if (fail)
-    build_error_response(client, fail_code);
+	ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
+	ipc_secure_bzero(runtime_protect_digest,
+			 sizeof(runtime_protect_digest));
+	if (runtime_pids) {
+		OPENSSL_cleanse(runtime_pids,
+				(size_t)runtime_pid_count * sizeof(uint32_t));
+		free(runtime_pids);
+	}
+	ipc_secure_bzero(&quote, sizeof(quote));
+	if (fail)
+		build_error_response(client, fail_code);
 }
 
 /*
@@ -896,979 +940,1026 @@ out:
  * event_mask = 0 cancels any existing subscription.
  */
 static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
-                             const uint8_t *payload, uint32_t payload_len) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_subscribe_request sub;
-  (void)ctx;
+			     const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_subscribe_request sub;
+	(void)ctx;
 
-  if (!ipc_client_is_agent_self(client)) {
-    lota_warn("SUBSCRIBE denied for uid=%d pid=%d", client->peer_uid,
-              client->peer_pid);
-    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-    return;
-  }
+	if (!ipc_client_is_agent_self(client)) {
+		lota_warn("SUBSCRIBE denied for uid=%d pid=%d",
+			  client->peer_uid, client->peer_pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
 
-  if (payload_len < sizeof(sub)) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
+	if (payload_len < sizeof(sub)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
 
-  memcpy(&sub, payload, sizeof(sub));
+	memcpy(&sub, payload, sizeof(sub));
 
-  if (sub.event_mask == 0) {
-    client->subscribed = false;
-    client->event_mask = 0;
-    client->notify_pending = false;
-    client->pending_events = 0;
-  } else {
-    client->subscribed = true;
-    client->event_mask = sub.event_mask;
-  }
+	if (sub.event_mask == 0) {
+		client->subscribed = false;
+		client->event_mask = 0;
+		client->notify_pending = false;
+		client->pending_events = 0;
+	} else {
+		client->subscribed = true;
+		client->event_mask = sub.event_mask;
+	}
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = 0;
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = 0;
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE;
-  client->send_offset = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE;
+	client->send_offset = 0;
 }
 
-static int pid_set_contains(const uint32_t *pids, int count, uint32_t pid) {
-  if (!pids || count <= 0)
-    return 0;
-  for (int i = 0; i < count; i++) {
-    if (pids[i] == pid)
-      return 1;
-  }
-  return 0;
+static int pid_set_contains(const uint32_t *pids, int count, uint32_t pid)
+{
+	if (!pids || count <= 0)
+		return 0;
+	for (int i = 0; i < count; i++) {
+		if (pids[i] == pid)
+			return 1;
+	}
+	return 0;
 }
 
-static int u32_cmp(const void *a, const void *b) {
-  uint32_t av = *(const uint32_t *)a;
-  uint32_t bv = *(const uint32_t *)b;
-  if (av < bv)
-    return -1;
-  if (av > bv)
-    return 1;
-  return 0;
+static int u32_cmp(const void *a, const void *b)
+{
+	uint32_t av = *(const uint32_t *)a;
+	uint32_t bv = *(const uint32_t *)b;
+	if (av < bv)
+		return -1;
+	if (av > bv)
+		return 1;
+	return 0;
 }
 
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
-                                            uint32_t *out_count) {
-  uint32_t *canon = NULL;
-  uint32_t count = 0;
+					    uint32_t *out_count)
+{
+	uint32_t *canon = NULL;
+	uint32_t count = 0;
 
-  if (!out_pids || !out_count)
-    return -EINVAL;
-  *out_pids = NULL;
-  *out_count = 0;
+	if (!out_pids || !out_count)
+		return -EINVAL;
+	*out_pids = NULL;
+	*out_count = 0;
 
-  if (g_agent.policy_protect_pid_count < 0)
-    return -EINVAL;
+	if (g_agent.policy_protect_pid_count < 0)
+		return -EINVAL;
 
-  count = (uint32_t)g_agent.policy_protect_pid_count;
-  if (count == 0)
-    return 0;
-  if (!g_agent.policy_protect_pids)
-    return -EINVAL;
+	count = (uint32_t)g_agent.policy_protect_pid_count;
+	if (count == 0)
+		return 0;
+	if (!g_agent.policy_protect_pids)
+		return -EINVAL;
 
-  canon = calloc(count, sizeof(uint32_t));
-  if (!canon)
-    return -ENOMEM;
+	canon = calloc(count, sizeof(uint32_t));
+	if (!canon)
+		return -ENOMEM;
 
-  memcpy(canon, g_agent.policy_protect_pids, count * sizeof(uint32_t));
-  qsort(canon, count, sizeof(uint32_t), u32_cmp);
+	memcpy(canon, g_agent.policy_protect_pids, count * sizeof(uint32_t));
+	qsort(canon, count, sizeof(uint32_t), u32_cmp);
 
-  for (uint32_t i = 1; i < count; i++) {
-    if (canon[i - 1] == canon[i]) {
-      OPENSSL_cleanse(canon, count * sizeof(uint32_t));
-      free(canon);
-      return -EINVAL;
-    }
-  }
+	for (uint32_t i = 1; i < count; i++) {
+		if (canon[i - 1] == canon[i]) {
+			OPENSSL_cleanse(canon, count * sizeof(uint32_t));
+			free(canon);
+			return -EINVAL;
+		}
+	}
 
-  *out_pids = canon;
-  *out_count = count;
-  return 0;
+	*out_pids = canon;
+	*out_count = count;
+	return 0;
 }
 
 static int pid_set_add(const uint32_t *pids, int count, uint32_t pid,
-                       uint32_t **out, int *out_count) {
-  if (!out || !out_count)
-    return -EINVAL;
-  *out = NULL;
-  *out_count = 0;
-  if (count < 0)
-    return -EINVAL;
-  if (pid == 0)
-    return -EINVAL;
+		       uint32_t **out, int *out_count)
+{
+	if (!out || !out_count)
+		return -EINVAL;
+	*out = NULL;
+	*out_count = 0;
+	if (count < 0)
+		return -EINVAL;
+	if (pid == 0)
+		return -EINVAL;
 
-  if (pid_set_contains(pids, count, pid)) {
-    uint32_t *copy = NULL;
-    if (count > 0) {
-      copy = calloc((size_t)count, sizeof(uint32_t));
-      if (!copy)
-        return -ENOMEM;
-      memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
-    }
-    *out = copy;
-    *out_count = count;
-    return 0;
-  }
+	if (pid_set_contains(pids, count, pid)) {
+		uint32_t *copy = NULL;
+		if (count > 0) {
+			copy = calloc((size_t)count, sizeof(uint32_t));
+			if (!copy)
+				return -ENOMEM;
+			memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
+		}
+		*out = copy;
+		*out_count = count;
+		return 0;
+	}
 
-  uint32_t *new_pids = calloc((size_t)count + 1, sizeof(uint32_t));
-  if (!new_pids)
-    return -ENOMEM;
-  if (count > 0)
-    memcpy(new_pids, pids, (size_t)count * sizeof(uint32_t));
-  new_pids[count] = pid;
+	uint32_t *new_pids = calloc((size_t)count + 1, sizeof(uint32_t));
+	if (!new_pids)
+		return -ENOMEM;
+	if (count > 0)
+		memcpy(new_pids, pids, (size_t)count * sizeof(uint32_t));
+	new_pids[count] = pid;
 
-  /* keep sorted invariant */
-  for (int i = count; i > 0; i--) {
-    if (new_pids[i - 1] <= new_pids[i])
-      break;
-    uint32_t tmp = new_pids[i - 1];
-    new_pids[i - 1] = new_pids[i];
-    new_pids[i] = tmp;
-  }
+	/* keep sorted invariant */
+	for (int i = count; i > 0; i--) {
+		if (new_pids[i - 1] <= new_pids[i])
+			break;
+		uint32_t tmp = new_pids[i - 1];
+		new_pids[i - 1] = new_pids[i];
+		new_pids[i] = tmp;
+	}
 
-  *out = new_pids;
-  *out_count = count + 1;
-  return 0;
+	*out = new_pids;
+	*out_count = count + 1;
+	return 0;
 }
 
 static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
-                          uint32_t **out, int *out_count) {
-  if (!out || !out_count)
-    return -EINVAL;
-  *out = NULL;
-  *out_count = 0;
-  if (count < 0)
-    return -EINVAL;
-  if (pid == 0)
-    return -EINVAL;
+			  uint32_t **out, int *out_count)
+{
+	if (!out || !out_count)
+		return -EINVAL;
+	*out = NULL;
+	*out_count = 0;
+	if (count < 0)
+		return -EINVAL;
+	if (pid == 0)
+		return -EINVAL;
 
-  if (!pid_set_contains(pids, count, pid)) {
-    uint32_t *copy = NULL;
-    if (count > 0) {
-      copy = calloc((size_t)count, sizeof(uint32_t));
-      if (!copy)
-        return -ENOMEM;
-      memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
-    }
-    *out = copy;
-    *out_count = count;
-    return 0;
-  }
+	if (!pid_set_contains(pids, count, pid)) {
+		uint32_t *copy = NULL;
+		if (count > 0) {
+			copy = calloc((size_t)count, sizeof(uint32_t));
+			if (!copy)
+				return -ENOMEM;
+			memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
+		}
+		*out = copy;
+		*out_count = count;
+		return 0;
+	}
 
-  uint32_t *new_pids = NULL;
-  if (count - 1 > 0) {
-    new_pids = calloc((size_t)count - 1, sizeof(uint32_t));
-    if (!new_pids)
-      return -ENOMEM;
-  }
+	uint32_t *new_pids = NULL;
+	if (count - 1 > 0) {
+		new_pids = calloc((size_t)count - 1, sizeof(uint32_t));
+		if (!new_pids)
+			return -ENOMEM;
+	}
 
-  int w = 0;
-  for (int i = 0; i < count; i++) {
-    if (pids[i] == pid)
-      continue;
-    if (new_pids)
-      new_pids[w] = pids[i];
-    w++;
-  }
+	int w = 0;
+	for (int i = 0; i < count; i++) {
+		if (pids[i] == pid)
+			continue;
+		if (new_pids)
+			new_pids[w] = pids[i];
+		w++;
+	}
 
-  *out = new_pids;
-  *out_count = count - 1;
-  return 0;
+	*out = new_pids;
+	*out_count = count - 1;
+	return 0;
 }
 
 static void handle_protect_pid_update(struct ipc_context *ctx,
-                                      struct ipc_client *client,
-                                      const uint8_t *payload,
-                                      uint32_t payload_len, bool add) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  struct lota_ipc_pid_request req;
-  struct lota_ipc_policy_update *out;
-  uint32_t pid;
-  uint32_t *new_pids = NULL;
-  int new_count = 0;
-  int ret;
-  int had;
-  bool mutated = false;
+				      struct ipc_client *client,
+				      const uint8_t *payload,
+				      uint32_t payload_len, bool add)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_pid_request req;
+	struct lota_ipc_policy_update *out;
+	uint32_t pid;
+	uint32_t *new_pids = NULL;
+	int new_count = 0;
+	int ret;
+	int had;
+	bool mutated = false;
 
-  (void)ctx;
+	(void)ctx;
 
-  if (payload_len < sizeof(req)) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
-  memcpy(&req, payload, sizeof(req));
-  pid = req.pid;
-  if (pid == 0) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+	pid = req.pid;
+	if (pid == 0) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
 
-  /* privileged-only: this mutates enforcement policy */
-  if (!ipc_client_is_privileged(ctx, client)) {
-    lota_warn("%s denied for uid=%d pid=%d",
-              add ? "PROTECT_PID" : "UNPROTECT_PID", client->peer_uid,
-              client->peer_pid);
-    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-    return;
-  }
+	/* privileged-only: this mutates enforcement policy */
+	if (!ipc_client_is_privileged(ctx, client)) {
+		lota_warn("%s denied for uid=%d pid=%d",
+			  add ? "PROTECT_PID" : "UNPROTECT_PID",
+			  client->peer_uid, client->peer_pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
 
-  if (add && check_protect_pid_rate_limit(client->peer_uid) < 0) {
-    lota_warn("rate limited PROTECT_PID for uid=%d pid=%d target=%u",
-              client->peer_uid, client->peer_pid, pid);
-    build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
-    return;
-  }
+	if (add && check_protect_pid_rate_limit(client->peer_uid) < 0) {
+		lota_warn(
+		    "rate limited PROTECT_PID for uid=%d pid=%d target=%u",
+		    client->peer_uid, client->peer_pid, pid);
+		build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
+		return;
+	}
 
-  if (!g_agent.policy_snapshot_set || !g_agent.policy_digest_set) {
-    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-    return;
-  }
+	if (!g_agent.policy_snapshot_set || !g_agent.policy_digest_set) {
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
 
-  had = pid_set_contains(g_agent.policy_protect_pids,
-                         g_agent.policy_protect_pid_count, pid);
+	had = pid_set_contains(g_agent.policy_protect_pids,
+			       g_agent.policy_protect_pid_count, pid);
 
-  /* idempotent no-op: return current digest */
-  if ((add && had) || (!add && !had)) {
-    resp->magic = LOTA_IPC_MAGIC;
-    resp->version = LOTA_IPC_VERSION;
-    resp->result = LOTA_IPC_OK;
-    resp->payload_len = sizeof(*out);
-    out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-    memcpy(out->policy_digest, g_agent.policy_digest,
-           sizeof(out->policy_digest));
-    out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
-    out->_reserved1 = 0;
-    client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
-    client->send_offset = 0;
-    return;
-  }
+	/* idempotent no-op: return current digest */
+	if ((add && had) || (!add && !had)) {
+		resp->magic = LOTA_IPC_MAGIC;
+		resp->version = LOTA_IPC_VERSION;
+		resp->result = LOTA_IPC_OK;
+		resp->payload_len = sizeof(*out);
+		out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+		memcpy(out->policy_digest, g_agent.policy_digest,
+		       sizeof(out->policy_digest));
+		out->protect_pid_count =
+		    (uint32_t)g_agent.policy_protect_pid_count;
+		out->_reserved1 = 0;
+		client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
+		client->send_offset = 0;
+		return;
+	}
 
-  if (g_agent.policy_protect_epoch == UINT64_MAX) {
-    lota_err("Refusing runtime PID policy mutation: protect epoch exhausted");
-    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-    return;
-  }
+	if (g_agent.policy_protect_epoch == UINT64_MAX) {
+		lota_err("Refusing runtime PID policy mutation: protect epoch "
+			 "exhausted");
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
 
-  if (add) {
-    uint32_t required_slots =
-        (uint32_t)g_agent.policy_protect_pid_count + (had ? 0u : 1u);
+	if (add) {
+		uint32_t required_slots =
+		    (uint32_t)g_agent.policy_protect_pid_count +
+		    (had ? 0u : 1u);
 
-    if (required_slots > LOTA_MAX_PROTECTED_PIDS) {
-      lota_warn("Refusing PROTECT_PID %u: protected PID map capacity reached "
-                "(%d)",
-                pid, LOTA_MAX_PROTECTED_PIDS);
-      build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-      return;
-    }
-  }
+		if (required_slots > LOTA_MAX_PROTECTED_PIDS) {
+			lota_warn("Refusing PROTECT_PID %u: protected PID map "
+				  "capacity reached "
+				  "(%d)",
+				  pid, LOTA_MAX_PROTECTED_PIDS);
+			build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+			return;
+		}
+	}
 
-  /* attempt BPF update */
-  if (add) {
-    ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
-    if (ret < 0) {
-      lota_err("Failed to protect PID %u (IPC): %s", pid, strerror(-ret));
-      build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-      return;
-    }
-    mutated = true;
-  } else {
-    ret = bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
-    if (ret < 0) {
-      lota_err("Failed to unprotect PID %u (IPC): %s", pid, strerror(-ret));
-      build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-      return;
-    }
-    mutated = true;
-  }
+	/* attempt BPF update */
+	if (add) {
+		ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+		if (ret < 0) {
+			lota_err("Failed to protect PID %u (IPC): %s", pid,
+				 strerror(-ret));
+			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+			return;
+		}
+		mutated = true;
+	} else {
+		ret = bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+		if (ret < 0) {
+			lota_err("Failed to unprotect PID %u (IPC): %s", pid,
+				 strerror(-ret));
+			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+			return;
+		}
+		mutated = true;
+	}
 
-  /* update runtime PID set (does not affect startup policy digest) */
-  if (add) {
-    ret = pid_set_add(g_agent.policy_protect_pids,
-                      g_agent.policy_protect_pid_count, pid, &new_pids,
-                      &new_count);
-  } else {
-    ret = pid_set_remove(g_agent.policy_protect_pids,
-                         g_agent.policy_protect_pid_count, pid, &new_pids,
-                         &new_count);
-  }
-  if (ret < 0) {
-    lota_err("PID set update failed: %s", strerror(-ret));
-    goto rollback_bpf;
-  }
+	/* update runtime PID set (does not affect startup policy digest) */
+	if (add) {
+		ret = pid_set_add(g_agent.policy_protect_pids,
+				  g_agent.policy_protect_pid_count, pid,
+				  &new_pids, &new_count);
+	} else {
+		ret = pid_set_remove(g_agent.policy_protect_pids,
+				     g_agent.policy_protect_pid_count, pid,
+				     &new_pids, &new_count);
+	}
+	if (ret < 0) {
+		lota_err("PID set update failed: %s", strerror(-ret));
+		goto rollback_bpf;
+	}
 
-  /* commit runtime PID set while preserving startup-only policy_digest */
-  {
-    if (g_agent.policy_protect_pids) {
-      OPENSSL_cleanse(g_agent.policy_protect_pids,
-                      (size_t)g_agent.policy_protect_pid_count *
-                          sizeof(uint32_t));
-      free(g_agent.policy_protect_pids);
-    }
-    g_agent.policy_protect_pids = new_pids;
-    g_agent.policy_protect_pid_count = new_count;
-    g_agent.policy_protect_epoch += 1;
-    new_pids = NULL;
-    new_count = 0;
-  }
+	/* commit runtime PID set while preserving startup-only policy_digest */
+	{
+		if (g_agent.policy_protect_pids) {
+			OPENSSL_cleanse(
+			    g_agent.policy_protect_pids,
+			    (size_t)g_agent.policy_protect_pid_count *
+				sizeof(uint32_t));
+			free(g_agent.policy_protect_pids);
+		}
+		g_agent.policy_protect_pids = new_pids;
+		g_agent.policy_protect_pid_count = new_count;
+		g_agent.policy_protect_epoch += 1;
+		new_pids = NULL;
+		new_count = 0;
+	}
 
-  /* success response */
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = sizeof(*out);
-  out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  memcpy(out->policy_digest, g_agent.policy_digest, sizeof(out->policy_digest));
-  out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
-  out->_reserved1 = 0;
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
-  client->send_offset = 0;
+	/* success response */
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = sizeof(*out);
+	out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	memcpy(out->policy_digest, g_agent.policy_digest,
+	       sizeof(out->policy_digest));
+	out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
+	out->_reserved1 = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
+	client->send_offset = 0;
 
-  return;
+	return;
 
 rollback_bpf:
-  if (mutated) {
-    if (add) {
-      (void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
-    } else {
-      (void)bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
-    }
-  }
-  if (new_pids) {
-    OPENSSL_cleanse(new_pids, (size_t)new_count * sizeof(uint32_t));
-    free(new_pids);
-  }
-  build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+	if (mutated) {
+		if (add) {
+			(void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+		} else {
+			(void)bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+		}
+	}
+	if (new_pids) {
+		OPENSSL_cleanse(new_pids, (size_t)new_count * sizeof(uint32_t));
+		free(new_pids);
+	}
+	build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 }
 
 static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
-                            const uint8_t *payload, uint32_t payload_len) {
-  struct lota_ipc_response *resp = (void *)client->send_buf;
-  (void)payload;
+			    const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	(void)payload;
 
-  if (payload_len != 0) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
+	if (payload_len != 0) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
 
-  if (!ipc_client_is_privileged(ctx, client)) {
-    lota_warn("SHUTDOWN denied for uid=%d pid=%d", client->peer_uid,
-              client->peer_pid);
-    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-    return;
-  }
+	if (!ipc_client_is_privileged(ctx, client)) {
+		lota_warn("SHUTDOWN denied for uid=%d pid=%d", client->peer_uid,
+			  client->peer_pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = 0;
-  client->send_len = LOTA_IPC_RESPONSE_SIZE;
-  client->send_offset = 0;
-  client->shutdown_on_flush = true;
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE;
+	client->send_offset = 0;
+	client->shutdown_on_flush = true;
 
-  lota_notice("Privileged shutdown requested via IPC by uid=%d pid=%d",
-              client->peer_uid, client->peer_pid);
+	lota_notice("Privileged shutdown requested via IPC by uid=%d pid=%d",
+		    client->peer_uid, client->peer_pid);
 }
 
-static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len) {
-  switch (cmd) {
-  case LOTA_IPC_CMD_PING:
-  case LOTA_IPC_CMD_GET_STATUS:
-  case LOTA_IPC_CMD_SHUTDOWN:
-    return payload_len == 0;
+static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len)
+{
+	switch (cmd) {
+	case LOTA_IPC_CMD_PING:
+	case LOTA_IPC_CMD_GET_STATUS:
+	case LOTA_IPC_CMD_SHUTDOWN:
+		return payload_len == 0;
 
-  case LOTA_IPC_CMD_GET_TOKEN:
-    return payload_len == 0 ||
-           payload_len == sizeof(struct lota_ipc_token_request);
+	case LOTA_IPC_CMD_GET_TOKEN:
+		return payload_len == 0 ||
+		       payload_len == sizeof(struct lota_ipc_token_request);
 
-  case LOTA_IPC_CMD_SUBSCRIBE:
-    return payload_len == sizeof(struct lota_ipc_subscribe_request);
+	case LOTA_IPC_CMD_SUBSCRIBE:
+		return payload_len == sizeof(struct lota_ipc_subscribe_request);
 
-  case LOTA_IPC_CMD_PROTECT_PID:
-  case LOTA_IPC_CMD_UNPROTECT_PID:
-    return payload_len == sizeof(struct lota_ipc_pid_request);
+	case LOTA_IPC_CMD_PROTECT_PID:
+	case LOTA_IPC_CMD_UNPROTECT_PID:
+		return payload_len == sizeof(struct lota_ipc_pid_request);
 
-  default:
-    /*
-     * Unknown command. The dispatcher returns LOTA_IPC_ERR_UNKNOWN_CMD
-     * regardless of payload contents, but a non-zero payload still
-     * consumed up to LOTA_IPC_MAX_PAYLOAD bytes of recv_buf on the
-     * way in. A malicious local client could pump 64 KiB of payload
-     * per unknown command and force the agent to copy and discard it
-     * indefinitely. Require zero payload here so the bad request is
-     * rejected as soon as the IPC header is parsed; the client gets
-     * the same LOTA_IPC_ERR_BAD_REQUEST it would get for any other
-     * malformed length, and the agent never reads the body off the
-     * socket.
-     */
-    return payload_len == 0;
-  }
+	default:
+		/*
+		 * Unknown command. The dispatcher returns
+		 * LOTA_IPC_ERR_UNKNOWN_CMD regardless of payload contents, but
+		 * a non-zero payload still consumed up to LOTA_IPC_MAX_PAYLOAD
+		 * bytes of recv_buf on the way in. A malicious local client
+		 * could pump 64 KiB of payload per unknown command and force
+		 * the agent to copy and discard it indefinitely. Require zero
+		 * payload here so the bad request is rejected as soon as the
+		 * IPC header is parsed; the client gets the same
+		 * LOTA_IPC_ERR_BAD_REQUEST it would get for any other malformed
+		 * length, and the agent never reads the body off the socket.
+		 */
+		return payload_len == 0;
+	}
 }
 
-static void process_request(struct ipc_context *ctx,
-                            struct ipc_client *client) {
-  struct lota_ipc_request req;
-  uint8_t *payload = client->recv_buf + LOTA_IPC_REQUEST_SIZE;
-  uint32_t payload_len;
+static void process_request(struct ipc_context *ctx, struct ipc_client *client)
+{
+	struct lota_ipc_request req;
+	uint8_t *payload = client->recv_buf + LOTA_IPC_REQUEST_SIZE;
+	uint32_t payload_len;
 
-  memcpy(&req, client->recv_buf, sizeof(req));
-  payload_len = req.payload_len;
+	memcpy(&req, client->recv_buf, sizeof(req));
+	payload_len = req.payload_len;
 
-  if (req.magic != LOTA_IPC_MAGIC) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
+	if (req.magic != LOTA_IPC_MAGIC) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
 
-  if (req.version != LOTA_IPC_VERSION) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_VERSION);
-    return;
-  }
+	if (req.version != LOTA_IPC_VERSION) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_VERSION);
+		return;
+	}
 
-  if (!validate_request_payload_len(req.cmd, payload_len)) {
-    lota_warn("invalid payload length for cmd=0x%X from pid=%d uid=%d (len=%u)",
-              req.cmd, client->peer_pid, client->peer_uid, payload_len);
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
-  }
+	if (!validate_request_payload_len(req.cmd, payload_len)) {
+		lota_warn("invalid payload length for cmd=0x%X from pid=%d "
+			  "uid=%d (len=%u)",
+			  req.cmd, client->peer_pid, client->peer_uid,
+			  payload_len);
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
 
-  switch (req.cmd) {
-  case LOTA_IPC_CMD_PING:
-    handle_ping(ctx, client);
-    break;
+	switch (req.cmd) {
+	case LOTA_IPC_CMD_PING:
+		handle_ping(ctx, client);
+		break;
 
-  case LOTA_IPC_CMD_GET_STATUS:
-    handle_get_status(ctx, client);
-    break;
+	case LOTA_IPC_CMD_GET_STATUS:
+		handle_get_status(ctx, client);
+		break;
 
-  case LOTA_IPC_CMD_GET_TOKEN:
-    handle_get_token(ctx, client, payload, payload_len);
-    break;
+	case LOTA_IPC_CMD_GET_TOKEN:
+		handle_get_token(ctx, client, payload, payload_len);
+		break;
 
-  case LOTA_IPC_CMD_SUBSCRIBE:
-    handle_subscribe(ctx, client, payload, payload_len);
-    break;
+	case LOTA_IPC_CMD_SUBSCRIBE:
+		handle_subscribe(ctx, client, payload, payload_len);
+		break;
 
-  case LOTA_IPC_CMD_PROTECT_PID:
-    handle_protect_pid_update(ctx, client, payload, payload_len, true);
-    break;
+	case LOTA_IPC_CMD_PROTECT_PID:
+		handle_protect_pid_update(ctx, client, payload, payload_len,
+					  true);
+		break;
 
-  case LOTA_IPC_CMD_UNPROTECT_PID:
-    handle_protect_pid_update(ctx, client, payload, payload_len, false);
-    break;
+	case LOTA_IPC_CMD_UNPROTECT_PID:
+		handle_protect_pid_update(ctx, client, payload, payload_len,
+					  false);
+		break;
 
-  case LOTA_IPC_CMD_SHUTDOWN:
-    handle_shutdown(ctx, client, payload, payload_len);
-    break;
+	case LOTA_IPC_CMD_SHUTDOWN:
+		handle_shutdown(ctx, client, payload, payload_len);
+		break;
 
-  default:
-    build_error_response(client, LOTA_IPC_ERR_UNKNOWN_CMD);
-    break;
-  }
+	default:
+		build_error_response(client, LOTA_IPC_ERR_UNKNOWN_CMD);
+		break;
+	}
 }
 
 static int handle_client_read(struct ipc_context *ctx,
-                              struct ipc_client *client) {
-  ssize_t n;
-  size_t need;
-  struct lota_ipc_request req;
+			      struct ipc_client *client)
+{
+	ssize_t n;
+	size_t need;
+	struct lota_ipc_request req;
 
-  /*
-   * Check if the buffer already contains a complete request from a
-   * previous read (pipelined leftover)
-   */
-  if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
-    goto do_recv;
+	/*
+	 * Check if the buffer already contains a complete request from a
+	 * previous read (pipelined leftover)
+	 */
+	if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
+		goto do_recv;
 
-  memcpy(&req, client->recv_buf, sizeof(req));
+	memcpy(&req, client->recv_buf, sizeof(req));
 
-  if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
-    lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
-              client->peer_uid, req.payload_len);
-    return -1; /* close: cannot recover from protocol desync */
-  }
+	if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
+		lota_warn("oversized payload from pid=%d uid=%d (len=%u)",
+			  client->peer_pid, client->peer_uid, req.payload_len);
+		return -1; /* close: cannot recover from protocol desync */
+	}
 
-  need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
-  if (client->recv_len >= need)
-    goto have_request;
+	need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
+	if (client->recv_len >= need)
+		goto have_request;
 
 do_recv:
-  need = sizeof(client->recv_buf) - client->recv_len;
-  n = recv(client->fd, client->recv_buf + client->recv_len, need, 0);
+	need = sizeof(client->recv_buf) - client->recv_len;
+	n = recv(client->fd, client->recv_buf + client->recv_len, need, 0);
 
-  if (n < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-      return 0;
-    return -errno;
-  }
+	if (n < 0) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+			return 0;
+		return -errno;
+	}
 
-  if (n == 0)
-    return -ECONNRESET; /* client disconnected */
+	if (n == 0)
+		return -ECONNRESET; /* client disconnected */
 
-  client->recv_len += n;
+	client->recv_len += n;
 
-  if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
-    return 0;
+	if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
+		return 0;
 
-  memcpy(&req, client->recv_buf, sizeof(req));
+	memcpy(&req, client->recv_buf, sizeof(req));
 
-  if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
-    lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
-              client->peer_uid, req.payload_len);
-    return -1; /* close: cannot recover from protocol desync */
-  }
+	if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
+		lota_warn("oversized payload from pid=%d uid=%d (len=%u)",
+			  client->peer_pid, client->peer_uid, req.payload_len);
+		return -1; /* close: cannot recover from protocol desync */
+	}
 
-  need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
-  if (client->recv_len < need)
-    return 0;
+	need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
+	if (client->recv_len < need)
+		return 0;
 
 have_request:
-  /* defer if a previous response is still pending */
-  if (client->send_len > 0)
-    return 0;
-  process_request(ctx, client);
+	/* defer if a previous response is still pending */
+	if (client->send_len > 0)
+		return 0;
+	process_request(ctx, client);
 
-  /* arm EPOLLOUT so the event loop will drive the send */
-  if (client->send_len > 0) {
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLOUT;
-    ev.data.fd = client->fd;
-    epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
-  }
+	/* arm EPOLLOUT so the event loop will drive the send */
+	if (client->send_len > 0) {
+		struct epoll_event ev;
+		ev.events = EPOLLIN | EPOLLOUT;
+		ev.data.fd = client->fd;
+		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+	}
 
-  /* preserve any leftover bytes from the next pipelined request */
-  {
-    size_t consumed = LOTA_IPC_REQUEST_SIZE + req.payload_len;
-    if (client->recv_len > consumed) {
-      ipc_secure_bzero(client->recv_buf, consumed);
-      memmove(client->recv_buf, client->recv_buf + consumed,
-              client->recv_len - consumed);
-      client->recv_len -= consumed;
-    } else {
-      ipc_secure_bzero(client->recv_buf, client->recv_len);
-      client->recv_len = 0;
-    }
-  }
+	/* preserve any leftover bytes from the next pipelined request */
+	{
+		size_t consumed = LOTA_IPC_REQUEST_SIZE + req.payload_len;
+		if (client->recv_len > consumed) {
+			ipc_secure_bzero(client->recv_buf, consumed);
+			memmove(client->recv_buf, client->recv_buf + consumed,
+				client->recv_len - consumed);
+			client->recv_len -= consumed;
+		} else {
+			ipc_secure_bzero(client->recv_buf, client->recv_len);
+			client->recv_len = 0;
+		}
+	}
 
-  return 1; /* response ready */
+	return 1; /* response ready */
 }
 
 static int handle_client_write(struct ipc_context *ctx,
-                               struct ipc_client *client) {
-  ssize_t n;
-  size_t remaining;
+			       struct ipc_client *client)
+{
+	ssize_t n;
+	size_t remaining;
 
-  if (client->send_len == 0)
-    return 0;
+	if (client->send_len == 0)
+		return 0;
 
-  while (client->send_offset < client->send_len) {
-    remaining = client->send_len - client->send_offset;
-    n = send(client->fd, client->send_buf + client->send_offset, remaining,
-             MSG_NOSIGNAL);
+	while (client->send_offset < client->send_len) {
+		remaining = client->send_len - client->send_offset;
+		n = send(client->fd, client->send_buf + client->send_offset,
+			 remaining, MSG_NOSIGNAL);
 
-    if (n < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK)
-        return 0; /* yield to event loop, EPOLLOUT will re-fire */
-      return -errno;
-    }
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				return 0; /* yield to event loop, EPOLLOUT will
+					     re-fire */
+			return -errno;
+		}
 
-    client->send_offset += n;
-  }
+		client->send_offset += n;
+	}
 
-  if (client->send_offset >= client->send_len) {
-    /* response complete, reset */
-    ipc_secure_bzero(client->send_buf, client->send_len);
-    client->send_len = 0;
-    client->send_offset = 0;
+	if (client->send_offset >= client->send_len) {
+		/* response complete, reset */
+		ipc_secure_bzero(client->send_buf, client->send_len);
+		client->send_len = 0;
+		client->send_offset = 0;
 
-    /*
-     * deliver pending notification that accumulated
-     * while the previous send was in progress
-     */
-    if (client->subscribed && client->notify_pending) {
-      uint32_t pending = client->pending_events;
-      client->notify_pending = false;
-      client->pending_events = 0;
-      build_notification(ctx, client, pending);
-    }
+		/*
+		 * deliver pending notification that accumulated
+		 * while the previous send was in progress
+		 */
+		if (client->subscribed && client->notify_pending) {
+			uint32_t pending = client->pending_events;
+			client->notify_pending = false;
+			client->pending_events = 0;
+			build_notification(ctx, client, pending);
+		}
 
-    /* disarm EPOLLOUT if nothing left to send */
-    if (client->send_len == 0) {
-      struct epoll_event ev;
-      ev.events = EPOLLIN;
-      ev.data.fd = client->fd;
-      epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
-    }
+		/* disarm EPOLLOUT if nothing left to send */
+		if (client->send_len == 0) {
+			struct epoll_event ev;
+			ev.events = EPOLLIN;
+			ev.data.fd = client->fd;
+			epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd,
+				  &ev);
+		}
 
-    if (client->shutdown_on_flush) {
-      client->shutdown_on_flush = false;
-      g_agent.running = 0;
-      lota_info("Graceful shutdown initiated via IPC command");
-    }
-  }
+		if (client->shutdown_on_flush) {
+			client->shutdown_on_flush = false;
+			g_agent.running = 0;
+			lota_info(
+			    "Graceful shutdown initiated via IPC command");
+		}
+	}
 
-  return 0;
+	return 0;
 }
 
-static int accept_client(struct ipc_context *ctx, int listen_fd) {
-  struct sockaddr_un addr;
-  socklen_t len = sizeof(addr);
-  struct ipc_client *client;
-  struct epoll_event ev;
-  struct ucred cred;
-  socklen_t cred_len = sizeof(cred);
-  int fd;
-  int ret;
+static int accept_client(struct ipc_context *ctx, int listen_fd)
+{
+	struct sockaddr_un addr;
+	socklen_t len = sizeof(addr);
+	struct ipc_client *client;
+	struct epoll_event ev;
+	struct ucred cred;
+	socklen_t cred_len = sizeof(cred);
+	int fd;
+	int ret;
 
-  fd = accept(listen_fd, (struct sockaddr *)&addr, &len);
-  if (fd < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-      return 0;
-    return -errno;
-  }
+	fd = accept(listen_fd, (struct sockaddr *)&addr, &len);
+	if (fd < 0) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+			return 0;
+		return -errno;
+	}
 
-  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
-    lota_err("SO_PEERCRED failed: %s", strerror(errno));
-    close(fd);
-    return -errno;
-  }
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
+		lota_err("SO_PEERCRED failed: %s", strerror(errno));
+		close(fd);
+		return -errno;
+	}
 
-  lota_dbg("client connected pid=%d uid=%d gid=%d", cred.pid, cred.uid,
-           cred.gid);
+	lota_dbg("client connected pid=%d uid=%d gid=%d", cred.pid, cred.uid,
+		 cred.gid);
 
-  ret = set_nonblocking(fd);
-  if (ret < 0) {
-    close(fd);
-    return ret;
-  }
+	ret = set_nonblocking(fd);
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
 
-  client = client_create(ctx, fd, cred.uid, cred.gid, cred.pid);
-  if (!client) {
-    close(fd);
-    return -ENOMEM;
-  }
+	client = client_create(ctx, fd, cred.uid, cred.gid, cred.pid);
+	if (!client) {
+		close(fd);
+		return -ENOMEM;
+	}
 
-  ret = read_pid_start_time_ticks(cred.pid, &client->peer_start_time_ticks);
-  if (ret < 0) {
-    lota_warn("failed to read peer start_time_ticks for pid=%d: %s", cred.pid,
-              strerror(-ret));
-    client->peer_start_time_ticks = 0;
-  }
+	ret =
+	    read_pid_start_time_ticks(cred.pid, &client->peer_start_time_ticks);
+	if (ret < 0) {
+		lota_warn("failed to read peer start_time_ticks for pid=%d: %s",
+			  cred.pid, strerror(-ret));
+		client->peer_start_time_ticks = 0;
+	}
 
-  ev.events = EPOLLIN;
-  ev.data.fd = fd;
-  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-    client_destroy(ctx, client);
-    return -errno;
-  }
+	ev.events = EPOLLIN;
+	ev.data.fd = fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+		client_destroy(ctx, client);
+		return -errno;
+	}
 
-  return 0;
+	return 0;
 }
 
-int ipc_init(struct ipc_context *ctx) {
-  struct sockaddr_un addr;
-  struct epoll_event ev;
-  int ret;
+int ipc_init(struct ipc_context *ctx)
+{
+	struct sockaddr_un addr;
+	struct epoll_event ev;
+	int ret;
 
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->listen_fd = -1;
-  ctx->epoll_fd = -1;
-  ctx->start_time_sec = monotonic_now_sec();
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->listen_fd = -1;
+	ctx->epoll_fd = -1;
+	ctx->start_time_sec = monotonic_now_sec();
 
-  client_map_init(ctx);
+	client_map_init(ctx);
 
-  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
-    ctx->extra[i].fd = -1;
-  ctx->extra_count = 0;
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
+		ctx->extra[i].fd = -1;
+	ctx->extra_count = 0;
 
-  ret = ensure_socket_dir();
-  if (ret < 0) {
-    lota_err("failed to create %s: %s", SOCKET_DIR, strerror(-ret));
-    return ret;
-  }
+	ret = ensure_socket_dir();
+	if (ret < 0) {
+		lota_err("failed to create %s: %s", SOCKET_DIR, strerror(-ret));
+		return ret;
+	}
 
-  unlink(LOTA_IPC_SOCKET_PATH);
+	unlink(LOTA_IPC_SOCKET_PATH);
 
-  ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (ctx->listen_fd < 0) {
-    ret = -errno;
-    lota_err("socket() failed: %s", strerror(-ret));
-    return ret;
-  }
+	ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (ctx->listen_fd < 0) {
+		ret = -errno;
+		lota_err("socket() failed: %s", strerror(-ret));
+		return ret;
+	}
 
-  ret = set_nonblocking(ctx->listen_fd);
-  if (ret < 0) {
-    lota_err("set_nonblocking() failed: %s", strerror(-ret));
-    goto err_close;
-  }
+	ret = set_nonblocking(ctx->listen_fd);
+	if (ret < 0) {
+		lota_err("set_nonblocking() failed: %s", strerror(-ret));
+		goto err_close;
+	}
 
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-  /*
-   * Restrict socket access to owner (root) and 'lota' group
-   */
-  {
-    mode_t old_umask = umask(0117);
-    ret = bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr));
-    umask(old_umask);
-  }
-  if (ret < 0) {
-    ret = -errno;
-    lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH, strerror(-ret));
-    goto err_close;
-  }
-  {
-    struct group *grp = getgrnam(LOTA_GROUP_NAME);
-    if (grp) {
-      if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
-        lota_warn("chown(%s, 0, %d) failed: %s", LOTA_IPC_SOCKET_PATH,
-                  grp->gr_gid, strerror(errno));
-    } else {
-      lota_warn("group '%s' not found, socket accessible to current group only",
-                LOTA_GROUP_NAME);
-    }
-  }
+	/*
+	 * Restrict socket access to owner (root) and 'lota' group
+	 */
+	{
+		mode_t old_umask = umask(0117);
+		ret = bind(ctx->listen_fd, (struct sockaddr *)&addr,
+			   sizeof(addr));
+		umask(old_umask);
+	}
+	if (ret < 0) {
+		ret = -errno;
+		lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH,
+			 strerror(-ret));
+		goto err_close;
+	}
+	{
+		struct group *grp = getgrnam(LOTA_GROUP_NAME);
+		if (grp) {
+			if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
+				lota_warn("chown(%s, 0, %d) failed: %s",
+					  LOTA_IPC_SOCKET_PATH, grp->gr_gid,
+					  strerror(errno));
+		} else {
+			lota_warn("group '%s' not found, socket accessible to "
+				  "current group only",
+				  LOTA_GROUP_NAME);
+		}
+	}
 
-  if (listen(ctx->listen_fd, 16) < 0) {
-    ret = -errno;
-    lota_err("listen() failed: %s", strerror(-ret));
-    goto err_unlink;
-  }
+	if (listen(ctx->listen_fd, 16) < 0) {
+		ret = -errno;
+		lota_err("listen() failed: %s", strerror(-ret));
+		goto err_unlink;
+	}
 
-  ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-  if (ctx->epoll_fd < 0) {
-    ret = -errno;
-    lota_err("epoll_create1() failed: %s", strerror(-ret));
-    goto err_unlink;
-  }
+	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+	if (ctx->epoll_fd < 0) {
+		ret = -errno;
+		lota_err("epoll_create1() failed: %s", strerror(-ret));
+		goto err_unlink;
+	}
 
-  ev.events = EPOLLIN;
-  ev.data.fd = ctx->listen_fd;
-  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
-    ret = -errno;
-    lota_err("epoll_ctl() failed: %s", strerror(-ret));
-    goto err_epoll;
-  }
+	ev.events = EPOLLIN;
+	ev.data.fd = ctx->listen_fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
+		ret = -errno;
+		lota_err("epoll_ctl() failed: %s", strerror(-ret));
+		goto err_epoll;
+	}
 
-  ctx->running = true;
-  ctx->status_flags = 0;
-  ctx->dbus_fd = -1;
+	ctx->running = true;
+	ctx->status_flags = 0;
+	ctx->dbus_fd = -1;
 
-  lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
-  return 0;
+	lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
+	return 0;
 
 err_epoll:
-  close(ctx->epoll_fd);
+	close(ctx->epoll_fd);
 err_unlink:
-  unlink(LOTA_IPC_SOCKET_PATH);
+	unlink(LOTA_IPC_SOCKET_PATH);
 err_close:
-  close(ctx->listen_fd);
-  ctx->listen_fd = -1;
-  ctx->epoll_fd = -1;
-  return ret;
+	close(ctx->listen_fd);
+	ctx->listen_fd = -1;
+	ctx->epoll_fd = -1;
+	return ret;
 }
 
-int ipc_init_activated(struct ipc_context *ctx, int fd) {
-  struct epoll_event ev;
-  int ret;
+int ipc_init_activated(struct ipc_context *ctx, int fd)
+{
+	struct epoll_event ev;
+	int ret;
 
-  if (!ctx || fd < 0)
-    return -EINVAL;
+	if (!ctx || fd < 0)
+		return -EINVAL;
 
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->listen_fd = -1;
-  ctx->epoll_fd = -1;
-  ctx->start_time_sec = monotonic_now_sec();
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->listen_fd = -1;
+	ctx->epoll_fd = -1;
+	ctx->start_time_sec = monotonic_now_sec();
 
-  client_map_init(ctx);
+	client_map_init(ctx);
 
-  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
-    ctx->extra[i].fd = -1;
-  ctx->extra_count = 0;
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
+		ctx->extra[i].fd = -1;
+	ctx->extra_count = 0;
 
-  ret = set_nonblocking(fd);
-  if (ret < 0) {
-    lota_err("set_nonblocking(activated fd) failed: %s", strerror(-ret));
-    return ret;
-  }
+	ret = set_nonblocking(fd);
+	if (ret < 0) {
+		lota_err("set_nonblocking(activated fd) failed: %s",
+			 strerror(-ret));
+		return ret;
+	}
 
-  ctx->listen_fd = fd;
-  ctx->activated = true;
+	ctx->listen_fd = fd;
+	ctx->activated = true;
 
-  ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-  if (ctx->epoll_fd < 0) {
-    ret = -errno;
-    lota_err("epoll_create1() failed: %s", strerror(-ret));
-    ctx->listen_fd = -1;
-    return ret;
-  }
+	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+	if (ctx->epoll_fd < 0) {
+		ret = -errno;
+		lota_err("epoll_create1() failed: %s", strerror(-ret));
+		ctx->listen_fd = -1;
+		return ret;
+	}
 
-  ev.events = EPOLLIN;
-  ev.data.fd = ctx->listen_fd;
-  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
-    ret = -errno;
-    lota_err("epoll_ctl() failed: %s", strerror(-ret));
-    close(ctx->epoll_fd);
-    ctx->epoll_fd = -1;
-    ctx->listen_fd = -1;
-    return ret;
-  }
+	ev.events = EPOLLIN;
+	ev.data.fd = ctx->listen_fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
+		ret = -errno;
+		lota_err("epoll_ctl() failed: %s", strerror(-ret));
+		close(ctx->epoll_fd);
+		ctx->epoll_fd = -1;
+		ctx->listen_fd = -1;
+		return ret;
+	}
 
-  ctx->running = true;
-  ctx->status_flags = 0;
-  ctx->dbus_fd = -1;
+	ctx->running = true;
+	ctx->status_flags = 0;
+	ctx->dbus_fd = -1;
 
-  lota_info("IPC using socket-activated fd %d", fd);
-  return 0;
+	lota_info("IPC using socket-activated fd %d", fd);
+	return 0;
 }
 
-void ipc_cleanup(struct ipc_context *ctx) {
-  ctx->running = false;
+void ipc_cleanup(struct ipc_context *ctx)
+{
+	ctx->running = false;
 
-  while (ctx->client_list) {
-    client_destroy(ctx, ctx->client_list);
-  }
-  ctx->client_list = NULL;
-  ctx->client_count = 0;
+	while (ctx->client_list) {
+		client_destroy(ctx, ctx->client_list);
+	}
+	ctx->client_list = NULL;
+	ctx->client_count = 0;
 
-  client_map_init(ctx);
+	client_map_init(ctx);
 
-  if (ctx->epoll_fd >= 0) {
-    close(ctx->epoll_fd);
-    ctx->epoll_fd = -1;
-  }
+	if (ctx->epoll_fd >= 0) {
+		close(ctx->epoll_fd);
+		ctx->epoll_fd = -1;
+	}
 
-  if (ctx->listen_fd >= 0) {
-    close(ctx->listen_fd);
-    ctx->listen_fd = -1;
-  }
+	if (ctx->listen_fd >= 0) {
+		close(ctx->listen_fd);
+		ctx->listen_fd = -1;
+	}
 
-  if (!ctx->activated)
-    unlink(LOTA_IPC_SOCKET_PATH);
+	if (!ctx->activated)
+		unlink(LOTA_IPC_SOCKET_PATH);
 
-  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
-    if (ctx->extra[i].fd >= 0) {
-      close(ctx->extra[i].fd);
-      ctx->extra[i].fd = -1;
-      if (ctx->extra[i].path[0]) {
-        unlink(ctx->extra[i].path);
-        ctx->extra[i].path[0] = '\0';
-      }
-    }
-  }
-  ctx->extra_count = 0;
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd >= 0) {
+			close(ctx->extra[i].fd);
+			ctx->extra[i].fd = -1;
+			if (ctx->extra[i].path[0]) {
+				unlink(ctx->extra[i].path);
+				ctx->extra[i].path[0] = '\0';
+			}
+		}
+	}
+	ctx->extra_count = 0;
 
-  lota_dbg("IPC cleaned up");
+	lota_dbg("IPC cleaned up");
 }
 
-int ipc_process(struct ipc_context *ctx, int timeout_ms) {
-  struct epoll_event events[MAX_EVENTS];
-  int nfds;
-  int processed = 0;
+int ipc_process(struct ipc_context *ctx, int timeout_ms)
+{
+	struct epoll_event events[MAX_EVENTS];
+	int nfds;
+	int processed = 0;
 
-  if (!ctx->running || ctx->epoll_fd < 0)
-    return -EINVAL;
+	if (!ctx->running || ctx->epoll_fd < 0)
+		return -EINVAL;
 
-  nfds = epoll_wait(ctx->epoll_fd, events, MAX_EVENTS, timeout_ms);
-  if (nfds < 0) {
-    if (errno == EINTR)
-      return 0;
-    return -errno;
-  }
+	nfds = epoll_wait(ctx->epoll_fd, events, MAX_EVENTS, timeout_ms);
+	if (nfds < 0) {
+		if (errno == EINTR)
+			return 0;
+		return -errno;
+	}
 
-  for (int i = 0; i < nfds; i++) {
-    int fd = events[i].data.fd;
+	for (int i = 0; i < nfds; i++) {
+		int fd = events[i].data.fd;
 
-    if (ctx->dbus && ctx->dbus_fd >= 0 && fd == ctx->dbus_fd) {
-      dbus_process(ctx->dbus, 0);
-      processed++;
-      continue;
-    }
+		if (ctx->dbus && ctx->dbus_fd >= 0 && fd == ctx->dbus_fd) {
+			dbus_process(ctx->dbus, 0);
+			processed++;
+			continue;
+		}
 
-    if (fd == ctx->listen_fd || ipc_is_listener(ctx, fd)) {
-      /* new connection on primary or extra listener */
-      accept_client(ctx, fd);
-      processed++;
-    } else {
-      /* client event */
-      struct ipc_client *client = client_find(ctx, fd);
-      if (!client)
-        continue;
+		if (fd == ctx->listen_fd || ipc_is_listener(ctx, fd)) {
+			/* new connection on primary or extra listener */
+			accept_client(ctx, fd);
+			processed++;
+		} else {
+			/* client event */
+			struct ipc_client *client = client_find(ctx, fd);
+			if (!client)
+				continue;
 
-      int ret = 0;
+			int ret = 0;
 
-      if (events[i].events & EPOLLIN) {
-        ret = handle_client_read(ctx, client);
-      }
+			if (events[i].events & EPOLLIN) {
+				ret = handle_client_read(ctx, client);
+			}
 
-      if (events[i].events & EPOLLOUT) {
-        if (handle_client_write(ctx, client) < 0)
-          ret = -1;
-      }
+			if (events[i].events & EPOLLOUT) {
+				if (handle_client_write(ctx, client) < 0)
+					ret = -1;
+			}
 
-      if ((events[i].events & (EPOLLERR | EPOLLHUP)) || ret < 0) {
-        epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-        client_destroy(ctx, client);
-      }
+			if ((events[i].events & (EPOLLERR | EPOLLHUP)) ||
+			    ret < 0) {
+				epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, fd,
+					  NULL);
+				client_destroy(ctx, client);
+			}
 
-      processed++;
-    }
-  }
+			processed++;
+		}
+	}
 
-  return processed;
+	return processed;
 }
 
-int ipc_get_fd(struct ipc_context *ctx) { return ctx->epoll_fd; }
+int ipc_get_fd(struct ipc_context *ctx)
+{
+	return ctx->epoll_fd;
+}
 
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
-                       uint64_t valid_until) {
-  if (!ctx->running)
-    return;
+		       uint64_t valid_until)
+{
+	if (!ctx->running)
+		return;
 
-  uint32_t old_flags = ctx->status_flags;
+	uint32_t old_flags = ctx->status_flags;
 
-  ctx->status_flags = flags;
-  ctx->valid_until = valid_until;
-  ctx->last_attest_time = (uint64_t)time(NULL);
+	ctx->status_flags = flags;
+	ctx->valid_until = valid_until;
+	ctx->last_attest_time = (uint64_t)time(NULL);
 
-  if (old_flags != flags) {
-    notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-    dbus_emit_status_changed(ctx->dbus, flags);
-  }
+	if (old_flags != flags) {
+		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+		dbus_emit_status_changed(ctx->dbus, flags);
+	}
 }
 
-void ipc_record_attestation(struct ipc_context *ctx, bool success) {
-  if (success)
-    ctx->attest_count++;
-  else
-    ctx->fail_count++;
+void ipc_record_attestation(struct ipc_context *ctx, bool success)
+{
+	if (success)
+		ctx->attest_count++;
+	else
+		ctx->fail_count++;
 
-  notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
-  dbus_emit_attestation_result(ctx->dbus, success);
+	notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
+	dbus_emit_attestation_result(ctx->dbus, success);
 }
 
-void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) {
-  uint8_t old_mode = ctx->mode;
+void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)
+{
+	uint8_t old_mode = ctx->mode;
 
-  ctx->mode = mode;
+	ctx->mode = mode;
 
-  if (old_mode != mode) {
-    notify_subscribers(ctx, LOTA_IPC_EVENT_MODE);
-    dbus_emit_mode_changed(ctx->dbus, mode);
-  }
+	if (old_mode != mode) {
+		notify_subscribers(ctx, LOTA_IPC_EVENT_MODE);
+		dbus_emit_mode_changed(ctx->dbus, mode);
+	}
 }
 
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
-                 uint32_t pcr_mask) {
-  ctx->tpm = tpm;
-  ctx->quote_pcr_mask = pcr_mask;
+		 uint32_t pcr_mask)
+{
+	ctx->tpm = tpm;
+	ctx->quote_pcr_mask = pcr_mask;
 }
 
 /*
@@ -1879,135 +1970,139 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
  * shutdown. Connections accepted on this socket are handled
  * identically to the primary listener.
  */
-int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
-  struct sockaddr_un addr;
-  struct epoll_event ev;
-  int fd, ret, slot;
+int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
+{
+	struct sockaddr_un addr;
+	struct epoll_event ev;
+	int fd, ret, slot;
 
-  if (!ctx || !socket_path || !socket_path[0])
-    return -EINVAL;
+	if (!ctx || !socket_path || !socket_path[0])
+		return -EINVAL;
 
-  if (ctx->epoll_fd < 0)
-    return -EINVAL;
+	if (ctx->epoll_fd < 0)
+		return -EINVAL;
 
-  if (ctx->extra_count >= IPC_MAX_EXTRA_LISTENERS)
-    return -ENOSPC;
+	if (ctx->extra_count >= IPC_MAX_EXTRA_LISTENERS)
+		return -ENOSPC;
 
-  slot = -1;
-  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
-    if (ctx->extra[i].fd < 0) {
-      slot = i;
-      break;
-    }
-  }
-  if (slot < 0)
-    return -ENOSPC;
+	slot = -1;
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd < 0) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0)
+		return -ENOSPC;
 
-  unlink(socket_path);
+	unlink(socket_path);
 
-  fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) {
-    ret = -errno;
-    lota_err("extra socket() failed: %s", strerror(-ret));
-    return ret;
-  }
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		ret = -errno;
+		lota_err("extra socket() failed: %s", strerror(-ret));
+		return ret;
+	}
 
-  ret = set_nonblocking(fd);
-  if (ret < 0) {
-    close(fd);
-    return ret;
-  }
+	ret = set_nonblocking(fd);
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
 
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
-  {
-    mode_t old_umask = umask(0117);
-    ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
-    umask(old_umask);
-  }
+	{
+		mode_t old_umask = umask(0117);
+		ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+		umask(old_umask);
+	}
 
-  if (ret < 0) {
-    ret = -errno;
-    lota_err("bind(%s) failed: %s", socket_path, strerror(-ret));
-    close(fd);
-    return ret;
-  }
-  {
-    struct group *grp = getgrnam(LOTA_GROUP_NAME);
-    if (grp) {
-      if (chown(socket_path, 0, grp->gr_gid) < 0)
-        lota_warn("chown(%s) failed: %s", socket_path, strerror(errno));
-    }
-  }
+	if (ret < 0) {
+		ret = -errno;
+		lota_err("bind(%s) failed: %s", socket_path, strerror(-ret));
+		close(fd);
+		return ret;
+	}
+	{
+		struct group *grp = getgrnam(LOTA_GROUP_NAME);
+		if (grp) {
+			if (chown(socket_path, 0, grp->gr_gid) < 0)
+				lota_warn("chown(%s) failed: %s", socket_path,
+					  strerror(errno));
+		}
+	}
 
-  if (listen(fd, 16) < 0) {
-    ret = -errno;
-    close(fd);
-    unlink(socket_path);
-    return ret;
-  }
+	if (listen(fd, 16) < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(socket_path);
+		return ret;
+	}
 
-  ev.events = EPOLLIN;
-  ev.data.fd = fd;
-  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-    ret = -errno;
-    close(fd);
-    unlink(socket_path);
-    return ret;
-  }
+	ev.events = EPOLLIN;
+	ev.data.fd = fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(socket_path);
+		return ret;
+	}
 
-  ctx->extra[slot].fd = fd;
-  snprintf(ctx->extra[slot].path, sizeof(ctx->extra[slot].path), "%s",
-           socket_path);
-  ctx->extra_count++;
+	ctx->extra[slot].fd = fd;
+	snprintf(ctx->extra[slot].path, sizeof(ctx->extra[slot].path), "%s",
+		 socket_path);
+	ctx->extra_count++;
 
-  lota_info("IPC extra listener on %s", socket_path);
-  return 0;
+	lota_info("IPC extra listener on %s", socket_path);
+	return 0;
 }
 
 /*
  * Check if fd is any listener socket (primary or extra).
  */
-int ipc_is_listener(struct ipc_context *ctx, int fd) {
-  if (fd == ctx->listen_fd)
-    return 1;
-  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
-    if (ctx->extra[i].fd >= 0 && ctx->extra[i].fd == fd)
-      return 1;
-  }
-  return 0;
+int ipc_is_listener(struct ipc_context *ctx, int fd)
+{
+	if (fd == ctx->listen_fd)
+		return 1;
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd >= 0 && ctx->extra[i].fd == fd)
+			return 1;
+	}
+	return 0;
 }
 
-void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus) {
-  int old_fd;
-  int new_fd = -1;
+void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
+{
+	int old_fd;
+	int new_fd = -1;
 
-  if (!ctx)
-    return;
+	if (!ctx)
+		return;
 
-  old_fd = ctx->dbus_fd;
-  if (dbus)
-    new_fd = dbus_get_fd(dbus);
+	old_fd = ctx->dbus_fd;
+	if (dbus)
+		new_fd = dbus_get_fd(dbus);
 
-  if (ctx->epoll_fd >= 0 && old_fd >= 0 && old_fd != new_fd)
-    epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, old_fd, NULL);
+	if (ctx->epoll_fd >= 0 && old_fd >= 0 && old_fd != new_fd)
+		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, old_fd, NULL);
 
-  ctx->dbus = dbus;
-  ctx->dbus_fd = new_fd;
+	ctx->dbus = dbus;
+	ctx->dbus_fd = new_fd;
 
-  if (ctx->epoll_fd >= 0 && new_fd >= 0) {
-    struct epoll_event ev;
+	if (ctx->epoll_fd >= 0 && new_fd >= 0) {
+		struct epoll_event ev;
 
-    memset(&ev, 0, sizeof(ev));
-    ev.events = EPOLLIN;
-    ev.data.fd = new_fd;
+		memset(&ev, 0, sizeof(ev));
+		ev.events = EPOLLIN;
+		ev.data.fd = new_fd;
 
-    if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, new_fd, &ev) < 0 &&
-        errno != EEXIST) {
-      lota_warn("Failed to add D-Bus fd %d to epoll: %s", new_fd,
-                strerror(errno));
-    }
-  }
+		if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, new_fd, &ev) < 0 &&
+		    errno != EEXIST) {
+			lota_warn("Failed to add D-Bus fd %d to epoll: %s",
+				  new_fd, strerror(errno));
+		}
+	}
 }

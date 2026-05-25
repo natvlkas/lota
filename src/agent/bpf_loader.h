@@ -24,21 +24,22 @@ struct bpf_link;
  * BPF loader context
  */
 struct bpf_loader_ctx {
-  struct bpf_object *obj;                    /* libbpf object */
-  struct ring_buffer *ringbuf;               /* Ring buffer for events */
-  struct bpf_link *links[BPF_MAX_LSM_LINKS]; /* attached BPF program links */
-  int link_count;                            /* number of attached links */
-  int ringbuf_fd;                            /* Ring buffer map fd */
-  int stats_fd;                              /* Stats map fd */
-  int config_fd;                             /* 'lota_config' map fd */
-  int integrity_fd;                          /* 'integrity_config' map fd */
-  int task_auth_fd;                          /* 'lota_task_auth' map fd */
-  int trusted_libs_fd;                       /* 'trusted_libs' map fd */
-  int trusted_lib_mnt_fd;                    /* 'trusted_lib_mnt' map fd */
-  int protected_pids_fd;                     /* Protected PIDs map fd */
-  int allow_verity_digest_fd;                /* 'allow_verity_digest' map fd */
-  bool loaded;   /* BPF object loaded into the kernel and maps resolved */
-  bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
+	struct bpf_object *obj;	     /* libbpf object */
+	struct ring_buffer *ringbuf; /* Ring buffer for events */
+	struct bpf_link
+	    *links[BPF_MAX_LSM_LINKS]; /* attached BPF program links */
+	int link_count;		       /* number of attached links */
+	int ringbuf_fd;		       /* Ring buffer map fd */
+	int stats_fd;		       /* Stats map fd */
+	int config_fd;		       /* 'lota_config' map fd */
+	int integrity_fd;	       /* 'integrity_config' map fd */
+	int task_auth_fd;	       /* 'lota_task_auth' map fd */
+	int trusted_libs_fd;	       /* 'trusted_libs' map fd */
+	int trusted_lib_mnt_fd;	       /* 'trusted_lib_mnt' map fd */
+	int protected_pids_fd;	       /* Protected PIDs map fd */
+	int allow_verity_digest_fd;    /* 'allow_verity_digest' map fd */
+	bool loaded;   /* BPF object loaded into the kernel and maps resolved */
+	bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
 };
 
 /*
@@ -49,7 +50,7 @@ struct bpf_loader_ctx {
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
-                                   const struct lota_verity_digest_key *key);
+				   const struct lota_verity_digest_key *key);
 
 /*
  * bpf_loader_disallow_verity_digest - Remove an allowed fs-verity digest
@@ -57,7 +58,7 @@ int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
  * @key: Digest length + bytes key
  */
 int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
-                                      const struct lota_verity_digest_key *key);
+				      const struct lota_verity_digest_key *key);
 
 /*
  * bpf_loader_measure_verity_digest - Measure fs-verity digest for a path
@@ -65,7 +66,7 @@ int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
  * @out: Digest length + bytes key
  */
 int bpf_loader_measure_verity_digest(const char *path,
-                                     struct lota_verity_digest_key *out);
+				     struct lota_verity_digest_key *out);
 
 /*
  * bpf_loader_allow_verity_path - Measure a path's fs-verity digest and allow it
@@ -113,7 +114,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
-                    const char *bpf_pubkey_pem_path);
+		    const char *bpf_pubkey_pem_path);
 
 /*
  * bpf_loader_attach - Attach loaded BPF programs to their hooks
@@ -143,7 +144,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
-                             bpf_event_handler_t handler, void *handler_ctx);
+			     bpf_event_handler_t handler, void *handler_ctx);
 
 /*
  * bpf_loader_poll - Poll ring buffer for events
@@ -183,8 +184,8 @@ int bpf_loader_consume(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
-                         uint64_t *events_sent, uint64_t *errors,
-                         uint64_t *drops);
+			 uint64_t *events_sent, uint64_t *errors,
+			 uint64_t *drops);
 
 /*
  * bpf_loader_set_mode - Set enforcement mode
@@ -215,7 +216,7 @@ int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
-                          uint32_t value);
+			  uint32_t value);
 
 /*
  * bpf_loader_verify_integrity_config - Verify integrity_config map contents
@@ -295,17 +296,17 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
 unsigned long resolve_kernel_symbol(const char *name);
 
 struct bpf_extended_stats {
-  uint64_t total_execs;
-  uint64_t events_sent;
-  uint64_t errors;
-  uint64_t drops;
-  uint64_t modules_blocked;
-  uint64_t mmap_execs;
-  uint64_t mmap_blocked;
-  uint64_t ptrace_attempts;
-  uint64_t ptrace_blocked;
-  uint64_t setuid_events;
-  uint64_t bpf_syscall_blocked;
+	uint64_t total_execs;
+	uint64_t events_sent;
+	uint64_t errors;
+	uint64_t drops;
+	uint64_t modules_blocked;
+	uint64_t mmap_execs;
+	uint64_t mmap_blocked;
+	uint64_t ptrace_attempts;
+	uint64_t ptrace_blocked;
+	uint64_t setuid_events;
+	uint64_t bpf_syscall_blocked;
 };
 
 /*
@@ -316,7 +317,7 @@ struct bpf_extended_stats {
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
-                                  struct bpf_extended_stats *stats);
+				  struct bpf_extended_stats *stats);
 
 /*
  * bpf_loader_cleanup - Unload BPF program and clean up

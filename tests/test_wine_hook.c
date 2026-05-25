@@ -29,721 +29,757 @@ static int tests_run;
 static int tests_passed;
 
 #define TEST(name)                                                             \
-  do {                                                                         \
-    tests_run++;                                                               \
-    printf("  [%d] %-50s ", tests_run, name);                                  \
-  } while (0)
+	do {                                                                   \
+		tests_run++;                                                   \
+		printf("  [%d] %-50s ", tests_run, name);                      \
+	} while (0)
 
 #define PASS()                                                                 \
-  do {                                                                         \
-    tests_passed++;                                                            \
-    printf("PASS\n");                                                          \
-  } while (0)
+	do {                                                                   \
+		tests_passed++;                                                \
+		printf("PASS\n");                                              \
+	} while (0)
 
 #define FAIL(msg)                                                              \
-  do {                                                                         \
-    printf("FAIL: %s\n", msg);                                                 \
-  } while (0)
+	do {                                                                   \
+		printf("FAIL: %s\n", msg);                                     \
+	} while (0)
 
 /* temp directory for test artifacts */
 static char tmpdir[64];
 
-static void setup_tmpdir(void) {
-  snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_hook_XXXXXX");
-  if (!mkdtemp(tmpdir)) {
-    fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
-    exit(1);
-  }
+static void setup_tmpdir(void)
+{
+	snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_hook_XXXXXX");
+	if (!mkdtemp(tmpdir)) {
+		fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+		exit(1);
+	}
 }
 
-static void cleanup_tmpdir(void) {
-  char cmd[128];
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  int ret = system(cmd);
-  (void)ret;
+static void cleanup_tmpdir(void)
+{
+	char cmd[128];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
+	int ret = system(cmd);
+	(void)ret;
 }
 
 /* read entire file contents */
-static ssize_t read_file_contents(const char *path, char *buf, size_t buflen) {
-  int fd;
-  ssize_t n;
+static ssize_t read_file_contents(const char *path, char *buf, size_t buflen)
+{
+	int fd;
+	ssize_t n;
 
-  fd = open(path, O_RDONLY);
-  if (fd < 0)
-    return -errno;
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -errno;
 
-  n = read(fd, buf, buflen - 1);
-  close(fd);
+	n = read(fd, buf, buflen - 1);
+	close(fd);
 
-  if (n < 0)
-    return -errno;
+	if (n < 0)
+		return -errno;
 
-  buf[n] = '\0';
-  return n;
+	buf[n] = '\0';
+	return n;
 }
 
-static int count_tmp_entries_with_prefix(const char *dir, const char *prefix) {
-  DIR *d;
-  struct dirent *ent;
-  int count = 0;
+static int count_tmp_entries_with_prefix(const char *dir, const char *prefix)
+{
+	DIR *d;
+	struct dirent *ent;
+	int count = 0;
 
-  d = opendir(dir);
-  if (!d)
-    return -1;
+	d = opendir(dir);
+	if (!d)
+		return -1;
 
-  while ((ent = readdir(d)) != NULL) {
-    if (strncmp(ent->d_name, prefix, strlen(prefix)) == 0)
-      count++;
-  }
+	while ((ent = readdir(d)) != NULL) {
+		if (strncmp(ent->d_name, prefix, strlen(prefix)) == 0)
+			count++;
+	}
 
-  closedir(d);
-  return count;
+	closedir(d);
+	return count;
 }
 
-static void test_parse_log_level_debug(void) {
-  TEST("parse_log_level(\"debug\") -> DEBUG");
-  if (parse_log_level("debug") != HOOK_LOG_DEBUG) {
-    FAIL("wrong level");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_debug(void)
+{
+	TEST("parse_log_level(\"debug\") -> DEBUG");
+	if (parse_log_level("debug") != HOOK_LOG_DEBUG) {
+		FAIL("wrong level");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_info(void) {
-  TEST("parse_log_level(\"info\") -> INFO");
-  if (parse_log_level("info") != HOOK_LOG_INFO) {
-    FAIL("wrong level");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_info(void)
+{
+	TEST("parse_log_level(\"info\") -> INFO");
+	if (parse_log_level("info") != HOOK_LOG_INFO) {
+		FAIL("wrong level");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_warn(void) {
-  TEST("parse_log_level(\"warn\") -> WARN");
-  if (parse_log_level("warn") != HOOK_LOG_WARN) {
-    FAIL("wrong level");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_warn(void)
+{
+	TEST("parse_log_level(\"warn\") -> WARN");
+	if (parse_log_level("warn") != HOOK_LOG_WARN) {
+		FAIL("wrong level");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_error(void) {
-  TEST("parse_log_level(\"error\") -> ERROR");
-  if (parse_log_level("error") != HOOK_LOG_ERROR) {
-    FAIL("wrong level");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_error(void)
+{
+	TEST("parse_log_level(\"error\") -> ERROR");
+	if (parse_log_level("error") != HOOK_LOG_ERROR) {
+		FAIL("wrong level");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_silent(void) {
-  TEST("parse_log_level(\"silent\") -> SILENT");
-  if (parse_log_level("silent") != HOOK_LOG_SILENT) {
-    FAIL("wrong level");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_silent(void)
+{
+	TEST("parse_log_level(\"silent\") -> SILENT");
+	if (parse_log_level("silent") != HOOK_LOG_SILENT) {
+		FAIL("wrong level");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_null(void) {
-  TEST("parse_log_level(NULL) -> WARN default");
-  if (parse_log_level(NULL) != HOOK_LOG_WARN) {
-    FAIL("wrong default");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_null(void)
+{
+	TEST("parse_log_level(NULL) -> WARN default");
+	if (parse_log_level(NULL) != HOOK_LOG_WARN) {
+		FAIL("wrong default");
+		return;
+	}
+	PASS();
 }
 
-static void test_parse_log_level_invalid(void) {
-  TEST("parse_log_level(\"garbage\") -> WARN default");
-  if (parse_log_level("garbage") != HOOK_LOG_WARN) {
-    FAIL("wrong default");
-    return;
-  }
-  PASS();
+static void test_parse_log_level_invalid(void)
+{
+	TEST("parse_log_level(\"garbage\") -> WARN default");
+	if (parse_log_level("garbage") != HOOK_LOG_WARN) {
+		FAIL("wrong default");
+		return;
+	}
+	PASS();
 }
 
-static void test_resolve_token_dir_explicit(void) {
-  TEST("resolve_token_dir: LOTA_HOOK_TOKEN_DIR takes priority");
+static void test_resolve_token_dir_explicit(void)
+{
+	TEST("resolve_token_dir: LOTA_HOOK_TOKEN_DIR takes priority");
 
-  setenv("LOTA_HOOK_TOKEN_DIR", "/custom/token/path", 1);
-  setenv("XDG_RUNTIME_DIR", "/run/user/9999", 1);
+	setenv("LOTA_HOOK_TOKEN_DIR", "/custom/token/path", 1);
+	setenv("XDG_RUNTIME_DIR", "/run/user/9999", 1);
 
-  memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-  resolve_token_dir();
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	resolve_token_dir();
 
-  unsetenv("LOTA_HOOK_TOKEN_DIR");
-  unsetenv("XDG_RUNTIME_DIR");
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	unsetenv("XDG_RUNTIME_DIR");
 
-  if (strcmp(g_hook.token_dir, "/custom/token/path") != 0) {
-    FAIL("wrong dir");
-    return;
-  }
-  PASS();
+	if (strcmp(g_hook.token_dir, "/custom/token/path") != 0) {
+		FAIL("wrong dir");
+		return;
+	}
+	PASS();
 }
 
-static void test_resolve_token_dir_xdg(void) {
-  TEST("resolve_token_dir: XDG_RUNTIME_DIR + /lota");
+static void test_resolve_token_dir_xdg(void)
+{
+	TEST("resolve_token_dir: XDG_RUNTIME_DIR + /lota");
 
-  unsetenv("LOTA_HOOK_TOKEN_DIR");
-  setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
 
-  memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-  resolve_token_dir();
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	resolve_token_dir();
 
-  unsetenv("XDG_RUNTIME_DIR");
+	unsetenv("XDG_RUNTIME_DIR");
 
-  if (strcmp(g_hook.token_dir, "/run/user/1234/lota") != 0) {
-    FAIL("wrong dir");
-    return;
-  }
-  PASS();
+	if (strcmp(g_hook.token_dir, "/run/user/1234/lota") != 0) {
+		FAIL("wrong dir");
+		return;
+	}
+	PASS();
 }
 
-static void test_resolve_token_dir_fallback(void) {
-  char expected[PATH_MAX];
+static void test_resolve_token_dir_fallback(void)
+{
+	char expected[PATH_MAX];
 
-  TEST("resolve_token_dir: fallback to /tmp/lota-<uid>");
+	TEST("resolve_token_dir: fallback to /tmp/lota-<uid>");
 
-  unsetenv("LOTA_HOOK_TOKEN_DIR");
-  unsetenv("XDG_RUNTIME_DIR");
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	unsetenv("XDG_RUNTIME_DIR");
 
-  memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-  resolve_token_dir();
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	resolve_token_dir();
 
-  snprintf(expected, sizeof(expected), "/tmp/lota-%u", (unsigned)getuid());
+	snprintf(expected, sizeof(expected), "/tmp/lota-%u",
+		 (unsigned)getuid());
 
-  if (strcmp(g_hook.token_dir, expected) != 0) {
-    FAIL("wrong fallback dir");
-    return;
-  }
-  PASS();
+	if (strcmp(g_hook.token_dir, expected) != 0) {
+		FAIL("wrong fallback dir");
+		return;
+	}
+	PASS();
 }
 
-static void test_ensure_token_dir_creates(void) {
-  struct stat st;
+static void test_ensure_token_dir_creates(void)
+{
+	struct stat st;
 
-  TEST("ensure_token_dir creates directory with mode 0700");
+	TEST("ensure_token_dir creates directory with mode 0700");
 
-  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/subdir", tmpdir);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/subdir",
+		 tmpdir);
 
-  if (ensure_token_dir() != 0) {
-    FAIL("ensure_token_dir failed");
-    return;
-  }
-  if (stat(g_hook.token_dir, &st) != 0) {
-    FAIL("directory does not exist");
-    return;
-  }
-  if (!S_ISDIR(st.st_mode)) {
-    FAIL("not a directory");
-    return;
-  }
-  if ((st.st_mode & 0777) != 0700) {
-    FAIL("wrong mode");
-    return;
-  }
-  PASS();
+	if (ensure_token_dir() != 0) {
+		FAIL("ensure_token_dir failed");
+		return;
+	}
+	if (stat(g_hook.token_dir, &st) != 0) {
+		FAIL("directory does not exist");
+		return;
+	}
+	if (!S_ISDIR(st.st_mode)) {
+		FAIL("not a directory");
+		return;
+	}
+	if ((st.st_mode & 0777) != 0700) {
+		FAIL("wrong mode");
+		return;
+	}
+	PASS();
 }
 
-static void test_ensure_token_dir_exists(void) {
-  TEST("ensure_token_dir succeeds if directory exists");
+static void test_ensure_token_dir_exists(void)
+{
+	TEST("ensure_token_dir succeeds if directory exists");
 
-  /* tmpdir already exists */
-  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
+	/* tmpdir already exists */
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
 
-  if (ensure_token_dir() != 0) {
-    FAIL("ensure_token_dir failed");
-    return;
-  }
-  PASS();
+	if (ensure_token_dir() != 0) {
+		FAIL("ensure_token_dir failed");
+		return;
+	}
+	PASS();
 }
 
-static void test_ensure_token_dir_not_a_dir(void) {
-  char path[sizeof(g_hook.token_dir)];
-  int fd;
+static void test_ensure_token_dir_not_a_dir(void)
+{
+	char path[sizeof(g_hook.token_dir)];
+	int fd;
 
-  TEST("ensure_token_dir rejects non-directory");
+	TEST("ensure_token_dir rejects non-directory");
 
-  snprintf(path, sizeof(path), "%s/file_not_dir", tmpdir);
-  fd = open(path, O_CREAT | O_WRONLY, 0644);
-  if (fd >= 0)
-    close(fd);
+	snprintf(path, sizeof(path), "%s/file_not_dir", tmpdir);
+	fd = open(path, O_CREAT | O_WRONLY, 0644);
+	if (fd >= 0)
+		close(fd);
 
-  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
 
-  /* suppress stderr for this test */
-  g_hook.log_level = HOOK_LOG_SILENT;
-  int ret = ensure_token_dir();
-  g_hook.log_level = HOOK_LOG_WARN;
+	/* suppress stderr for this test */
+	g_hook.log_level = HOOK_LOG_SILENT;
+	int ret = ensure_token_dir();
+	g_hook.log_level = HOOK_LOG_WARN;
 
-  if (ret != -ENOTDIR) {
-    FAIL("expected -ENOTDIR");
-    return;
-  }
-  PASS();
+	if (ret != -ENOTDIR) {
+		FAIL("expected -ENOTDIR");
+		return;
+	}
+	PASS();
 }
 
-static void test_ensure_token_dir_rejects_symlink(void) {
-  char target[sizeof(g_hook.token_dir)];
-  char linkpath[sizeof(g_hook.token_dir)];
+static void test_ensure_token_dir_rejects_symlink(void)
+{
+	char target[sizeof(g_hook.token_dir)];
+	char linkpath[sizeof(g_hook.token_dir)];
 
-  TEST("ensure_token_dir rejects symlink target path");
+	TEST("ensure_token_dir rejects symlink target path");
 
-  snprintf(target, sizeof(target), "%s/real_dir", tmpdir);
-  if (mkdir(target, 0700) != 0) {
-    FAIL("mkdir target failed");
-    return;
-  }
+	snprintf(target, sizeof(target), "%s/real_dir", tmpdir);
+	if (mkdir(target, 0700) != 0) {
+		FAIL("mkdir target failed");
+		return;
+	}
 
-  snprintf(linkpath, sizeof(linkpath), "%s/link_dir", tmpdir);
-  if (symlink(target, linkpath) != 0) {
-    FAIL("symlink create failed");
-    return;
-  }
+	snprintf(linkpath, sizeof(linkpath), "%s/link_dir", tmpdir);
+	if (symlink(target, linkpath) != 0) {
+		FAIL("symlink create failed");
+		return;
+	}
 
-  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", linkpath);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", linkpath);
 
-  g_hook.log_level = HOOK_LOG_SILENT;
-  int ret = ensure_token_dir();
-  g_hook.log_level = HOOK_LOG_WARN;
+	g_hook.log_level = HOOK_LOG_SILENT;
+	int ret = ensure_token_dir();
+	g_hook.log_level = HOOK_LOG_WARN;
 
-  if (ret != -ELOOP && ret != -ENOTDIR) {
-    FAIL("expected -ELOOP or -ENOTDIR");
-    return;
-  }
+	if (ret != -ELOOP && ret != -ENOTDIR) {
+		FAIL("expected -ELOOP or -ENOTDIR");
+		return;
+	}
 
-  PASS();
+	PASS();
 }
 
-static void test_ensure_token_dir_existing_mode_tightened(void) {
-  struct stat st;
-  char path[sizeof(g_hook.token_dir)];
+static void test_ensure_token_dir_existing_mode_tightened(void)
+{
+	struct stat st;
+	char path[sizeof(g_hook.token_dir)];
 
-  TEST("ensure_token_dir tightens existing dir mode to 0700");
+	TEST("ensure_token_dir tightens existing dir mode to 0700");
 
-  snprintf(path, sizeof(path), "%s/perms_dir", tmpdir);
-  if (mkdir(path, 0755) != 0) {
-    FAIL("mkdir perms_dir failed");
-    return;
-  }
+	snprintf(path, sizeof(path), "%s/perms_dir", tmpdir);
+	if (mkdir(path, 0755) != 0) {
+		FAIL("mkdir perms_dir failed");
+		return;
+	}
 
-  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
 
-  if (ensure_token_dir() != 0) {
-    FAIL("ensure_token_dir failed");
-    return;
-  }
+	if (ensure_token_dir() != 0) {
+		FAIL("ensure_token_dir failed");
+		return;
+	}
 
-  if (stat(path, &st) != 0) {
-    FAIL("stat failed");
-    return;
-  }
+	if (stat(path, &st) != 0) {
+		FAIL("stat failed");
+		return;
+	}
 
-  if ((st.st_mode & 0777) != 0700) {
-    FAIL("mode was not tightened to 0700");
-    return;
-  }
+	if ((st.st_mode & 0777) != 0700) {
+		FAIL("mode was not tightened to 0700");
+		return;
+	}
 
-  PASS();
+	PASS();
 }
 
-static void test_atomic_write_creates_file(void) {
-  char path[PATH_MAX];
-  char buf[128];
-  ssize_t n;
+static void test_atomic_write_creates_file(void)
+{
+	char path[PATH_MAX];
+	char buf[128];
+	ssize_t n;
 
-  TEST("atomic_write creates file with correct content");
+	TEST("atomic_write creates file with correct content");
 
-  snprintf(path, sizeof(path), "%s/test_write", tmpdir);
+	snprintf(path, sizeof(path), "%s/test_write", tmpdir);
 
-  if (atomic_write(path, "hello\n", 6) != 0) {
-    FAIL("atomic_write failed");
-    return;
-  }
-  n = read_file_contents(path, buf, sizeof(buf));
-  if (n != 6 || memcmp(buf, "hello\n", 6) != 0) {
-    FAIL("content mismatch");
-    return;
-  }
-  PASS();
+	if (atomic_write(path, "hello\n", 6) != 0) {
+		FAIL("atomic_write failed");
+		return;
+	}
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n != 6 || memcmp(buf, "hello\n", 6) != 0) {
+		FAIL("content mismatch");
+		return;
+	}
+	PASS();
 }
 
-static void test_atomic_write_overwrites(void) {
-  char path[PATH_MAX];
-  char buf[128];
-  ssize_t n;
+static void test_atomic_write_overwrites(void)
+{
+	char path[PATH_MAX];
+	char buf[128];
+	ssize_t n;
 
-  TEST("atomic_write atomically overwrites existing file");
+	TEST("atomic_write atomically overwrites existing file");
 
-  snprintf(path, sizeof(path), "%s/test_overwrite", tmpdir);
+	snprintf(path, sizeof(path), "%s/test_overwrite", tmpdir);
 
-  atomic_write(path, "first", 5);
-  if (atomic_write(path, "second", 6) != 0) {
-    FAIL("second write failed");
-    return;
-  }
-  n = read_file_contents(path, buf, sizeof(buf));
-  if (n != 6 || memcmp(buf, "second", 6) != 0) {
-    FAIL("content mismatch");
-    return;
-  }
-  PASS();
+	atomic_write(path, "first", 5);
+	if (atomic_write(path, "second", 6) != 0) {
+		FAIL("second write failed");
+		return;
+	}
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n != 6 || memcmp(buf, "second", 6) != 0) {
+		FAIL("content mismatch");
+		return;
+	}
+	PASS();
 }
 
-static void test_atomic_write_no_tmp_leftover(void) {
-  char path[256];
-  int tmp_count;
+static void test_atomic_write_no_tmp_leftover(void)
+{
+	char path[256];
+	int tmp_count;
 
-  TEST("atomic_write leaves no .tmp files on success");
+	TEST("atomic_write leaves no .tmp files on success");
 
-  snprintf(path, sizeof(path), "%s/test_notmp", tmpdir);
+	snprintf(path, sizeof(path), "%s/test_notmp", tmpdir);
 
-  if (atomic_write(path, "data", 4) != 0) {
-    FAIL("atomic_write failed");
-    return;
-  }
+	if (atomic_write(path, "data", 4) != 0) {
+		FAIL("atomic_write failed");
+		return;
+	}
 
-  tmp_count = count_tmp_entries_with_prefix(tmpdir, "test_notmp.tmp.");
-  if (tmp_count < 0) {
-    FAIL("opendir failed");
-    return;
-  }
-  if (tmp_count != 0) {
-    FAIL(".tmp files left behind");
-    return;
-  }
-  PASS();
+	tmp_count = count_tmp_entries_with_prefix(tmpdir, "test_notmp.tmp.");
+	if (tmp_count < 0) {
+		FAIL("opendir failed");
+		return;
+	}
+	if (tmp_count != 0) {
+		FAIL(".tmp files left behind");
+		return;
+	}
+	PASS();
 }
 
-static void test_atomic_write_ignores_predictable_symlink_tmp(void) {
-  char path[PATH_MAX];
-  char victim[PATH_MAX];
-  char planted_tmp[PATH_MAX];
-  char buf[64];
-  ssize_t n;
-  int fd;
-  size_t base_len;
-  size_t suffix_len;
-  int pid_len;
+static void test_atomic_write_ignores_predictable_symlink_tmp(void)
+{
+	char path[PATH_MAX];
+	char victim[PATH_MAX];
+	char planted_tmp[PATH_MAX];
+	char buf[64];
+	ssize_t n;
+	int fd;
+	size_t base_len;
+	size_t suffix_len;
+	int pid_len;
 
-  TEST("atomic_write resists planted symlink at legacy temp name");
+	TEST("atomic_write resists planted symlink at legacy temp name");
 
-  snprintf(path, sizeof(path), "%s/test_symlink_guard", tmpdir);
-  snprintf(victim, sizeof(victim), "%s/victim_file", tmpdir);
+	snprintf(path, sizeof(path), "%s/test_symlink_guard", tmpdir);
+	snprintf(victim, sizeof(victim), "%s/victim_file", tmpdir);
 
-  base_len = strlen(path);
-  suffix_len = strlen(".tmp.");
-  if (base_len + suffix_len + 16 >= sizeof(planted_tmp)) {
-    FAIL("temp path too long");
-    return;
-  }
-  memcpy(planted_tmp, path, base_len);
-  memcpy(planted_tmp + base_len, ".tmp.", suffix_len);
-  pid_len = snprintf(planted_tmp + base_len + suffix_len,
-                     sizeof(planted_tmp) - base_len - suffix_len, "%d",
-                     (int)getpid());
-  if (pid_len < 0 ||
-      (size_t)pid_len >= sizeof(planted_tmp) - base_len - suffix_len) {
-    FAIL("temp path build failed");
-    return;
-  }
+	base_len = strlen(path);
+	suffix_len = strlen(".tmp.");
+	if (base_len + suffix_len + 16 >= sizeof(planted_tmp)) {
+		FAIL("temp path too long");
+		return;
+	}
+	memcpy(planted_tmp, path, base_len);
+	memcpy(planted_tmp + base_len, ".tmp.", suffix_len);
+	pid_len = snprintf(planted_tmp + base_len + suffix_len,
+			   sizeof(planted_tmp) - base_len - suffix_len, "%d",
+			   (int)getpid());
+	if (pid_len < 0 ||
+	    (size_t)pid_len >= sizeof(planted_tmp) - base_len - suffix_len) {
+		FAIL("temp path build failed");
+		return;
+	}
 
-  fd = open(victim, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  if (fd < 0) {
-    FAIL("open victim failed");
-    return;
-  }
-  if (write(fd, "victim", 6) != 6) {
-    close(fd);
-    FAIL("write victim failed");
-    return;
-  }
-  close(fd);
+	fd = open(victim, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		FAIL("open victim failed");
+		return;
+	}
+	if (write(fd, "victim", 6) != 6) {
+		close(fd);
+		FAIL("write victim failed");
+		return;
+	}
+	close(fd);
 
-  if (symlink(victim, planted_tmp) != 0) {
-    FAIL("symlink setup failed");
-    return;
-  }
+	if (symlink(victim, planted_tmp) != 0) {
+		FAIL("symlink setup failed");
+		return;
+	}
 
-  if (atomic_write(path, "safe", 4) != 0) {
-    FAIL("atomic_write failed");
-    unlink(planted_tmp);
-    return;
-  }
+	if (atomic_write(path, "safe", 4) != 0) {
+		FAIL("atomic_write failed");
+		unlink(planted_tmp);
+		return;
+	}
 
-  n = read_file_contents(path, buf, sizeof(buf));
-  if (n != 4 || memcmp(buf, "safe", 4) != 0) {
-    FAIL("target content mismatch");
-    unlink(planted_tmp);
-    return;
-  }
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n != 4 || memcmp(buf, "safe", 4) != 0) {
+		FAIL("target content mismatch");
+		unlink(planted_tmp);
+		return;
+	}
 
-  n = read_file_contents(victim, buf, sizeof(buf));
-  if (n != 6 || memcmp(buf, "victim", 6) != 0) {
-    FAIL("planted symlink redirected write");
-    unlink(planted_tmp);
-    return;
-  }
+	n = read_file_contents(victim, buf, sizeof(buf));
+	if (n != 6 || memcmp(buf, "victim", 6) != 0) {
+		FAIL("planted symlink redirected write");
+		unlink(planted_tmp);
+		return;
+	}
 
-  unlink(planted_tmp);
-  PASS();
+	unlink(planted_tmp);
+	PASS();
 }
 
-static void test_atomic_write_file_mode(void) {
-  char path[PATH_MAX];
-  struct stat st;
+static void test_atomic_write_file_mode(void)
+{
+	char path[PATH_MAX];
+	struct stat st;
 
-  TEST("atomic_write creates file with mode 0600");
+	TEST("atomic_write creates file with mode 0600");
 
-  snprintf(path, sizeof(path), "%s/test_mode", tmpdir);
-  atomic_write(path, "x", 1);
+	snprintf(path, sizeof(path), "%s/test_mode", tmpdir);
+	atomic_write(path, "x", 1);
 
-  if (stat(path, &st) != 0) {
-    FAIL("stat failed");
-    return;
-  }
-  if ((st.st_mode & 0777) != 0600) {
-    char msg[64];
-    snprintf(msg, sizeof(msg), "mode=%o", st.st_mode & 0777);
-    FAIL(msg);
-    return;
-  }
-  PASS();
+	if (stat(path, &st) != 0) {
+		FAIL("stat failed");
+		return;
+	}
+	if ((st.st_mode & 0777) != 0600) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "mode=%o", st.st_mode & 0777);
+		FAIL(msg);
+		return;
+	}
+	PASS();
 }
 
-static void test_write_status_attested(void) {
-  char buf[1024];
-  ssize_t n;
-  struct lota_status status;
+static void test_write_status_attested(void)
+{
+	char buf[1024];
+	ssize_t n;
+	struct lota_status status;
 
-  TEST("write_status: attested system generates correct file");
+	TEST("write_status: attested system generates correct file");
 
-  snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/status_att",
-           tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "%s/status_att", tmpdir);
 
-  memset(&status, 0, sizeof(status));
-  status.flags = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK | LOTA_FLAG_BPF_LOADED;
-  status.valid_until = 1738957200;
-  status.attest_count = 42;
-  status.fail_count = 1;
+	memset(&status, 0, sizeof(status));
+	status.flags =
+	    LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK | LOTA_FLAG_BPF_LOADED;
+	status.valid_until = 1738957200;
+	status.attest_count = 42;
+	status.fail_count = 1;
 
-  if (write_status(&status) != 0) {
-    FAIL("write_status failed");
-    return;
-  }
-  n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
-  if (n <= 0) {
-    FAIL("read failed");
-    return;
-  }
-  if (!strstr(buf, "LOTA_ATTESTED=1")) {
-    FAIL("missing LOTA_ATTESTED=1");
-    return;
-  }
-  if (!strstr(buf, "LOTA_FLAGS=0x0000000b")) {
-    FAIL("wrong flags");
-    return;
-  }
-  if (!strstr(buf, "LOTA_VALID_UNTIL=1738957200")) {
-    FAIL("wrong valid_until");
-    return;
-  }
-  if (!strstr(buf, "LOTA_ATTEST_COUNT=42")) {
-    FAIL("wrong attest_count");
-    return;
-  }
-  if (!strstr(buf, "LOTA_FAIL_COUNT=1")) {
-    FAIL("wrong fail_count");
-    return;
-  }
-  if (!strstr(buf, "LOTA_UPDATED=")) {
-    FAIL("missing LOTA_UPDATED");
-    return;
-  }
-  if (!strstr(buf, "LOTA_PID=")) {
-    FAIL("missing LOTA_PID");
-    return;
-  }
-  PASS();
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=1")) {
+		FAIL("missing LOTA_ATTESTED=1");
+		return;
+	}
+	if (!strstr(buf, "LOTA_FLAGS=0x0000000b")) {
+		FAIL("wrong flags");
+		return;
+	}
+	if (!strstr(buf, "LOTA_VALID_UNTIL=1738957200")) {
+		FAIL("wrong valid_until");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTEST_COUNT=42")) {
+		FAIL("wrong attest_count");
+		return;
+	}
+	if (!strstr(buf, "LOTA_FAIL_COUNT=1")) {
+		FAIL("wrong fail_count");
+		return;
+	}
+	if (!strstr(buf, "LOTA_UPDATED=")) {
+		FAIL("missing LOTA_UPDATED");
+		return;
+	}
+	if (!strstr(buf, "LOTA_PID=")) {
+		FAIL("missing LOTA_PID");
+		return;
+	}
+	PASS();
 }
 
-static void test_write_status_not_attested(void) {
-  char buf[1024];
-  ssize_t n;
-  struct lota_status status;
+static void test_write_status_not_attested(void)
+{
+	char buf[1024];
+	ssize_t n;
+	struct lota_status status;
 
-  TEST("write_status: non-attested system writes LOTA_ATTESTED=0");
+	TEST("write_status: non-attested system writes LOTA_ATTESTED=0");
 
-  snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/status_noatt",
-           tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "%s/status_noatt", tmpdir);
 
-  memset(&status, 0, sizeof(status));
-  status.flags = LOTA_FLAG_TPM_OK;
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_TPM_OK;
 
-  if (write_status(&status) != 0) {
-    FAIL("write_status failed");
-    return;
-  }
-  n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
-  if (n <= 0) {
-    FAIL("read failed");
-    return;
-  }
-  if (!strstr(buf, "LOTA_ATTESTED=0")) {
-    FAIL("missing LOTA_ATTESTED=0");
-    return;
-  }
-  PASS();
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("missing LOTA_ATTESTED=0");
+		return;
+	}
+	PASS();
 }
 
-static void test_write_status_zero_flags(void) {
-  char buf[1024];
-  ssize_t n;
-  struct lota_status status;
+static void test_write_status_zero_flags(void)
+{
+	char buf[1024];
+	ssize_t n;
+	struct lota_status status;
 
-  TEST("write_status: zero flags produces valid output");
+	TEST("write_status: zero flags produces valid output");
 
-  snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/status_zero",
-           tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "%s/status_zero", tmpdir);
 
-  memset(&status, 0, sizeof(status));
+	memset(&status, 0, sizeof(status));
 
-  if (write_status(&status) != 0) {
-    FAIL("write_status failed");
-    return;
-  }
-  n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
-  if (n <= 0) {
-    FAIL("read failed");
-    return;
-  }
-  if (!strstr(buf, "LOTA_ATTESTED=0")) {
-    FAIL("missing LOTA_ATTESTED=0");
-    return;
-  }
-  if (!strstr(buf, "LOTA_FLAGS=0x00000000")) {
-    FAIL("wrong flags");
-    return;
-  }
-  PASS();
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("missing LOTA_ATTESTED=0");
+		return;
+	}
+	if (!strstr(buf, "LOTA_FLAGS=0x00000000")) {
+		FAIL("wrong flags");
+		return;
+	}
+	PASS();
 }
 
-static void test_hook_active_when_not_started(void) {
-  TEST("lota_hook_active() returns 0 when not initialized");
+static void test_hook_active_when_not_started(void)
+{
+	TEST("lota_hook_active() returns 0 when not initialized");
 
-  g_hook.thread_started = 0;
-  g_hook.running = 0;
+	g_hook.thread_started = 0;
+	g_hook.running = 0;
 
-  if (lota_hook_active() != 0) {
-    FAIL("expected 0");
-    return;
-  }
-  PASS();
+	if (lota_hook_active() != 0) {
+		FAIL("expected 0");
+		return;
+	}
+	PASS();
 }
 
-static void test_hook_status_path_when_set(void) {
-  TEST("lota_hook_status_path() returns path when set");
+static void test_hook_status_path_when_set(void)
+{
+	TEST("lota_hook_status_path() returns path when set");
 
-  snprintf(g_hook.status_path, sizeof(g_hook.status_path),
-           "/run/user/1000/lota/lota-status");
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "/run/user/1000/lota/lota-status");
 
-  const char *p = lota_hook_status_path();
-  if (!p || strcmp(p, "/run/user/1000/lota/lota-status") != 0) {
-    FAIL("wrong path");
-    return;
-  }
-  PASS();
+	const char *p = lota_hook_status_path();
+	if (!p || strcmp(p, "/run/user/1000/lota/lota-status") != 0) {
+		FAIL("wrong path");
+		return;
+	}
+	PASS();
 }
 
-static void test_hook_status_path_when_empty(void) {
-  TEST("lota_hook_status_path() returns NULL when empty");
+static void test_hook_status_path_when_empty(void)
+{
+	TEST("lota_hook_status_path() returns NULL when empty");
 
-  g_hook.status_path[0] = '\0';
+	g_hook.status_path[0] = '\0';
 
-  if (lota_hook_status_path() != NULL) {
-    FAIL("expected NULL");
-    return;
-  }
-  PASS();
+	if (lota_hook_status_path() != NULL) {
+		FAIL("expected NULL");
+		return;
+	}
+	PASS();
 }
 
-static void test_hook_token_path_when_set(void) {
-  TEST("lota_hook_token_path() returns path when set");
+static void test_hook_token_path_when_set(void)
+{
+	TEST("lota_hook_token_path() returns path when set");
 
-  snprintf(g_hook.token_path, sizeof(g_hook.token_path),
-           "/run/user/1000/lota/lota-token.bin");
+	snprintf(g_hook.token_path, sizeof(g_hook.token_path),
+		 "/run/user/1000/lota/lota-token.bin");
 
-  const char *p = lota_hook_token_path();
-  if (!p || strcmp(p, "/run/user/1000/lota/lota-token.bin") != 0) {
-    FAIL("wrong path");
-    return;
-  }
-  PASS();
+	const char *p = lota_hook_token_path();
+	if (!p || strcmp(p, "/run/user/1000/lota/lota-token.bin") != 0) {
+		FAIL("wrong path");
+		return;
+	}
+	PASS();
 }
 
-static void test_hook_token_path_when_empty(void) {
-  TEST("lota_hook_token_path() returns NULL when empty");
+static void test_hook_token_path_when_empty(void)
+{
+	TEST("lota_hook_token_path() returns NULL when empty");
 
-  g_hook.token_path[0] = '\0';
+	g_hook.token_path[0] = '\0';
 
-  if (lota_hook_token_path() != NULL) {
-    FAIL("expected NULL");
-    return;
-  }
-  PASS();
+	if (lota_hook_token_path() != NULL) {
+		FAIL("expected NULL");
+		return;
+	}
+	PASS();
 }
 
-int main(void) {
-  printf("=== LOTA Wine Hook Unit Tests ===\n\n");
+int main(void)
+{
+	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
 
-  setup_tmpdir();
+	setup_tmpdir();
 
-  /* silence hook logs during tests */
-  g_hook.log_level = HOOK_LOG_SILENT;
+	/* silence hook logs during tests */
+	g_hook.log_level = HOOK_LOG_SILENT;
 
-  /* parse_log_level */
-  test_parse_log_level_debug();
-  test_parse_log_level_info();
-  test_parse_log_level_warn();
-  test_parse_log_level_error();
-  test_parse_log_level_silent();
-  test_parse_log_level_null();
-  test_parse_log_level_invalid();
+	/* parse_log_level */
+	test_parse_log_level_debug();
+	test_parse_log_level_info();
+	test_parse_log_level_warn();
+	test_parse_log_level_error();
+	test_parse_log_level_silent();
+	test_parse_log_level_null();
+	test_parse_log_level_invalid();
 
-  /* resolve_token_dir */
-  test_resolve_token_dir_explicit();
-  test_resolve_token_dir_xdg();
-  test_resolve_token_dir_fallback();
+	/* resolve_token_dir */
+	test_resolve_token_dir_explicit();
+	test_resolve_token_dir_xdg();
+	test_resolve_token_dir_fallback();
 
-  /* ensure_token_dir */
-  test_ensure_token_dir_creates();
-  test_ensure_token_dir_exists();
-  test_ensure_token_dir_not_a_dir();
-  test_ensure_token_dir_rejects_symlink();
-  test_ensure_token_dir_existing_mode_tightened();
+	/* ensure_token_dir */
+	test_ensure_token_dir_creates();
+	test_ensure_token_dir_exists();
+	test_ensure_token_dir_not_a_dir();
+	test_ensure_token_dir_rejects_symlink();
+	test_ensure_token_dir_existing_mode_tightened();
 
-  /* atomic_write */
-  test_atomic_write_creates_file();
-  test_atomic_write_overwrites();
-  test_atomic_write_no_tmp_leftover();
-  test_atomic_write_ignores_predictable_symlink_tmp();
-  test_atomic_write_file_mode();
+	/* atomic_write */
+	test_atomic_write_creates_file();
+	test_atomic_write_overwrites();
+	test_atomic_write_no_tmp_leftover();
+	test_atomic_write_ignores_predictable_symlink_tmp();
+	test_atomic_write_file_mode();
 
-  /* write_status */
-  test_write_status_attested();
-  test_write_status_not_attested();
-  test_write_status_zero_flags();
+	/* write_status */
+	test_write_status_attested();
+	test_write_status_not_attested();
+	test_write_status_zero_flags();
 
-  /* exported query functions */
-  test_hook_active_when_not_started();
-  test_hook_status_path_when_set();
-  test_hook_status_path_when_empty();
-  test_hook_token_path_when_set();
-  test_hook_token_path_when_empty();
+	/* exported query functions */
+	test_hook_active_when_not_started();
+	test_hook_status_path_when_set();
+	test_hook_status_path_when_empty();
+	test_hook_token_path_when_set();
+	test_hook_token_path_when_empty();
 
-  cleanup_tmpdir();
+	cleanup_tmpdir();
 
-  printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-  return (tests_passed == tests_run) ? 0 : 1;
+	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
+	return (tests_passed == tests_run) ? 0 : 1;
 }

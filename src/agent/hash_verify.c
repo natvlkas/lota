@@ -29,169 +29,176 @@
 /* Sentinel value: pass as cache_size to disable caching entirely */
 #define HASH_CACHE_DISABLED SIZE_MAX
 
-int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size) {
-  if (!ctx)
-    return -EINVAL;
+int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size)
+{
+	if (!ctx)
+		return -EINVAL;
 
-  memset(ctx, 0, sizeof(*ctx));
+	memset(ctx, 0, sizeof(*ctx));
 
-  /*
-   * Caching is disabled due to security concerns
-   * TODO: fs-verity in the future.
-   */
-  (void)cache_size; /* unused */
-  ctx->cache_capacity = 0;
-  ctx->cache = NULL;
+	/*
+	 * Caching is disabled due to security concerns
+	 * TODO: fs-verity in the future.
+	 */
+	(void)cache_size; /* unused */
+	ctx->cache_capacity = 0;
+	ctx->cache = NULL;
 
-  return 0;
+	return 0;
 }
 
-void hash_verify_cleanup(struct hash_verify_ctx *ctx) {
-  if (!ctx)
-    return;
-  free(ctx->cache);
-  ctx->cache = NULL;
-  ctx->cache_capacity = 0;
+void hash_verify_cleanup(struct hash_verify_ctx *ctx)
+{
+	if (!ctx)
+		return;
+	free(ctx->cache);
+	ctx->cache = NULL;
+	ctx->cache_capacity = 0;
 }
 
 /*
  * Compute SHA-256 from an already-open file descriptor.
  * The caller is responsible for opening and closing the fd.
  */
-static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE]) {
-  struct {
-    struct fsverity_digest hdr;
-    uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
-  } d;
+static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE])
+{
+	struct {
+		struct fsverity_digest hdr;
+		uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+	} d;
 
-  if (fd < 0 || !sha256_out)
-    return -EINVAL;
+	if (fd < 0 || !sha256_out)
+		return -EINVAL;
 
-  memset(&d, 0, sizeof(d));
-  d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+	memset(&d, 0, sizeof(d));
+	d.hdr.digest_size = (uint16_t)sizeof(d.digest);
 
-  if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
-    int err = errno;
+	if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+		int err = errno;
 
-    if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
-      return -ENODATA;
-    return -err;
-  }
+		if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
+			return -ENODATA;
+		return -err;
+	}
 
-  if (d.hdr.digest_size < LOTA_HASH_SIZE ||
-      d.hdr.digest_size > LOTA_VERITY_DIGEST_MAX_SIZE)
-    return -EPROTO;
+	if (d.hdr.digest_size < LOTA_HASH_SIZE ||
+	    d.hdr.digest_size > LOTA_VERITY_DIGEST_MAX_SIZE)
+		return -EPROTO;
 
-  memcpy(sha256_out, d.digest, LOTA_HASH_SIZE);
-  return 0;
+	memcpy(sha256_out, d.digest, LOTA_HASH_SIZE);
+	return 0;
 }
 
-int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]) {
-  int fd;
-  int ret;
+int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE])
+{
+	int fd;
+	int ret;
 
-  if (!path || !sha256_out)
-    return -EINVAL;
+	if (!path || !sha256_out)
+		return -EINVAL;
 
-  /* reject relative paths and empty strings */
-  if (path[0] != '/')
-    return -ENOENT;
+	/* reject relative paths and empty strings */
+	if (path[0] != '/')
+		return -ENOENT;
 
-  fd = open(path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-  if (fd < 0)
-    return -errno;
+	fd = open(path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+	if (fd < 0)
+		return -errno;
 
-  /* reject non-regular files */
-  {
-    struct stat st;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
-      close(fd);
-      return -EINVAL;
-    }
-  }
+	/* reject non-regular files */
+	{
+		struct stat st;
+		if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+			close(fd);
+			return -EINVAL;
+		}
+	}
 
-  ret = hash_fd(fd, sha256_out);
-  close(fd);
-  return ret;
+	ret = hash_fd(fd, sha256_out);
+	close(fd);
+	return ret;
 }
 
 int hash_verify_event(struct hash_verify_ctx *ctx,
-                      const struct lota_exec_event *event,
-                      uint8_t sha256_out[LOTA_HASH_SIZE]) {
-  struct stat st;
-  int is_exec;
-  int fd;
-  int ret;
+		      const struct lota_exec_event *event,
+		      uint8_t sha256_out[LOTA_HASH_SIZE])
+{
+	struct stat st;
+	int is_exec;
+	int fd;
+	int ret;
 
-  if (!ctx || !event || !sha256_out)
-    return -EINVAL;
+	if (!ctx || !event || !sha256_out)
+		return -EINVAL;
 
-  is_exec = (event->event_type == LOTA_EVENT_EXEC ||
-             event->event_type == LOTA_EVENT_EXEC_BLOCKED);
+	is_exec = (event->event_type == LOTA_EVENT_EXEC ||
+		   event->event_type == LOTA_EVENT_EXEC_BLOCKED);
 
-  /*
-   * For EXEC events, prefer /proc/PID/exe. It references the already-open
-   * executable inode that the kernel used for this process image.
-   *
-   * For non-EXEC file events, use event filename directly (absolute paths
-   * only), but still require fs-verity for a stable fingerprint.
-   */
-  if (is_exec) {
-    char proc_path[32];
+	/*
+	 * For EXEC events, prefer /proc/PID/exe. It references the already-open
+	 * executable inode that the kernel used for this process image.
+	 *
+	 * For non-EXEC file events, use event filename directly (absolute paths
+	 * only), but still require fs-verity for a stable fingerprint.
+	 */
+	if (is_exec) {
+		char proc_path[32];
 
-    if (event->event_type == LOTA_EVENT_EXEC_BLOCKED) {
-      ctx->errors++;
-      return -EPERM;
-    }
+		if (event->event_type == LOTA_EVENT_EXEC_BLOCKED) {
+			ctx->errors++;
+			return -EPERM;
+		}
 
-    snprintf(proc_path, sizeof(proc_path), "/proc/%u/exe", event->pid);
-    fd = open(proc_path, O_RDONLY | O_NOCTTY);
-  } else {
-    if (event->filename[0] != '/')
-      return -ENOENT;
-    fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-  }
+		snprintf(proc_path, sizeof(proc_path), "/proc/%u/exe",
+			 event->pid);
+		fd = open(proc_path, O_RDONLY | O_NOCTTY);
+	} else {
+		if (event->filename[0] != '/')
+			return -ENOENT;
+		fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+	}
 
-  if (fd < 0) {
-    ctx->errors++;
-    return -errno;
-  }
+	if (fd < 0) {
+		ctx->errors++;
+		return -errno;
+	}
 
-  if (fstat(fd, &st) < 0) {
-    ctx->errors++;
-    ret = -errno;
-    close(fd);
-    return ret;
-  }
+	if (fstat(fd, &st) < 0) {
+		ctx->errors++;
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
 
-  if (!S_ISREG(st.st_mode)) {
-    ctx->errors++;
-    close(fd);
-    return -EINVAL;
-  }
+	if (!S_ISREG(st.st_mode)) {
+		ctx->errors++;
+		close(fd);
+		return -EINVAL;
+	}
 
-  ret = hash_fd(fd, sha256_out);
+	ret = hash_fd(fd, sha256_out);
 
-  close(fd);
-  if (ret < 0) {
-    ctx->errors++;
-    return ret;
-  }
+	close(fd);
+	if (ret < 0) {
+		ctx->errors++;
+		return ret;
+	}
 
-  /* count successful integrity fingerprint resolutions */
-  ctx->misses++;
+	/* count successful integrity fingerprint resolutions */
+	ctx->misses++;
 
-  return 0;
+	return 0;
 }
 
 void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *hits,
-                       uint64_t *misses, uint64_t *errors) {
-  if (!ctx)
-    return;
-  if (hits)
-    *hits = ctx->hits;
-  if (misses)
-    *misses = ctx->misses;
-  if (errors)
-    *errors = ctx->errors;
+		       uint64_t *misses, uint64_t *errors)
+{
+	if (!ctx)
+		return;
+	if (hits)
+		*hits = ctx->hits;
+	if (misses)
+		*misses = ctx->misses;
+	if (errors)
+		*errors = ctx->errors;
 }

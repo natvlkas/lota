@@ -50,171 +50,175 @@
 #define STAT_BPF_SYSCALL_BLOCKED 13
 
 struct protected_pid_entry {
-  uint64_t start_time_ticks;
+	uint64_t start_time_ticks;
 };
 
 struct lota_task_auth_entry {
-  uint32_t flags;
-  uint32_t pad;
+	uint32_t flags;
+	uint32_t pad;
 };
 
 #define LOTA_TASK_AUTH_ADMIN (1U << 0)
 #define LOTA_TASK_AUTH_AGENT (1U << 1)
 
 struct trusted_lib_key {
-  uint64_t dev;
-  uint64_t ino;
+	uint64_t dev;
+	uint64_t ino;
 };
 
-static int harden_fd_cloexec(int fd, const char *label) {
-  int flags;
+static int harden_fd_cloexec(int fd, const char *label)
+{
+	int flags;
 
-  if (fd < 0)
-    return -EINVAL;
+	if (fd < 0)
+		return -EINVAL;
 
-  flags = fcntl(fd, F_GETFD, 0);
-  if (flags < 0)
-    return -errno;
+	flags = fcntl(fd, F_GETFD, 0);
+	if (flags < 0)
+		return -errno;
 
-  if ((flags & FD_CLOEXEC) != 0)
-    return 0;
+	if ((flags & FD_CLOEXEC) != 0)
+		return 0;
 
-  if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-    return -errno;
+	if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+		return -errno;
 
-  lota_info("Applied FD_CLOEXEC hardening on %s fd=%d", label ? label : "fd",
-            fd);
-  return 0;
+	lota_info("Applied FD_CLOEXEC hardening on %s fd=%d",
+		  label ? label : "fd", fd);
+	return 0;
 }
 
 /*
  * Returns 1 in initial PID namespace, 0 in nested PID namespace, <0 on error.
  */
-static int running_in_initial_pidns(void) {
-  FILE *fp;
-  char line[512];
-  int nspid_count = 0;
+static int running_in_initial_pidns(void)
+{
+	FILE *fp;
+	char line[512];
+	int nspid_count = 0;
 
-  fp = fopen("/proc/self/status", "r");
-  if (!fp)
-    return -errno;
+	fp = fopen("/proc/self/status", "r");
+	if (!fp)
+		return -errno;
 
-  while (fgets(line, sizeof(line), fp)) {
-    if (strncmp(line, "NSpid:\t", 7) != 0)
-      continue;
+	while (fgets(line, sizeof(line), fp)) {
+		if (strncmp(line, "NSpid:\t", 7) != 0)
+			continue;
 
-    char *p = line + 7;
-    while (*p != '\0') {
-      char *end = NULL;
-      unsigned long v;
+		char *p = line + 7;
+		while (*p != '\0') {
+			char *end = NULL;
+			unsigned long v;
 
-      while (*p == ' ' || *p == '\t')
-        p++;
-      if (*p == '\0' || *p == '\n')
-        break;
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '\0' || *p == '\n')
+				break;
 
-      errno = 0;
-      v = strtoul(p, &end, 10);
-      if (errno != 0 || end == p)
-        break;
-      (void)v;
-      nspid_count++;
-      p = end;
-    }
-    break;
-  }
+			errno = 0;
+			v = strtoul(p, &end, 10);
+			if (errno != 0 || end == p)
+				break;
+			(void)v;
+			nspid_count++;
+			p = end;
+		}
+		break;
+	}
 
-  fclose(fp);
+	fclose(fp);
 
-  if (nspid_count <= 0)
-    return -EINVAL;
+	if (nspid_count <= 0)
+		return -EINVAL;
 
-  return (nspid_count == 1) ? 1 : 0;
+	return (nspid_count == 1) ? 1 : 0;
 }
 
 /*
  * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
  */
-static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks) {
-  static int pidns_state = -1;
-  char path[64];
-  FILE *fp;
-  char line[4096];
-  char *rparen;
-  char *field;
-  char *saveptr = NULL;
-  int field_index = 3;
+static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks)
+{
+	static int pidns_state = -1;
+	char path[64];
+	FILE *fp;
+	char line[4096];
+	char *rparen;
+	char *field;
+	char *saveptr = NULL;
+	int field_index = 3;
 
-  if (!start_time_ticks)
-    return -EINVAL;
+	if (!start_time_ticks)
+		return -EINVAL;
 
-  if (pidns_state < 0)
-    pidns_state = running_in_initial_pidns();
-  if (pidns_state <= 0)
-    return (pidns_state < 0) ? pidns_state : -EOPNOTSUPP;
+	if (pidns_state < 0)
+		pidns_state = running_in_initial_pidns();
+	if (pidns_state <= 0)
+		return (pidns_state < 0) ? pidns_state : -EOPNOTSUPP;
 
-  snprintf(path, sizeof(path), "/proc/%u/stat", pid);
-  fp = fopen(path, "r");
-  if (!fp)
-    return -errno;
+	snprintf(path, sizeof(path), "/proc/%u/stat", pid);
+	fp = fopen(path, "r");
+	if (!fp)
+		return -errno;
 
-  if (!fgets(line, sizeof(line), fp)) {
-    int err = ferror(fp) ? -errno : -EIO;
-    fclose(fp);
-    return err;
-  }
-  fclose(fp);
+	if (!fgets(line, sizeof(line), fp)) {
+		int err = ferror(fp) ? -errno : -EIO;
+		fclose(fp);
+		return err;
+	}
+	fclose(fp);
 
-  rparen = strrchr(line, ')');
-  if (!rparen)
-    return -EINVAL;
+	rparen = strrchr(line, ')');
+	if (!rparen)
+		return -EINVAL;
 
-  field = rparen + 2; /* skip ") " before field 3 */
-  if (*field == '\0')
-    return -EINVAL;
+	field = rparen + 2; /* skip ") " before field 3 */
+	if (*field == '\0')
+		return -EINVAL;
 
-  for (char *tok = strtok_r(field, " ", &saveptr); tok;
-       tok = strtok_r(NULL, " ", &saveptr), field_index++) {
-    if (field_index == 22) {
-      char *end = NULL;
-      unsigned long long val;
+	for (char *tok = strtok_r(field, " ", &saveptr); tok;
+	     tok = strtok_r(NULL, " ", &saveptr), field_index++) {
+		if (field_index == 22) {
+			char *end = NULL;
+			unsigned long long val;
 
-      errno = 0;
-      val = strtoull(tok, &end, 10);
-      if (errno != 0 || end == tok || (end && *end != '\0'))
-        return -EINVAL;
+			errno = 0;
+			val = strtoull(tok, &end, 10);
+			if (errno != 0 || end == tok || (end && *end != '\0'))
+				return -EINVAL;
 
-      *start_time_ticks = (uint64_t)val;
-      return 0;
-    }
-  }
+			*start_time_ticks = (uint64_t)val;
+			return 0;
+		}
+	}
 
-  return -EINVAL;
+	return -EINVAL;
 }
 
-static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags) {
-  int pidfd;
-  struct lota_task_auth_entry value = {0};
+static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags)
+{
+	int pidfd;
+	struct lota_task_auth_entry value = {0};
 
-  if (task_auth_fd < 0 || pid <= 0 || flags == 0)
-    return -EINVAL;
+	if (task_auth_fd < 0 || pid <= 0 || flags == 0)
+		return -EINVAL;
 
 #ifndef SYS_pidfd_open
-  return -ENOTSUP;
+	return -ENOTSUP;
 #else
-  pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
-  if (pidfd < 0)
-    return -errno;
+	pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
+	if (pidfd < 0)
+		return -errno;
 
-  value.flags = flags;
-  if (bpf_map_update_elem(task_auth_fd, &pidfd, &value, BPF_ANY) < 0) {
-    int err = -errno;
-    close(pidfd);
-    return err;
-  }
+	value.flags = flags;
+	if (bpf_map_update_elem(task_auth_fd, &pidfd, &value, BPF_ANY) < 0) {
+		int err = -errno;
+		close(pidfd);
+		return err;
+	}
 
-  close(pidfd);
-  return 0;
+	close(pidfd);
+	return 0;
 #endif
 }
 
@@ -222,134 +226,141 @@ static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags) {
  * libbpf print callback - redirect to stderr with prefix
  */
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
-                           va_list args) {
-  if (level == LIBBPF_DEBUG)
-    return 0;
+			   va_list args)
+{
+	if (level == LIBBPF_DEBUG)
+		return 0;
 
-  fprintf(stderr, "libbpf: ");
-  int n = vfprintf(stderr, format, args);
-  return n;
+	fprintf(stderr, "libbpf: ");
+	int n = vfprintf(stderr, format, args);
+	return n;
 }
 
 /*
  * Resolve kernel symbol address from /proc/kallsyms.
  * Returns 0 on failure.
  */
-unsigned long resolve_kernel_symbol(const char *name) {
-  FILE *f;
-  char line[512];
-  unsigned long addr = 0;
+unsigned long resolve_kernel_symbol(const char *name)
+{
+	FILE *f;
+	char line[512];
+	unsigned long addr = 0;
 
-  f = fopen("/proc/kallsyms", "r");
-  if (!f) {
-    lota_warn("Failed to open /proc/kallsyms: %s", strerror(errno));
-    return 0;
-  }
+	f = fopen("/proc/kallsyms", "r");
+	if (!f) {
+		lota_warn("Failed to open /proc/kallsyms: %s", strerror(errno));
+		return 0;
+	}
 
-  while (fgets(line, sizeof(line), f)) {
-    char sym_name[256];
-    char type;
-    unsigned long a;
+	while (fgets(line, sizeof(line), f)) {
+		char sym_name[256];
+		char type;
+		unsigned long a;
 
-    if (sscanf(line, "%lx %c %s", &a, &type, sym_name) == 3) {
-      if (strcmp(name, sym_name) == 0) {
-        addr = a;
-        break;
-      }
-    }
-  }
+		if (sscanf(line, "%lx %c %s", &a, &type, sym_name) == 3) {
+			if (strcmp(name, sym_name) == 0) {
+				addr = a;
+				break;
+			}
+		}
+	}
 
-  fclose(f);
-  return addr;
+	fclose(f);
+	return addr;
 }
 
-static unsigned long resolve_lockdown_symbol(void) {
-  unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
+static unsigned long resolve_lockdown_symbol(void)
+{
+	unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
 
-  if (!lockdown) {
-    lockdown = resolve_kernel_symbol("kernel_locked_down");
-  }
+	if (!lockdown) {
+		lockdown = resolve_kernel_symbol("kernel_locked_down");
+	}
 
-  if (!lockdown) {
-    lockdown = resolve_kernel_symbol("security_lockdown_enabled");
-  }
+	if (!lockdown) {
+		lockdown = resolve_kernel_symbol("security_lockdown_enabled");
+	}
 
-  return lockdown;
+	return lockdown;
 }
 
-static void build_expected_integrity_config(struct integrity_data *cfg) {
-  if (!cfg)
-    return;
+static void build_expected_integrity_config(struct integrity_data *cfg)
+{
+	if (!cfg)
+		return;
 
-  memset(cfg, 0, sizeof(*cfg));
-  cfg->sig_enforce_addr = resolve_kernel_symbol("sig_enforce");
-  cfg->lockdown_addr = resolve_lockdown_symbol();
+	memset(cfg, 0, sizeof(*cfg));
+	cfg->sig_enforce_addr = resolve_kernel_symbol("sig_enforce");
+	cfg->lockdown_addr = resolve_lockdown_symbol();
 }
 
 static int read_text_file(const char *path, char *buf, size_t buf_size,
-                          size_t *out_len) {
-  int fd;
-  ssize_t n;
+			  size_t *out_len)
+{
+	int fd;
+	ssize_t n;
 
-  if (!path || !buf || buf_size < 2)
-    return -EINVAL;
+	if (!path || !buf || buf_size < 2)
+		return -EINVAL;
 
-  fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0)
-    return -errno;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
 
-  n = read(fd, buf, buf_size - 1);
-  if (n < 0) {
-    int err = -errno;
-    close(fd);
-    return err;
-  }
+	n = read(fd, buf, buf_size - 1);
+	if (n < 0) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
 
-  close(fd);
-  buf[n] = '\0';
-  if (out_len)
-    *out_len = (size_t)n;
-  return 0;
+	close(fd);
+	buf[n] = '\0';
+	if (out_len)
+		*out_len = (size_t)n;
+	return 0;
 }
 
-static int kernel_lockdown_restrictive(void) {
-  char buf[256];
-  size_t len = 0;
-  char *lb;
-  char *rb;
+static int kernel_lockdown_restrictive(void)
+{
+	char buf[256];
+	size_t len = 0;
+	char *lb;
+	char *rb;
 
-  int ret =
-      read_text_file("/sys/kernel/security/lockdown", buf, sizeof(buf), &len);
-  if (ret < 0)
-    return ret;
+	int ret = read_text_file("/sys/kernel/security/lockdown", buf,
+				 sizeof(buf), &len);
+	if (ret < 0)
+		return ret;
 
-  if (len == 0)
-    return -EIO;
+	if (len == 0)
+		return -EIO;
 
-  lb = strchr(buf, '[');
-  rb = lb ? strchr(lb + 1, ']') : NULL;
-  if (!lb || !rb || rb <= lb + 1)
-    return -EPERM;
+	lb = strchr(buf, '[');
+	rb = lb ? strchr(lb + 1, ']') : NULL;
+	if (!lb || !rb || rb <= lb + 1)
+		return -EPERM;
 
-  *rb = '\0';
-  if (strcmp(lb + 1, "integrity") == 0 ||
-      strcmp(lb + 1, "confidentiality") == 0)
-    return 0;
+	*rb = '\0';
+	if (strcmp(lb + 1, "integrity") == 0 ||
+	    strcmp(lb + 1, "confidentiality") == 0)
+		return 0;
 
-  return -EPERM;
+	return -EPERM;
 }
 
-static int kernel_ima_appraisal_enabled(void) {
-  char buf[8192];
-  int ret =
-      read_text_file("/sys/kernel/security/ima/policy", buf, sizeof(buf), NULL);
-  if (ret < 0)
-    return ret;
+static int kernel_ima_appraisal_enabled(void)
+{
+	char buf[8192];
+	int ret = read_text_file("/sys/kernel/security/ima/policy", buf,
+				 sizeof(buf), NULL);
+	if (ret < 0)
+		return ret;
 
-  if (!strstr(buf, "appraise"))
-    return -EPERM;
+	if (!strstr(buf, "appraise"))
+		return -EPERM;
 
-  return 0;
+	return 0;
 }
 
 /*
@@ -362,18 +373,19 @@ static int kernel_ima_appraisal_enabled(void) {
  * during the boot -> agent window and survive every later
  * enforcement gate the agent installs.
  */
-static int kernel_module_sig_enforced(void) {
-  char buf[16];
-  size_t len = 0;
-  int ret = read_text_file("/sys/module/module/parameters/sig_enforce", buf,
-                           sizeof(buf), &len);
-  if (ret < 0)
-    return ret;
-  if (len == 0)
-    return -EIO;
-  if (buf[0] == 'Y' || buf[0] == '1')
-    return 0;
-  return -EPERM;
+static int kernel_module_sig_enforced(void)
+{
+	char buf[16];
+	size_t len = 0;
+	int ret = read_text_file("/sys/module/module/parameters/sig_enforce",
+				 buf, sizeof(buf), &len);
+	if (ret < 0)
+		return ret;
+	if (len == 0)
+		return -EIO;
+	if (buf[0] == 'Y' || buf[0] == '1')
+		return 0;
+	return -EPERM;
 }
 
 /*
@@ -397,44 +409,49 @@ static int kernel_module_sig_enforced(void) {
  * permissive mode (the label still tells us whether the relabel
  * happened).
  */
-static int tpm_device_selinux_label_ok(void) {
-  static const char *const tpm_paths[] = {"/dev/tpmrm0", "/dev/tpm0"};
-  const char *expected = "lota_tpm_device_t";
-  bool any_present = false;
+static int tpm_device_selinux_label_ok(void)
+{
+	static const char *const tpm_paths[] = {"/dev/tpmrm0", "/dev/tpm0"};
+	const char *expected = "lota_tpm_device_t";
+	bool any_present = false;
 
-  for (size_t i = 0; i < sizeof(tpm_paths) / sizeof(tpm_paths[0]); i++) {
-    char ctx[256];
-    ssize_t got =
-        getxattr(tpm_paths[i], "security.selinux", ctx, sizeof(ctx) - 1);
-    if (got < 0) {
-      if (errno == ENOENT)
-        continue;
-      if (errno == ENOTSUP) {
-        /* Filesystem has no SELinux xattr support (no SELinux on
-         * host). Report success on the assumption the operator
-         * runs a non-SELinux deployment; the udev fence is then
-         * not the active defence anyway. */
-        return 0;
-      }
-      lota_err("getxattr(security.selinux) failed on %s: %s", tpm_paths[i],
-               strerror(errno));
-      return -errno;
-    }
-    any_present = true;
-    ctx[got] = '\0';
-    if (!strstr(ctx, expected)) {
-      lota_err("TPM device %s carries SELinux label %s; expected %s "
-               "(udev rule configs/udev/99-lota-tpm.rules did not relabel the "
-               "device, so any other root domain can rw the TPM and DoS LOTA "
-               "attestation availability)",
-               tpm_paths[i], ctx, expected);
-      return -EPERM;
-    }
-  }
+	for (size_t i = 0; i < sizeof(tpm_paths) / sizeof(tpm_paths[0]); i++) {
+		char ctx[256];
+		ssize_t got = getxattr(tpm_paths[i], "security.selinux", ctx,
+				       sizeof(ctx) - 1);
+		if (got < 0) {
+			if (errno == ENOENT)
+				continue;
+			if (errno == ENOTSUP) {
+				/* Filesystem has no SELinux xattr support (no
+				 * SELinux on host). Report success on the
+				 * assumption the operator runs a non-SELinux
+				 * deployment; the udev fence is then not the
+				 * active defence anyway. */
+				return 0;
+			}
+			lota_err("getxattr(security.selinux) failed on %s: %s",
+				 tpm_paths[i], strerror(errno));
+			return -errno;
+		}
+		any_present = true;
+		ctx[got] = '\0';
+		if (!strstr(ctx, expected)) {
+			lota_err("TPM device %s carries SELinux label %s; "
+				 "expected %s "
+				 "(udev rule configs/udev/99-lota-tpm.rules "
+				 "did not relabel the "
+				 "device, so any other root domain can rw the "
+				 "TPM and DoS LOTA "
+				 "attestation availability)",
+				 tpm_paths[i], ctx, expected);
+			return -EPERM;
+		}
+	}
 
-  if (!any_present)
-    return -ENOENT;
-  return 0;
+	if (!any_present)
+		return -ENOENT;
+	return 0;
 }
 
 /*
@@ -457,1332 +474,1426 @@ static int tpm_device_selinux_label_ok(void) {
  * minimum the agent can verify before it starts; the surrounding
  * rootfs guarantees are the operator's deployment contract.
  */
-static int agent_self_fsverity_enabled(void) {
-  int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-  if (fd < 0)
-    return -errno;
+static int agent_self_fsverity_enabled(void)
+{
+	int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
 
-  struct {
-    struct fsverity_digest hdr;
-    uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
-  } d;
-  memset(&d, 0, sizeof(d));
-  d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+	struct {
+		struct fsverity_digest hdr;
+		uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+	} d;
+	memset(&d, 0, sizeof(d));
+	d.hdr.digest_size = (uint16_t)sizeof(d.digest);
 
-  int ret = 0;
-  if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
-    int err = errno;
-    if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
-      ret = -ENODATA;
-    else
-      ret = -err;
-  }
-  close(fd);
-  return ret;
+	int ret = 0;
+	if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+		int err = errno;
+		if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
+			ret = -ENODATA;
+		else
+			ret = -err;
+	}
+	close(fd);
+	return ret;
 }
 
-int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs) {
-  int ret;
+int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
+{
+	int ret;
 
-  ret = kernel_lockdown_restrictive();
-  if (ret < 0) {
-    lota_err("Kernel lockdown is not in restrictive mode "
-             "(integrity/confidentiality required)");
-    return ret;
-  }
+	ret = kernel_lockdown_restrictive();
+	if (ret < 0) {
+		lota_err("Kernel lockdown is not in restrictive mode "
+			 "(integrity/confidentiality required)");
+		return ret;
+	}
 
-  ret = kernel_module_sig_enforced();
-  if (ret < 0) {
-    lota_err("Kernel module signature enforcement is not active "
-             "(module.sig_enforce=1 required to close the boot -> agent "
-             "module-load window)");
-    return ret;
-  }
+	ret = kernel_module_sig_enforced();
+	if (ret < 0) {
+		lota_err(
+		    "Kernel module signature enforcement is not active "
+		    "(module.sig_enforce=1 required to close the boot -> agent "
+		    "module-load window)");
+		return ret;
+	}
 
-  ret = kernel_ima_appraisal_enabled();
-  if (ret < 0) {
-    lota_err("IMA appraisal policy is required for anti-tamper startup");
-    return ret;
-  }
+	ret = kernel_ima_appraisal_enabled();
+	if (ret < 0) {
+		lota_err(
+		    "IMA appraisal policy is required for anti-tamper startup");
+		return ret;
+	}
 
-  ret = tpm_device_selinux_label_ok();
-  if (ret == -ENOENT) {
-    lota_warn("No /dev/tpm[rm]0 devices present at hardening gate; "
-              "skipping SELinux confinement check");
-  } else if (ret < 0) {
-    /*
-     * The label mismatch already logged a SECURITY-tagged error
-     * inside tpm_device_selinux_label_ok(). Treat it the same as
-     * the other hardening prerequisites: hard-fail by default so
-     * the operator notices the broken udev relabel at startup;
-     * the existing --insecure-allow-mutable-rootfs escape hatch
-     * also tolerates the deviation since a host that opts into a
-     * mutable rootfs is already in the legacy-acknowledged
-     * profile and is not running a tight SELinux deployment.
-     */
-    if (allow_mutable_rootfs) {
-      lota_warn("INSECURE: TPM device SELinux label check failed and "
-                "--insecure-allow-mutable-rootfs was set; another root "
-                "domain can DoS the TPM resource manager and reduce "
-                "attestation availability");
-    } else {
-      return ret;
-    }
-  }
+	ret = tpm_device_selinux_label_ok();
+	if (ret == -ENOENT) {
+		lota_warn("No /dev/tpm[rm]0 devices present at hardening gate; "
+			  "skipping SELinux confinement check");
+	} else if (ret < 0) {
+		/*
+		 * The label mismatch already logged a SECURITY-tagged error
+		 * inside tpm_device_selinux_label_ok(). Treat it the same as
+		 * the other hardening prerequisites: hard-fail by default so
+		 * the operator notices the broken udev relabel at startup;
+		 * the existing --insecure-allow-mutable-rootfs escape hatch
+		 * also tolerates the deviation since a host that opts into a
+		 * mutable rootfs is already in the legacy-acknowledged
+		 * profile and is not running a tight SELinux deployment.
+		 */
+		if (allow_mutable_rootfs) {
+			lota_warn("INSECURE: TPM device SELinux label check "
+				  "failed and "
+				  "--insecure-allow-mutable-rootfs was set; "
+				  "another root "
+				  "domain can DoS the TPM resource manager and "
+				  "reduce "
+				  "attestation availability");
+		} else {
+			return ret;
+		}
+	}
 
-  ret = agent_self_fsverity_enabled();
-  if (ret < 0) {
-    if (allow_mutable_rootfs) {
-      lota_warn("INSECURE: agent binary (/proc/self/exe) is not "
-                "fs-verity protected, and --insecure-allow-mutable-rootfs "
-                "was set. Dirty shutdown (panic/power-loss/SIGKILL) on "
-                "this host cannot detect a swapped agent binary, library "
-                "closure, or policy file across a hard reset; the verifier "
-                "will accept the same PCR14 boot commitment after the "
-                "next boot even if those inputs were tampered while the "
-                "host was offline.");
-    } else {
-      lota_err(
-          "Agent binary (/proc/self/exe) is not fs-verity protected "
-          "(required to detect tampering across panic/power-loss/SIGKILL; "
-          "dirty shutdown cannot run poison_runtime_pcr() and the verifier "
-          "has no other way to notice a swapped binary on a measured rootfs)");
-      return ret;
-    }
-  }
+	ret = agent_self_fsverity_enabled();
+	if (ret < 0) {
+		if (allow_mutable_rootfs) {
+			lota_warn(
+			    "INSECURE: agent binary (/proc/self/exe) is not "
+			    "fs-verity protected, and "
+			    "--insecure-allow-mutable-rootfs "
+			    "was set. Dirty shutdown "
+			    "(panic/power-loss/SIGKILL) on "
+			    "this host cannot detect a swapped agent binary, "
+			    "library "
+			    "closure, or policy file across a hard reset; the "
+			    "verifier "
+			    "will accept the same PCR14 boot commitment after "
+			    "the "
+			    "next boot even if those inputs were tampered "
+			    "while the "
+			    "host was offline.");
+		} else {
+			lota_err("Agent binary (/proc/self/exe) is not "
+				 "fs-verity protected "
+				 "(required to detect tampering across "
+				 "panic/power-loss/SIGKILL; "
+				 "dirty shutdown cannot run "
+				 "poison_runtime_pcr() and the verifier "
+				 "has no other way to notice a swapped binary "
+				 "on a measured rootfs)");
+			return ret;
+		}
+	}
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_init(struct bpf_loader_ctx *ctx) {
-  if (!ctx)
-    return -EINVAL;
+int bpf_loader_init(struct bpf_loader_ctx *ctx)
+{
+	if (!ctx)
+		return -EINVAL;
 
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->ringbuf_fd = -1;
-  ctx->stats_fd = -1;
-  ctx->config_fd = -1;
-  ctx->task_auth_fd = -1;
-  ctx->trusted_libs_fd = -1;
-  ctx->trusted_lib_mnt_fd = -1;
-  ctx->protected_pids_fd = -1;
-  ctx->allow_verity_digest_fd = -1;
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->ringbuf_fd = -1;
+	ctx->stats_fd = -1;
+	ctx->config_fd = -1;
+	ctx->task_auth_fd = -1;
+	ctx->trusted_libs_fd = -1;
+	ctx->trusted_lib_mnt_fd = -1;
+	ctx->protected_pids_fd = -1;
+	ctx->allow_verity_digest_fd = -1;
 
-  libbpf_set_print(libbpf_print_fn);
-  libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+	libbpf_set_print(libbpf_print_fn);
+	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
-  return 0;
+	return 0;
 }
 
 static int verify_bpf_object_signature(const char *bpf_obj_path,
-                                       const char *bpf_pubkey_pem_path) {
-  char *sig_path = NULL;
-  size_t sig_path_len;
-  uint8_t *obj_data = NULL;
-  size_t obj_len = 0;
-  uint8_t sig[POLICY_SIG_SIZE];
-  FILE *f = NULL;
-  long fsize;
-  size_t nread;
-  int ret;
+				       const char *bpf_pubkey_pem_path)
+{
+	char *sig_path = NULL;
+	size_t sig_path_len;
+	uint8_t *obj_data = NULL;
+	size_t obj_len = 0;
+	uint8_t sig[POLICY_SIG_SIZE];
+	FILE *f = NULL;
+	long fsize;
+	size_t nread;
+	int ret;
 
-  if (!bpf_obj_path || !bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0')
-    return -EINVAL;
+	if (!bpf_obj_path || !bpf_pubkey_pem_path ||
+	    bpf_pubkey_pem_path[0] == '\0')
+		return -EINVAL;
 
-  f = fopen(bpf_obj_path, "rb");
-  if (!f)
-    return -errno;
+	f = fopen(bpf_obj_path, "rb");
+	if (!f)
+		return -errno;
 
-  if (fseek(f, 0, SEEK_END) != 0) {
-    ret = -errno;
-    goto out;
-  }
+	if (fseek(f, 0, SEEK_END) != 0) {
+		ret = -errno;
+		goto out;
+	}
 
-  fsize = ftell(f);
-  if (fsize < 0) {
-    ret = -EIO;
-    goto out;
-  }
+	fsize = ftell(f);
+	if (fsize < 0) {
+		ret = -EIO;
+		goto out;
+	}
 
-  if ((size_t)fsize > BPF_OBJECT_MAX_FILE_SIZE) {
-    ret = -EFBIG;
-    goto out;
-  }
+	if ((size_t)fsize > BPF_OBJECT_MAX_FILE_SIZE) {
+		ret = -EFBIG;
+		goto out;
+	}
 
-  if (fseek(f, 0, SEEK_SET) != 0) {
-    ret = -errno;
-    goto out;
-  }
+	if (fseek(f, 0, SEEK_SET) != 0) {
+		ret = -errno;
+		goto out;
+	}
 
-  obj_data = malloc((size_t)fsize);
-  if (!obj_data) {
-    ret = -ENOMEM;
-    goto out;
-  }
+	obj_data = malloc((size_t)fsize);
+	if (!obj_data) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-  nread = fread(obj_data, 1, (size_t)fsize, f);
-  if (nread != (size_t)fsize) {
-    ret = -EIO;
-    goto out;
-  }
-  obj_len = (size_t)fsize;
+	nread = fread(obj_data, 1, (size_t)fsize, f);
+	if (nread != (size_t)fsize) {
+		ret = -EIO;
+		goto out;
+	}
+	obj_len = (size_t)fsize;
 
-  fclose(f);
-  f = NULL;
+	fclose(f);
+	f = NULL;
 
-  sig_path_len = strlen(bpf_obj_path) + 5; /* ".sig" + NUL */
-  sig_path = calloc(sig_path_len, 1);
-  if (!sig_path) {
-    ret = -ENOMEM;
-    goto out;
-  }
+	sig_path_len = strlen(bpf_obj_path) + 5; /* ".sig" + NUL */
+	sig_path = calloc(sig_path_len, 1);
+	if (!sig_path) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-  snprintf(sig_path, sig_path_len, "%s.sig", bpf_obj_path);
+	snprintf(sig_path, sig_path_len, "%s.sig", bpf_obj_path);
 
-  f = fopen(sig_path, "rb");
-  if (!f) {
-    ret = -errno ? -errno : -ENOENT;
-    goto out;
-  }
+	f = fopen(sig_path, "rb");
+	if (!f) {
+		ret = -errno ? -errno : -ENOENT;
+		goto out;
+	}
 
-  nread = fread(sig, 1, POLICY_SIG_SIZE, f);
-  if (nread != POLICY_SIG_SIZE) {
-    ret = -EAUTH;
-    goto out;
-  }
+	nread = fread(sig, 1, POLICY_SIG_SIZE, f);
+	if (nread != POLICY_SIG_SIZE) {
+		ret = -EAUTH;
+		goto out;
+	}
 
-  ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
+	ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
 
 out:
-  if (f)
-    fclose(f);
-  free(sig_path);
-  free(obj_data);
-  return ret;
+	if (f)
+		fclose(f);
+	free(sig_path);
+	free(obj_data);
+	return ret;
 }
 
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
-                    const char *bpf_pubkey_pem_path) {
-  struct bpf_program *prog;
-  int err;
-  int ret;
+		    const char *bpf_pubkey_pem_path)
+{
+	struct bpf_program *prog;
+	int err;
+	int ret;
 
-  if (!ctx || !bpf_obj_path)
-    return -EINVAL;
+	if (!ctx || !bpf_obj_path)
+		return -EINVAL;
 
-  if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
-    lota_err("BPF public key is required to verify %s signature", bpf_obj_path);
-    return -EINVAL;
-  }
+	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
+		lota_err("BPF public key is required to verify %s signature",
+			 bpf_obj_path);
+		return -EINVAL;
+	}
 
-  if (ctx->loaded)
-    return -EALREADY;
+	if (ctx->loaded)
+		return -EALREADY;
 
-  ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
-  if (ret < 0) {
-    lota_err("BPF object signature verification failed for %s: %s",
-             bpf_obj_path, strerror(-ret));
-    return ret;
-  }
+	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
+	if (ret < 0) {
+		lota_err("BPF object signature verification failed for %s: %s",
+			 bpf_obj_path, strerror(-ret));
+		return ret;
+	}
 
-  struct bpf_object_open_opts opts = {
-      .sz = sizeof(struct bpf_object_open_opts),
-      .kernel_log_level = 1,
-  };
+	struct bpf_object_open_opts opts = {
+	    .sz = sizeof(struct bpf_object_open_opts),
+	    .kernel_log_level = 1,
+	};
 
-  ctx->obj = bpf_object__open_file(bpf_obj_path, &opts);
-  if (!ctx->obj) {
-    lota_err("Failed to open BPF object %s: %s", bpf_obj_path, strerror(errno));
-    return -errno;
-  }
+	ctx->obj = bpf_object__open_file(bpf_obj_path, &opts);
+	if (!ctx->obj) {
+		lota_err("Failed to open BPF object %s: %s", bpf_obj_path,
+			 strerror(errno));
+		return -errno;
+	}
 
-  bpf_object__for_each_program(prog, ctx->obj) {
-    bpf_program__set_log_level(prog, 2);
-  }
+	bpf_object__for_each_program(prog, ctx->obj)
+	{
+		bpf_program__set_log_level(prog, 2);
+	}
 
-  err = bpf_object__load(ctx->obj);
-  if (err) {
-    lota_err("Failed to load BPF object: %d", err);
-    goto err_close;
-  }
+	err = bpf_object__load(ctx->obj);
+	if (err) {
+		lota_err("Failed to load BPF object: %d", err);
+		goto err_close;
+	}
 
-  /*
-   * Program attach is intentionally deferred until bpf_loader_attach().
-   * Resolving map fds, hardening them, writing task_auth /
-   * integrity_config / early LOCK_BPF, and then letting the caller
-   * populate the full enforcement policy (mode + strict_* + block_*)
-   * BEFORE programs go live closes the attach -> startup-policy
-   * window: every hook observes the operator policy from its very
-   * first invocation, not post-load default zeros.
-   */
+	/*
+	 * Program attach is intentionally deferred until bpf_loader_attach().
+	 * Resolving map fds, hardening them, writing task_auth /
+	 * integrity_config / early LOCK_BPF, and then letting the caller
+	 * populate the full enforcement policy (mode + strict_* + block_*)
+	 * BEFORE programs go live closes the attach -> startup-policy
+	 * window: every hook observes the operator policy from its very
+	 * first invocation, not post-load default zeros.
+	 */
 
-  /* Get ring buffer map fd */
-  ctx->ringbuf_fd = bpf_object__find_map_fd_by_name(ctx->obj, "events");
-  if (ctx->ringbuf_fd < 0) {
-    err = ctx->ringbuf_fd;
-    lota_err("Failed to find events map");
-    goto err_close;
-  }
-  err = harden_fd_cloexec(ctx->ringbuf_fd, "events map");
-  if (err < 0) {
-    lota_err("Failed to harden events map fd: %s", strerror(-err));
-    goto err_close;
-  }
+	/* Get ring buffer map fd */
+	ctx->ringbuf_fd = bpf_object__find_map_fd_by_name(ctx->obj, "events");
+	if (ctx->ringbuf_fd < 0) {
+		err = ctx->ringbuf_fd;
+		lota_err("Failed to find events map");
+		goto err_close;
+	}
+	err = harden_fd_cloexec(ctx->ringbuf_fd, "events map");
+	if (err < 0) {
+		lota_err("Failed to harden events map fd: %s", strerror(-err));
+		goto err_close;
+	}
 
-  /* Get stats map fd */
-  ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
-  if (ctx->stats_fd < 0) {
-    ctx->stats_fd = -1; // stats map is optional
-  } else {
-    err = harden_fd_cloexec(ctx->stats_fd, "stats map");
-    if (err < 0) {
-      lota_err("Failed to harden stats map fd: %s", strerror(-err));
-      goto err_close;
-    }
-  }
+	/* Get stats map fd */
+	ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
+	if (ctx->stats_fd < 0) {
+		ctx->stats_fd = -1; // stats map is optional
+	} else {
+		err = harden_fd_cloexec(ctx->stats_fd, "stats map");
+		if (err < 0) {
+			lota_err("Failed to harden stats map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
 
-  ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
-  if (ctx->config_fd < 0) {
-    ctx->config_fd = -1;
-  } else {
-    err = harden_fd_cloexec(ctx->config_fd, "lota_config map");
-    if (err < 0) {
-      lota_err("Failed to harden lota_config map fd: %s", strerror(-err));
-      goto err_close;
-    }
-  }
+	ctx->config_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
+	if (ctx->config_fd < 0) {
+		ctx->config_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->config_fd, "lota_config map");
+		if (err < 0) {
+			lota_err("Failed to harden lota_config map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
 
-  ctx->task_auth_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "lota_task_auth");
-  if (ctx->task_auth_fd < 0) {
-    err = ctx->task_auth_fd;
-    lota_err("Failed to find lota_task_auth map");
-    goto err_close;
-  }
-  err = harden_fd_cloexec(ctx->task_auth_fd, "lota_task_auth map");
-  if (err < 0) {
-    lota_err("Failed to harden lota_task_auth map fd: %s", strerror(-err));
-    goto err_close;
-  }
+	ctx->task_auth_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "lota_task_auth");
+	if (ctx->task_auth_fd < 0) {
+		err = ctx->task_auth_fd;
+		lota_err("Failed to find lota_task_auth map");
+		goto err_close;
+	}
+	err = harden_fd_cloexec(ctx->task_auth_fd, "lota_task_auth map");
+	if (err < 0) {
+		lota_err("Failed to harden lota_task_auth map fd: %s",
+			 strerror(-err));
+		goto err_close;
+	}
 
-  ret = set_task_auth_flags(ctx->task_auth_fd, getpid(),
-                            LOTA_TASK_AUTH_ADMIN | LOTA_TASK_AUTH_AGENT);
-  if (ret < 0) {
-    lota_err("Failed to register task auth flags: %s", strerror(-ret));
-    err = ret;
-    goto err_close;
-  }
+	ret = set_task_auth_flags(ctx->task_auth_fd, getpid(),
+				  LOTA_TASK_AUTH_ADMIN | LOTA_TASK_AUTH_AGENT);
+	if (ret < 0) {
+		lota_err("Failed to register task auth flags: %s",
+			 strerror(-ret));
+		err = ret;
+		goto err_close;
+	}
 
-  if (bpf_map_freeze(ctx->task_auth_fd) < 0) {
-    err = -errno;
-    lota_err("Failed to freeze lota_task_auth map: %s", strerror(errno));
-    goto err_close;
-  }
+	if (bpf_map_freeze(ctx->task_auth_fd) < 0) {
+		err = -errno;
+		lota_err("Failed to freeze lota_task_auth map: %s",
+			 strerror(errno));
+		goto err_close;
+	}
 
-  if (ctx->config_fd >= 0) {
-    uint32_t lock_key = LOTA_CFG_LOCK_BPF;
-    uint32_t lock_val = 1;
+	if (ctx->config_fd >= 0) {
+		uint32_t lock_key = LOTA_CFG_LOCK_BPF;
+		uint32_t lock_val = 1;
 
-    if (bpf_map_update_elem(ctx->config_fd, &lock_key, &lock_val, BPF_ANY) <
-        0) {
-      lota_err("Failed to enable early LOCK_BPF: %s", strerror(errno));
-      err = -errno;
-      goto err_close;
-    }
-    lota_info("Early BPF map lock enabled during loader init");
-  } else {
-    lota_err("lota_config map unavailable, early LOCK_BPF not applied");
-  }
+		if (bpf_map_update_elem(ctx->config_fd, &lock_key, &lock_val,
+					BPF_ANY) < 0) {
+			lota_err("Failed to enable early LOCK_BPF: %s",
+				 strerror(errno));
+			err = -errno;
+			goto err_close;
+		}
+		lota_info("Early BPF map lock enabled during loader init");
+	} else {
+		lota_err(
+		    "lota_config map unavailable, early LOCK_BPF not applied");
+	}
 
-  /* Integrity config map */
-  ctx->integrity_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
-  if (ctx->integrity_fd >= 0) {
-    err = harden_fd_cloexec(ctx->integrity_fd, "integrity_config map");
-    if (err < 0) {
-      lota_err("Failed to harden integrity_config map fd: %s", strerror(-err));
-      goto err_close;
-    }
+	/* Integrity config map */
+	ctx->integrity_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
+	if (ctx->integrity_fd >= 0) {
+		err = harden_fd_cloexec(ctx->integrity_fd,
+					"integrity_config map");
+		if (err < 0) {
+			lota_err("Failed to harden integrity_config map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
 
-    struct integrity_data cfg = {0};
+		struct integrity_data cfg = {0};
 
-    build_expected_integrity_config(&cfg);
+		build_expected_integrity_config(&cfg);
 
-    lota_info("Resolved kernel symbols: sig_enforce=0x%lx, lockdown=0x%lx",
-              (unsigned long)cfg.sig_enforce_addr,
-              (unsigned long)cfg.lockdown_addr);
+		lota_info("Resolved kernel symbols: sig_enforce=0x%lx, "
+			  "lockdown=0x%lx",
+			  (unsigned long)cfg.sig_enforce_addr,
+			  (unsigned long)cfg.lockdown_addr);
 
-    uint32_t key = 0;
-    if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg, BPF_ANY) < 0) {
-      lota_err("Failed to update integrity_config map: %s", strerror(errno));
-    }
-  } else {
-    lota_err("integrity_config map not found in BPF object");
-  }
+		uint32_t key = 0;
+		if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg,
+					BPF_ANY) < 0) {
+			lota_err("Failed to update integrity_config map: %s",
+				 strerror(errno));
+		}
+	} else {
+		lota_err("integrity_config map not found in BPF object");
+	}
 
-  /* Get trusted libraries map fd */
-  ctx->trusted_libs_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
-  if (ctx->trusted_libs_fd < 0) {
-    ctx->trusted_libs_fd = -1; /* optional map */
-  } else {
-    err = harden_fd_cloexec(ctx->trusted_libs_fd, "trusted_libs map");
-    if (err < 0) {
-      lota_err("Failed to harden trusted_libs map fd: %s", strerror(-err));
-      goto err_close;
-    }
-  }
+	/* Get trusted libraries map fd */
+	ctx->trusted_libs_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
+	if (ctx->trusted_libs_fd < 0) {
+		ctx->trusted_libs_fd = -1; /* optional map */
+	} else {
+		err =
+		    harden_fd_cloexec(ctx->trusted_libs_fd, "trusted_libs map");
+		if (err < 0) {
+			lota_err("Failed to harden trusted_libs map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
 
-  /* Get trusted parent mountpoint map fd */
-  ctx->trusted_lib_mnt_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
-  if (ctx->trusted_lib_mnt_fd < 0) {
-    ctx->trusted_lib_mnt_fd = -1; /* optional map */
-  } else {
-    err = harden_fd_cloexec(ctx->trusted_lib_mnt_fd, "trusted_lib_mnt map");
-    if (err < 0) {
-      lota_err("Failed to harden trusted_lib_mnt map fd: %s", strerror(-err));
-      goto err_close;
-    }
-  }
+	/* Get trusted parent mountpoint map fd */
+	ctx->trusted_lib_mnt_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
+	if (ctx->trusted_lib_mnt_fd < 0) {
+		ctx->trusted_lib_mnt_fd = -1; /* optional map */
+	} else {
+		err = harden_fd_cloexec(ctx->trusted_lib_mnt_fd,
+					"trusted_lib_mnt map");
+		if (err < 0) {
+			lota_err("Failed to harden trusted_lib_mnt map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
 
-  /* Get protected PIDs map fd */
-  ctx->protected_pids_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
-  if (ctx->protected_pids_fd < 0) {
-    ctx->protected_pids_fd = -1; /* optional map */
-  } else {
-    err = harden_fd_cloexec(ctx->protected_pids_fd, "protected_pids map");
-    if (err < 0) {
-      lota_err("Failed to harden protected_pids map fd: %s", strerror(-err));
-      goto err_close;
-    }
-  }
+	/* Get protected PIDs map fd */
+	ctx->protected_pids_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
+	if (ctx->protected_pids_fd < 0) {
+		ctx->protected_pids_fd = -1; /* optional map */
+	} else {
+		err = harden_fd_cloexec(ctx->protected_pids_fd,
+					"protected_pids map");
+		if (err < 0) {
+			lota_err("Failed to harden protected_pids map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
 
-  /* Get fs-verity allowlist map fd */
-  ctx->allow_verity_digest_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity_digest");
-  if (ctx->allow_verity_digest_fd < 0) {
-    ctx->allow_verity_digest_fd = -1; /* optional map */
-  } else {
-    err = harden_fd_cloexec(ctx->allow_verity_digest_fd,
-                            "allow_verity_digest map");
-    if (err < 0) {
-      lota_err("Failed to harden allow_verity_digest map fd: %s",
-               strerror(-err));
-      goto err_close;
-    }
-  }
+	/* Get fs-verity allowlist map fd */
+	ctx->allow_verity_digest_fd =
+	    bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity_digest");
+	if (ctx->allow_verity_digest_fd < 0) {
+		ctx->allow_verity_digest_fd = -1; /* optional map */
+	} else {
+		err = harden_fd_cloexec(ctx->allow_verity_digest_fd,
+					"allow_verity_digest map");
+		if (err < 0) {
+			lota_err(
+			    "Failed to harden allow_verity_digest map fd: %s",
+			    strerror(-err));
+			goto err_close;
+		}
+	}
 
-  ctx->loaded = true;
-  return 0;
+	ctx->loaded = true;
+	return 0;
 
 err_close:
-  for (int i = 0; i < ctx->link_count; i++) {
-    bpf_link__destroy(ctx->links[i]);
-    ctx->links[i] = NULL;
-  }
-  ctx->link_count = 0;
-  bpf_object__close(ctx->obj);
-  ctx->obj = NULL;
-  return err;
+	for (int i = 0; i < ctx->link_count; i++) {
+		bpf_link__destroy(ctx->links[i]);
+		ctx->links[i] = NULL;
+	}
+	ctx->link_count = 0;
+	bpf_object__close(ctx->obj);
+	ctx->obj = NULL;
+	return err;
 }
 
-int bpf_loader_attach(struct bpf_loader_ctx *ctx) {
-  struct bpf_program *prog;
-  struct bpf_link *link;
-  int err;
+int bpf_loader_attach(struct bpf_loader_ctx *ctx)
+{
+	struct bpf_program *prog;
+	struct bpf_link *link;
+	int err;
 
-  if (!ctx)
-    return -EINVAL;
+	if (!ctx)
+		return -EINVAL;
 
-  if (!ctx->loaded)
-    return -EINVAL;
+	if (!ctx->loaded)
+		return -EINVAL;
 
-  if (ctx->attached)
-    return -EALREADY;
+	if (ctx->attached)
+		return -EALREADY;
 
-  /*
-   * Attach all supported runtime enforcement programs.
-   *
-   * Two program classes go live here:
-   *
-   *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
-   *     (bprm_check_security, kernel_read_file, kernel_load_data,
-   *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
-   *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are
-   *     the authoritative deny points for execve / module load /
-   *     mprotect / ptrace_attach / signal delivery / BPF map writes.
-   *
-   *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
-   *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback).
-   *     The LSM ptrace_access_check hook covers PTRACE_ATTACH and
-   *     friends, but process_vm_readv/writev, /proc/PID/mem,
-   *     process_madvise, kcmp, migrate_pages, move_pages and
-   *     get_robust_list reach the same credential check through
-   *     mm_access() -> __ptrace_may_access() without always
-   *     re-entering the LSM call chain. The fmod_ret hook enforces
-   *     the identical "agent task / protected pid / block_ptrace in
-   *     enforce mode" predicate on the permission return value.
-   *
-   * The required-programs table catches a partial BPF object or a
-   * kernel that silently refuses one of the program types (e.g.
-   * fmod_ret on __ptrace_may_access without
-   * CONFIG_FUNCTION_ERROR_INJECTION). A missing required program
-   * surfaces as -ENOENT here so the daemon exits before
-   * sd_notify(READY=1).
-   */
-  static const char *const required_programs[] = {
-      "lota_ptrace_access_check",
-      "lota_ptrace_may_access_fallback",
-  };
-  const size_t required_count =
-      sizeof(required_programs) / sizeof(required_programs[0]);
-  bool required_attached[sizeof(required_programs) /
-                         sizeof(required_programs[0])] = {false};
+	/*
+	 * Attach all supported runtime enforcement programs.
+	 *
+	 * Two program classes go live here:
+	 *
+	 *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
+	 *     (bprm_check_security, kernel_read_file, kernel_load_data,
+	 *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
+	 *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are
+	 *     the authoritative deny points for execve / module load /
+	 *     mprotect / ptrace_attach / signal delivery / BPF map writes.
+	 *
+	 *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
+	 *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback).
+	 *     The LSM ptrace_access_check hook covers PTRACE_ATTACH and
+	 *     friends, but process_vm_readv/writev, /proc/PID/mem,
+	 *     process_madvise, kcmp, migrate_pages, move_pages and
+	 *     get_robust_list reach the same credential check through
+	 *     mm_access() -> __ptrace_may_access() without always
+	 *     re-entering the LSM call chain. The fmod_ret hook enforces
+	 *     the identical "agent task / protected pid / block_ptrace in
+	 *     enforce mode" predicate on the permission return value.
+	 *
+	 * The required-programs table catches a partial BPF object or a
+	 * kernel that silently refuses one of the program types (e.g.
+	 * fmod_ret on __ptrace_may_access without
+	 * CONFIG_FUNCTION_ERROR_INJECTION). A missing required program
+	 * surfaces as -ENOENT here so the daemon exits before
+	 * sd_notify(READY=1).
+	 */
+	static const char *const required_programs[] = {
+	    "lota_ptrace_access_check",
+	    "lota_ptrace_may_access_fallback",
+	};
+	const size_t required_count =
+	    sizeof(required_programs) / sizeof(required_programs[0]);
+	bool required_attached[sizeof(required_programs) /
+			       sizeof(required_programs[0])] = {false};
 
-  bpf_object__for_each_program(prog, ctx->obj) {
-    enum bpf_prog_type prog_type = bpf_program__type(prog);
+	bpf_object__for_each_program(prog, ctx->obj)
+	{
+		enum bpf_prog_type prog_type = bpf_program__type(prog);
 
-    if (prog_type != BPF_PROG_TYPE_LSM && prog_type != BPF_PROG_TYPE_TRACING)
-      continue;
+		if (prog_type != BPF_PROG_TYPE_LSM &&
+		    prog_type != BPF_PROG_TYPE_TRACING)
+			continue;
 
-    link = bpf_program__attach(prog);
-    if (!link) {
-      err = -errno;
-      lota_err("Failed to attach program %s: %d", bpf_program__name(prog), err);
-      goto err_detach;
-    }
+		link = bpf_program__attach(prog);
+		if (!link) {
+			err = -errno;
+			lota_err("Failed to attach program %s: %d",
+				 bpf_program__name(prog), err);
+			goto err_detach;
+		}
 
-    if (ctx->link_count < BPF_MAX_LSM_LINKS) {
-      ctx->links[ctx->link_count++] = link;
-    } else {
-      lota_err("Too many attached BPF programs, increase BPF_MAX_LSM_LINKS");
-      bpf_link__destroy(link);
-      err = -E2BIG;
-      goto err_detach;
-    }
+		if (ctx->link_count < BPF_MAX_LSM_LINKS) {
+			ctx->links[ctx->link_count++] = link;
+		} else {
+			lota_err("Too many attached BPF programs, increase "
+				 "BPF_MAX_LSM_LINKS");
+			bpf_link__destroy(link);
+			err = -E2BIG;
+			goto err_detach;
+		}
 
-    const char *attached_name = bpf_program__name(prog);
-    lota_info("Attached BPF program: %s", attached_name);
+		const char *attached_name = bpf_program__name(prog);
+		lota_info("Attached BPF program: %s", attached_name);
 
-    for (size_t i = 0; i < required_count; i++) {
-      if (strcmp(attached_name, required_programs[i]) == 0) {
-        required_attached[i] = true;
-        break;
-      }
-    }
-  }
+		for (size_t i = 0; i < required_count; i++) {
+			if (strcmp(attached_name, required_programs[i]) == 0) {
+				required_attached[i] = true;
+				break;
+			}
+		}
+	}
 
-  for (size_t i = 0; i < required_count; i++) {
-    if (!required_attached[i]) {
-      lota_err("Required BPF program %s not attached; refusing to run with "
-               "ptrace policy gap",
-               required_programs[i]);
-      err = -ENOENT;
-      goto err_detach;
-    }
-  }
+	for (size_t i = 0; i < required_count; i++) {
+		if (!required_attached[i]) {
+			lota_err("Required BPF program %s not attached; "
+				 "refusing to run with "
+				 "ptrace policy gap",
+				 required_programs[i]);
+			err = -ENOENT;
+			goto err_detach;
+		}
+	}
 
-  ctx->attached = true;
-  return 0;
+	ctx->attached = true;
+	return 0;
 
 err_detach:
-  for (int i = 0; i < ctx->link_count; i++) {
-    bpf_link__destroy(ctx->links[i]);
-    ctx->links[i] = NULL;
-  }
-  ctx->link_count = 0;
-  return err;
+	for (int i = 0; i < ctx->link_count; i++) {
+		bpf_link__destroy(ctx->links[i]);
+		ctx->links[i] = NULL;
+	}
+	ctx->link_count = 0;
+	return err;
 }
 
 int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
-                             bpf_event_handler_t handler, void *handler_ctx) {
-  if (!ctx || !ctx->loaded || !handler)
-    return -EINVAL;
+			     bpf_event_handler_t handler, void *handler_ctx)
+{
+	if (!ctx || !ctx->loaded || !handler)
+		return -EINVAL;
 
-  if (ctx->ringbuf)
-    return -EALREADY;
+	if (ctx->ringbuf)
+		return -EALREADY;
 
-  /*
-   * Create ring buffer manager.
-   * The handler will be called for each event.
-   */
-  ctx->ringbuf = ring_buffer__new(
-      ctx->ringbuf_fd, (ring_buffer_sample_fn)handler, handler_ctx, NULL);
-  if (!ctx->ringbuf) {
-    lota_err("Failed to create ring buffer");
-    return -errno;
-  }
+	/*
+	 * Create ring buffer manager.
+	 * The handler will be called for each event.
+	 */
+	ctx->ringbuf = ring_buffer__new(
+	    ctx->ringbuf_fd, (ring_buffer_sample_fn)handler, handler_ctx, NULL);
+	if (!ctx->ringbuf) {
+		lota_err("Failed to create ring buffer");
+		return -errno;
+	}
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms) {
-  if (!ctx || !ctx->ringbuf)
-    return -EINVAL;
+int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms)
+{
+	if (!ctx || !ctx->ringbuf)
+		return -EINVAL;
 
-  return ring_buffer__poll(ctx->ringbuf, timeout_ms);
+	return ring_buffer__poll(ctx->ringbuf, timeout_ms);
 }
 
-int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx) {
-  if (!ctx || !ctx->ringbuf)
-    return -EINVAL;
-  return ring_buffer__epoll_fd(ctx->ringbuf);
+int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx)
+{
+	if (!ctx || !ctx->ringbuf)
+		return -EINVAL;
+	return ring_buffer__epoll_fd(ctx->ringbuf);
 }
 
-int bpf_loader_consume(struct bpf_loader_ctx *ctx) {
-  if (!ctx || !ctx->ringbuf)
-    return -EINVAL;
-  return ring_buffer__consume(ctx->ringbuf);
+int bpf_loader_consume(struct bpf_loader_ctx *ctx)
+{
+	if (!ctx || !ctx->ringbuf)
+		return -EINVAL;
+	return ring_buffer__consume(ctx->ringbuf);
 }
 
 int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
-                         uint64_t *events_sent, uint64_t *errors,
-                         uint64_t *drops) {
-  uint64_t value;
-  uint32_t key;
-  int err;
+			 uint64_t *events_sent, uint64_t *errors,
+			 uint64_t *drops)
+{
+	uint64_t value;
+	uint32_t key;
+	int err;
 
-  if (!ctx || !ctx->loaded || ctx->stats_fd < 0)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || ctx->stats_fd < 0)
+		return -EINVAL;
 
-  if (total_execs) {
-    key = STAT_TOTAL_EXECS;
-    err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-    *total_execs = (err == 0) ? value : 0;
-  }
+	if (total_execs) {
+		key = STAT_TOTAL_EXECS;
+		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
+		*total_execs = (err == 0) ? value : 0;
+	}
 
-  if (events_sent) {
-    key = STAT_EVENTS_SENT;
-    err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-    *events_sent = (err == 0) ? value : 0;
-  }
+	if (events_sent) {
+		key = STAT_EVENTS_SENT;
+		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
+		*events_sent = (err == 0) ? value : 0;
+	}
 
-  if (errors) {
-    key = STAT_ERRORS;
-    err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-    *errors = (err == 0) ? value : 0;
-  }
+	if (errors) {
+		key = STAT_ERRORS;
+		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
+		*errors = (err == 0) ? value : 0;
+	}
 
-  if (drops) {
-    key = STAT_RINGBUF_DROPS;
-    err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-    *drops = (err == 0) ? value : 0;
-  }
+	if (drops) {
+		key = STAT_RINGBUF_DROPS;
+		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
+		*drops = (err == 0) ? value : 0;
+	}
 
-  return 0;
+	return 0;
 }
 
-void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
-  if (!ctx)
-    return;
+void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
+{
+	if (!ctx)
+		return;
 
-  if (ctx->ringbuf) {
-    ring_buffer__free(ctx->ringbuf);
-    ctx->ringbuf = NULL;
-  }
+	if (ctx->ringbuf) {
+		ring_buffer__free(ctx->ringbuf);
+		ctx->ringbuf = NULL;
+	}
 
-  for (int i = 0; i < ctx->link_count; i++) {
-    bpf_link__destroy(ctx->links[i]);
-    ctx->links[i] = NULL;
-  }
-  ctx->link_count = 0;
+	for (int i = 0; i < ctx->link_count; i++) {
+		bpf_link__destroy(ctx->links[i]);
+		ctx->links[i] = NULL;
+	}
+	ctx->link_count = 0;
 
-  if (ctx->obj) {
-    bpf_object__close(ctx->obj);
-    ctx->obj = NULL;
-  }
+	if (ctx->obj) {
+		bpf_object__close(ctx->obj);
+		ctx->obj = NULL;
+	}
 
-  ctx->loaded = false;
-  ctx->attached = false;
-  ctx->ringbuf_fd = -1;
-  ctx->stats_fd = -1;
-  ctx->config_fd = -1;
-  ctx->task_auth_fd = -1;
-  ctx->integrity_fd = -1;
-  ctx->trusted_libs_fd = -1;
-  ctx->trusted_lib_mnt_fd = -1;
-  ctx->protected_pids_fd = -1;
-  ctx->allow_verity_digest_fd = -1;
+	ctx->loaded = false;
+	ctx->attached = false;
+	ctx->ringbuf_fd = -1;
+	ctx->stats_fd = -1;
+	ctx->config_fd = -1;
+	ctx->task_auth_fd = -1;
+	ctx->integrity_fd = -1;
+	ctx->trusted_libs_fd = -1;
+	ctx->trusted_lib_mnt_fd = -1;
+	ctx->protected_pids_fd = -1;
+	ctx->allow_verity_digest_fd = -1;
 }
 
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
-                                   const struct lota_verity_digest_key *key) {
-  uint32_t value = 1;
+				   const struct lota_verity_digest_key *key)
+{
+	uint32_t value = 1;
 
-  if (!ctx || !ctx->loaded || !key)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || !key)
+		return -EINVAL;
 
-  if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
-    return -EINVAL;
+	if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+		return -EINVAL;
 
-  if (ctx->allow_verity_digest_fd < 0)
-    return -ENOTSUP;
+	if (ctx->allow_verity_digest_fd < 0)
+		return -ENOTSUP;
 
-  if (bpf_map_update_elem(ctx->allow_verity_digest_fd, key, &value, BPF_ANY) <
-      0)
-    return -errno;
+	if (bpf_map_update_elem(ctx->allow_verity_digest_fd, key, &value,
+				BPF_ANY) < 0)
+		return -errno;
 
-  return 0;
+	return 0;
 }
 
-static int open_regular_file_nofollow(const char *path) {
-  int fd = -1;
+static int open_regular_file_nofollow(const char *path)
+{
+	int fd = -1;
 
-  if (!path)
-    return -EINVAL;
+	if (!path)
+		return -EINVAL;
 
-  if (path[0] == '\0')
-    return -EINVAL;
+	if (path[0] == '\0')
+		return -EINVAL;
 
 #ifndef O_NOFOLLOW
-  return -ENOTSUP;
+	return -ENOTSUP;
 #else
-  if (path[0] != '/')
-    return -EINVAL;
+	if (path[0] != '/')
+		return -EINVAL;
 
-  {
-    struct open_how how = {
-        .flags = O_RDONLY | O_CLOEXEC,
-        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-    };
+	{
+		struct open_how how = {
+		    .flags = O_RDONLY | O_CLOEXEC,
+		    .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+		};
 
-    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
-    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
-      return -errno;
-  }
+		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
+				  sizeof(how));
+		if (fd < 0 && errno != ENOSYS && errno != EINVAL)
+			return -errno;
+	}
 
-  if (fd < 0) {
-    int dirfd = -1;
-    const char *p = path;
+	if (fd < 0) {
+		int dirfd = -1;
+		const char *p = path;
 
-    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd < 0)
-      return -errno;
+		dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+		if (dirfd < 0)
+			return -errno;
 
-    while (*p == '/')
-      p++;
+		while (*p == '/')
+			p++;
 
-    while (*p != '\0') {
-      char name[NAME_MAX + 1];
-      const char *slash = strchr(p, '/');
-      size_t n = slash ? (size_t)(slash - p) : strlen(p);
-      int nextfd;
+		while (*p != '\0') {
+			char name[NAME_MAX + 1];
+			const char *slash = strchr(p, '/');
+			size_t n = slash ? (size_t)(slash - p) : strlen(p);
+			int nextfd;
 
-      if (n == 0) {
-        p++;
-        continue;
-      }
-      if (n > NAME_MAX) {
-        close(dirfd);
-        return -ENAMETOOLONG;
-      }
+			if (n == 0) {
+				p++;
+				continue;
+			}
+			if (n > NAME_MAX) {
+				close(dirfd);
+				return -ENAMETOOLONG;
+			}
 
-      memcpy(name, p, n);
-      name[n] = '\0';
+			memcpy(name, p, n);
+			name[n] = '\0';
 
-      if (slash) {
-        nextfd =
-            openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        close(dirfd);
-        if (nextfd < 0)
-          return -errno;
-        dirfd = nextfd;
+			if (slash) {
+				nextfd = openat(dirfd, name,
+						O_PATH | O_DIRECTORY |
+						    O_NOFOLLOW | O_CLOEXEC);
+				close(dirfd);
+				if (nextfd < 0)
+					return -errno;
+				dirfd = nextfd;
 
-        p = slash + 1;
-        while (*p == '/')
-          p++;
-        continue;
-      }
+				p = slash + 1;
+				while (*p == '/')
+					p++;
+				continue;
+			}
 
-      fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-      close(dirfd);
-      if (fd < 0)
-        return -errno;
-      break;
-    }
+			fd = openat(dirfd, name,
+				    O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+			close(dirfd);
+			if (fd < 0)
+				return -errno;
+			break;
+		}
 
-    if (fd < 0)
-      return -EINVAL;
-  }
+		if (fd < 0)
+			return -EINVAL;
+	}
 
-  return fd;
+	return fd;
 #endif
 }
 
 static int measure_fsverity_digest(const char *path,
-                                   struct lota_verity_digest_key *out) {
-  int fd;
-  struct stat st;
-  int ret = 0;
+				   struct lota_verity_digest_key *out)
+{
+	int fd;
+	struct stat st;
+	int ret = 0;
 
-  if (!path || !out)
-    return -EINVAL;
+	if (!path || !out)
+		return -EINVAL;
 
-  fd = open_regular_file_nofollow(path);
-  if (fd < 0)
-    return fd;
+	fd = open_regular_file_nofollow(path);
+	if (fd < 0)
+		return fd;
 
-  if (fstat(fd, &st) != 0) {
-    ret = -errno;
-    close(fd);
-    return ret;
-  }
+	if (fstat(fd, &st) != 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
 
-  if (!S_ISREG(st.st_mode)) {
-    close(fd);
-    return -EINVAL;
-  }
+	if (!S_ISREG(st.st_mode)) {
+		close(fd);
+		return -EINVAL;
+	}
 
-  /* fsverity_digest has a flexible array; reserve max supported size */
-  {
-    struct {
-      struct fsverity_digest hdr;
-      uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
-    } d;
+	/* fsverity_digest has a flexible array; reserve max supported size */
+	{
+		struct {
+			struct fsverity_digest hdr;
+			uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+		} d;
 
-    memset(&d, 0, sizeof(d));
-    d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+		memset(&d, 0, sizeof(d));
+		d.hdr.digest_size = (uint16_t)sizeof(d.digest);
 
-    if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
-      ret = -errno;
-      close(fd);
-      return ret;
-    }
+		if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+			ret = -errno;
+			close(fd);
+			return ret;
+		}
 
-    if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
-      close(fd);
-      return -EINVAL;
-    }
+		if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+			close(fd);
+			return -EINVAL;
+		}
 
-    memset(out, 0, sizeof(*out));
-    out->len = d.hdr.digest_size;
-    memcpy(out->digest, d.digest, (size_t)out->len);
-  }
+		memset(out, 0, sizeof(*out));
+		out->len = d.hdr.digest_size;
+		memcpy(out->digest, d.digest, (size_t)out->len);
+	}
 
-  close(fd);
-  return 0;
+	close(fd);
+	return 0;
 }
 
 int bpf_loader_measure_verity_digest(const char *path,
-                                     struct lota_verity_digest_key *out) {
-  return measure_fsverity_digest(path, out);
+				     struct lota_verity_digest_key *out)
+{
+	return measure_fsverity_digest(path, out);
 }
 
-int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path) {
-  struct lota_verity_digest_key key = {0};
-  int ret;
+int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path)
+{
+	struct lota_verity_digest_key key = {0};
+	int ret;
 
-  if (!ctx || !ctx->loaded || !path)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || !path)
+		return -EINVAL;
 
-  if (ctx->allow_verity_digest_fd < 0)
-    return -ENOTSUP;
+	if (ctx->allow_verity_digest_fd < 0)
+		return -ENOTSUP;
 
-  ret = measure_fsverity_digest(path, &key);
-  if (ret < 0)
-    return ret;
+	ret = measure_fsverity_digest(path, &key);
+	if (ret < 0)
+		return ret;
 
-  return bpf_loader_allow_verity_digest(ctx, &key);
+	return bpf_loader_allow_verity_digest(ctx, &key);
 }
 
-int bpf_loader_disallow_verity_digest(
-    struct bpf_loader_ctx *ctx, const struct lota_verity_digest_key *key) {
-  if (!ctx || !ctx->loaded || !key)
-    return -EINVAL;
+int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
+				      const struct lota_verity_digest_key *key)
+{
+	if (!ctx || !ctx->loaded || !key)
+		return -EINVAL;
 
-  if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
-    return -EINVAL;
+	if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+		return -EINVAL;
 
-  if (ctx->allow_verity_digest_fd < 0)
-    return -ENOTSUP;
+	if (ctx->allow_verity_digest_fd < 0)
+		return -ENOTSUP;
 
-  if (bpf_map_delete_elem(ctx->allow_verity_digest_fd, key) < 0)
-    return -errno;
+	if (bpf_map_delete_elem(ctx->allow_verity_digest_fd, key) < 0)
+		return -errno;
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode) {
-  uint32_t key = LOTA_CFG_MODE;
+int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode)
+{
+	uint32_t key = LOTA_CFG_MODE;
 
-  if (!ctx || !ctx->loaded || ctx->config_fd < 0)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || ctx->config_fd < 0)
+		return -EINVAL;
 
-  if (mode > LOTA_MODE_MAINTENANCE)
-    return -EINVAL;
+	if (mode > LOTA_MODE_MAINTENANCE)
+		return -EINVAL;
 
-  return bpf_map_update_elem(ctx->config_fd, &key, &mode, BPF_ANY);
+	return bpf_map_update_elem(ctx->config_fd, &key, &mode, BPF_ANY);
 }
 
-int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode) {
-  uint32_t key = LOTA_CFG_MODE;
-  uint32_t value;
-  int err;
+int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode)
+{
+	uint32_t key = LOTA_CFG_MODE;
+	uint32_t value;
+	int err;
 
-  if (!ctx || !ctx->loaded || ctx->config_fd < 0 || !mode)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || ctx->config_fd < 0 || !mode)
+		return -EINVAL;
 
-  err = bpf_map_lookup_elem(ctx->config_fd, &key, &value);
-  if (err < 0)
-    return err;
+	err = bpf_map_lookup_elem(ctx->config_fd, &key, &value);
+	if (err < 0)
+		return err;
 
-  *mode = value;
-  return 0;
+	*mode = value;
+	return 0;
 }
 
 int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
-                          uint32_t value) {
-  if (!ctx || !ctx->loaded || ctx->config_fd < 0)
-    return -EINVAL;
+			  uint32_t value)
+{
+	if (!ctx || !ctx->loaded || ctx->config_fd < 0)
+		return -EINVAL;
 
-  return bpf_map_update_elem(ctx->config_fd, &key, &value, BPF_ANY);
+	return bpf_map_update_elem(ctx->config_fd, &key, &value, BPF_ANY);
 }
 
-int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx) {
-  uint32_t key = 0;
-  struct integrity_data current = {0};
-  struct integrity_data expected = {0};
+int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
+{
+	uint32_t key = 0;
+	struct integrity_data current = {0};
+	struct integrity_data expected = {0};
 
-  if (!ctx || !ctx->loaded)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded)
+		return -EINVAL;
 
-  if (ctx->integrity_fd < 0)
-    return -ENOTSUP;
+	if (ctx->integrity_fd < 0)
+		return -ENOTSUP;
 
-  if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
-    return -errno;
+	if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
+		return -errno;
 
-  build_expected_integrity_config(&expected);
+	build_expected_integrity_config(&expected);
 
-  if (current.sig_enforce_addr != expected.sig_enforce_addr ||
-      current.lockdown_addr != expected.lockdown_addr) {
-    lota_err(
-        "integrity_config mismatch: map(sig_enforce=0x%llx lockdown=0x%llx) "
-        "expected(sig_enforce=0x%llx lockdown=0x%llx)",
-        (unsigned long long)current.sig_enforce_addr,
-        (unsigned long long)current.lockdown_addr,
-        (unsigned long long)expected.sig_enforce_addr,
-        (unsigned long long)expected.lockdown_addr);
-    return -EPERM;
-  }
+	if (current.sig_enforce_addr != expected.sig_enforce_addr ||
+	    current.lockdown_addr != expected.lockdown_addr) {
+		lota_err("integrity_config mismatch: map(sig_enforce=0x%llx "
+			 "lockdown=0x%llx) "
+			 "expected(sig_enforce=0x%llx lockdown=0x%llx)",
+			 (unsigned long long)current.sig_enforce_addr,
+			 (unsigned long long)current.lockdown_addr,
+			 (unsigned long long)expected.sig_enforce_addr,
+			 (unsigned long long)expected.lockdown_addr);
+		return -EPERM;
+	}
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
-  struct protected_pid_entry value = {0};
-  int ret;
+int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	struct protected_pid_entry value = {0};
+	int ret;
 
-  if (!ctx || !ctx->loaded)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded)
+		return -EINVAL;
 
-  if (ctx->protected_pids_fd < 0)
-    return -ENOTSUP;
+	if (ctx->protected_pids_fd < 0)
+		return -ENOTSUP;
 
-  ret = read_pid_start_time_ticks(pid, &value.start_time_ticks);
-  if (ret < 0)
-    return ret;
+	ret = read_pid_start_time_ticks(pid, &value.start_time_ticks);
+	if (ret < 0)
+		return ret;
 
-  if (value.start_time_ticks == 0)
-    return -EINVAL;
+	if (value.start_time_ticks == 0)
+		return -EINVAL;
 
-  if (bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY) < 0)
-    return -errno;
+	if (bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY) <
+	    0)
+		return -errno;
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
-  if (!ctx || !ctx->loaded)
-    return -EINVAL;
+int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	if (!ctx || !ctx->loaded)
+		return -EINVAL;
 
-  if (ctx->protected_pids_fd < 0)
-    return -ENOTSUP;
+	if (ctx->protected_pids_fd < 0)
+		return -ENOTSUP;
 
-  if (bpf_map_delete_elem(ctx->protected_pids_fd, &pid) < 0)
-    return -errno;
+	if (bpf_map_delete_elem(ctx->protected_pids_fd, &pid) < 0)
+		return -errno;
 
-  return 0;
+	return 0;
 }
 
-static int stat_regular_file_nofollow(const char *path, struct stat *st) {
-  int fd = -1;
-  int ret = 0;
+static int stat_regular_file_nofollow(const char *path, struct stat *st)
+{
+	int fd = -1;
+	int ret = 0;
 
-  if (!path || !st)
-    return -EINVAL;
+	if (!path || !st)
+		return -EINVAL;
 
-  if (path[0] == '\0')
-    return -EINVAL;
+	if (path[0] == '\0')
+		return -EINVAL;
 
-  fd = open_regular_file_nofollow(path);
-  if (fd < 0)
-    return fd;
+	fd = open_regular_file_nofollow(path);
+	if (fd < 0)
+		return fd;
 
-  if (fstat(fd, st) != 0) {
-    ret = -errno;
-    close(fd);
-    return ret;
-  }
+	if (fstat(fd, st) != 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
 
-  close(fd);
-  if (!S_ISREG(st->st_mode))
-    return -EINVAL;
+	close(fd);
+	if (!S_ISREG(st->st_mode))
+		return -EINVAL;
 
-  return 0;
+	return 0;
 }
 
-static int stat_dir_nofollow(const char *path, struct stat *st) {
-  int fd = -1;
-  int ret = 0;
+static int stat_dir_nofollow(const char *path, struct stat *st)
+{
+	int fd = -1;
+	int ret = 0;
 
-  if (!path || !st)
-    return -EINVAL;
+	if (!path || !st)
+		return -EINVAL;
 
-  if (path[0] != '/')
-    return -EINVAL;
+	if (path[0] != '/')
+		return -EINVAL;
 
-  {
-    struct open_how how = {
-        .flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
-        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-    };
+	{
+		struct open_how how = {
+		    .flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+		    .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+		};
 
-    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
-    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
-      return -errno;
-  }
+		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
+				  sizeof(how));
+		if (fd < 0 && errno != ENOSYS && errno != EINVAL)
+			return -errno;
+	}
 
-  if (fd < 0) {
-    int dirfd = -1;
-    const char *p = path;
+	if (fd < 0) {
+		int dirfd = -1;
+		const char *p = path;
 
-    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd < 0)
-      return -errno;
+		dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+		if (dirfd < 0)
+			return -errno;
 
-    while (*p == '/')
-      p++;
+		while (*p == '/')
+			p++;
 
-    if (*p == '\0') {
-      fd = dirfd;
-      dirfd = -1;
-    }
+		if (*p == '\0') {
+			fd = dirfd;
+			dirfd = -1;
+		}
 
-    while (fd < 0 && *p != '\0') {
-      char name[NAME_MAX + 1];
-      const char *slash = strchr(p, '/');
-      size_t n = slash ? (size_t)(slash - p) : strlen(p);
-      int nextfd;
+		while (fd < 0 && *p != '\0') {
+			char name[NAME_MAX + 1];
+			const char *slash = strchr(p, '/');
+			size_t n = slash ? (size_t)(slash - p) : strlen(p);
+			int nextfd;
 
-      if (n == 0) {
-        p++;
-        continue;
-      }
-      if (n > NAME_MAX) {
-        close(dirfd);
-        return -ENAMETOOLONG;
-      }
+			if (n == 0) {
+				p++;
+				continue;
+			}
+			if (n > NAME_MAX) {
+				close(dirfd);
+				return -ENAMETOOLONG;
+			}
 
-      memcpy(name, p, n);
-      name[n] = '\0';
+			memcpy(name, p, n);
+			name[n] = '\0';
 
-      nextfd =
-          openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-      close(dirfd);
-      if (nextfd < 0)
-        return -errno;
-      dirfd = nextfd;
+			nextfd = openat(dirfd, name,
+					O_PATH | O_DIRECTORY | O_NOFOLLOW |
+					    O_CLOEXEC);
+			close(dirfd);
+			if (nextfd < 0)
+				return -errno;
+			dirfd = nextfd;
 
-      if (!slash) {
-        fd = dirfd;
-        dirfd = -1;
-        break;
-      }
+			if (!slash) {
+				fd = dirfd;
+				dirfd = -1;
+				break;
+			}
 
-      p = slash + 1;
-      while (*p == '/')
-        p++;
-    }
+			p = slash + 1;
+			while (*p == '/')
+				p++;
+		}
 
-    if (dirfd >= 0)
-      close(dirfd);
+		if (dirfd >= 0)
+			close(dirfd);
 
-    if (fd < 0)
-      return -EINVAL;
-  }
+		if (fd < 0)
+			return -EINVAL;
+	}
 
-  if (fstat(fd, st) != 0) {
-    ret = -errno;
-    close(fd);
-    return ret;
-  }
+	if (fstat(fd, st) != 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
 
-  close(fd);
-  if (!S_ISDIR(st->st_mode))
-    return -EINVAL;
+	close(fd);
+	if (!S_ISDIR(st->st_mode))
+		return -EINVAL;
 
-  return 0;
+	return 0;
 }
 
 static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
-                                         const char *dir_path, int add) {
-  struct trusted_lib_key key = {0};
-  struct stat st;
-  uint32_t refcnt = 0;
-  int ret;
+					 const char *dir_path, int add)
+{
+	struct trusted_lib_key key = {0};
+	struct stat st;
+	uint32_t refcnt = 0;
+	int ret;
 
-  if (!ctx || !dir_path)
-    return -EINVAL;
+	if (!ctx || !dir_path)
+		return -EINVAL;
 
-  if (ctx->trusted_lib_mnt_fd < 0)
-    return 0;
+	if (ctx->trusted_lib_mnt_fd < 0)
+		return 0;
 
-  ret = stat_dir_nofollow(dir_path, &st);
-  if (ret < 0)
-    return ret;
+	ret = stat_dir_nofollow(dir_path, &st);
+	if (ret < 0)
+		return ret;
 
-  key.dev = (uint64_t)st.st_dev;
-  key.ino = (uint64_t)st.st_ino;
-  if (key.dev == 0 || key.ino == 0)
-    return -EINVAL;
+	key.dev = (uint64_t)st.st_dev;
+	key.ino = (uint64_t)st.st_ino;
+	if (key.dev == 0 || key.ino == 0)
+		return -EINVAL;
 
-  if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
-    if (errno != ENOENT)
-      return -errno;
-    refcnt = 0;
-  }
+	if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
+		if (errno != ENOENT)
+			return -errno;
+		refcnt = 0;
+	}
 
-  if (add) {
-    if (refcnt == UINT32_MAX)
-      return -EOVERFLOW;
-    refcnt++;
-    if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt, BPF_ANY) <
-        0)
-      return -errno;
-    return 0;
-  }
+	if (add) {
+		if (refcnt == UINT32_MAX)
+			return -EOVERFLOW;
+		refcnt++;
+		if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
+					BPF_ANY) < 0)
+			return -errno;
+		return 0;
+	}
 
-  if (refcnt == 0)
-    return 0;
+	if (refcnt == 0)
+		return 0;
 
-  if (refcnt == 1) {
-    if (bpf_map_delete_elem(ctx->trusted_lib_mnt_fd, &key) < 0 &&
-        errno != ENOENT)
-      return -errno;
-    return 0;
-  }
+	if (refcnt == 1) {
+		if (bpf_map_delete_elem(ctx->trusted_lib_mnt_fd, &key) < 0 &&
+		    errno != ENOENT)
+			return -errno;
+		return 0;
+	}
 
-  refcnt--;
-  if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt, BPF_ANY) < 0)
-    return -errno;
+	refcnt--;
+	if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
+				BPF_ANY) < 0)
+		return -errno;
 
-  return 0;
+	return 0;
 }
 
 static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
-                                             const char *lib_path, int add) {
-  char dir_path[PATH_MAX];
-  char prefix[PATH_MAX];
-  size_t len;
-  size_t prefix_len = 0;
-  char *slash;
-  char *p;
-  uint32_t applied = 0;
+					     const char *lib_path, int add)
+{
+	char dir_path[PATH_MAX];
+	char prefix[PATH_MAX];
+	size_t len;
+	size_t prefix_len = 0;
+	char *slash;
+	char *p;
+	uint32_t applied = 0;
 
-  if (!ctx || !lib_path)
-    return -EINVAL;
+	if (!ctx || !lib_path)
+		return -EINVAL;
 
-  if (ctx->trusted_lib_mnt_fd < 0)
-    return 0;
+	if (ctx->trusted_lib_mnt_fd < 0)
+		return 0;
 
-  len = strnlen(lib_path, sizeof(dir_path));
-  if (len == 0 || len >= sizeof(dir_path))
-    return -EINVAL;
+	len = strnlen(lib_path, sizeof(dir_path));
+	if (len == 0 || len >= sizeof(dir_path))
+		return -EINVAL;
 
-  memcpy(dir_path, lib_path, len + 1);
+	memcpy(dir_path, lib_path, len + 1);
 
-  while (len > 1 && dir_path[len - 1] == '/') {
-    dir_path[len - 1] = '\0';
-    len--;
-  }
+	while (len > 1 && dir_path[len - 1] == '/') {
+		dir_path[len - 1] = '\0';
+		len--;
+	}
 
-  slash = strrchr(dir_path, '/');
-  if (!slash)
-    return -EINVAL;
-  if (slash == dir_path)
-    return 0; /* parent is /, skip global mountpoint lock */
-  *slash = '\0';
+	slash = strrchr(dir_path, '/');
+	if (!slash)
+		return -EINVAL;
+	if (slash == dir_path)
+		return 0; /* parent is /, skip global mountpoint lock */
+	*slash = '\0';
 
-  p = dir_path + 1; /* skip leading slash */
-  while (*p != '\0') {
-    const char *next = strchr(p, '/');
-    size_t comp_len = next ? (size_t)(next - p) : strlen(p);
+	p = dir_path + 1; /* skip leading slash */
+	while (*p != '\0') {
+		const char *next = strchr(p, '/');
+		size_t comp_len = next ? (size_t)(next - p) : strlen(p);
 
-    if (comp_len == 0) {
-      p++;
-      continue;
-    }
+		if (comp_len == 0) {
+			p++;
+			continue;
+		}
 
-    if (prefix_len == 0) {
-      if (1 + comp_len >= sizeof(prefix))
-        return -ENAMETOOLONG;
-      prefix[0] = '/';
-      memcpy(prefix + 1, p, comp_len);
-      prefix_len = 1 + comp_len;
-    } else {
-      if (prefix_len + 1 + comp_len >= sizeof(prefix))
-        return -ENAMETOOLONG;
-      prefix[prefix_len] = '/';
-      memcpy(prefix + prefix_len + 1, p, comp_len);
-      prefix_len += 1 + comp_len;
-    }
+		if (prefix_len == 0) {
+			if (1 + comp_len >= sizeof(prefix))
+				return -ENAMETOOLONG;
+			prefix[0] = '/';
+			memcpy(prefix + 1, p, comp_len);
+			prefix_len = 1 + comp_len;
+		} else {
+			if (prefix_len + 1 + comp_len >= sizeof(prefix))
+				return -ENAMETOOLONG;
+			prefix[prefix_len] = '/';
+			memcpy(prefix + prefix_len + 1, p, comp_len);
+			prefix_len += 1 + comp_len;
+		}
 
-    prefix[prefix_len] = '\0';
+		prefix[prefix_len] = '\0';
 
-    int ret = update_trusted_mountpoint_ref(ctx, prefix, add);
-    if (ret < 0) {
-      if (add && applied > 0) {
-        size_t rollback_prefix_len = 0;
-        char rollback_prefix[PATH_MAX];
-        char *rp = dir_path + 1;
-        uint32_t remaining = applied;
+		int ret = update_trusted_mountpoint_ref(ctx, prefix, add);
+		if (ret < 0) {
+			if (add && applied > 0) {
+				size_t rollback_prefix_len = 0;
+				char rollback_prefix[PATH_MAX];
+				char *rp = dir_path + 1;
+				uint32_t remaining = applied;
 
-        while (remaining > 0 && *rp != '\0') {
-          const char *rnext = strchr(rp, '/');
-          size_t rlen = rnext ? (size_t)(rnext - rp) : strlen(rp);
+				while (remaining > 0 && *rp != '\0') {
+					const char *rnext = strchr(rp, '/');
+					size_t rlen = rnext
+							  ? (size_t)(rnext - rp)
+							  : strlen(rp);
 
-          if (rlen == 0) {
-            rp++;
-            continue;
-          }
+					if (rlen == 0) {
+						rp++;
+						continue;
+					}
 
-          if (rollback_prefix_len == 0) {
-            rollback_prefix[0] = '/';
-            memcpy(rollback_prefix + 1, rp, rlen);
-            rollback_prefix_len = 1 + rlen;
-          } else {
-            rollback_prefix[rollback_prefix_len] = '/';
-            memcpy(rollback_prefix + rollback_prefix_len + 1, rp, rlen);
-            rollback_prefix_len += 1 + rlen;
-          }
+					if (rollback_prefix_len == 0) {
+						rollback_prefix[0] = '/';
+						memcpy(rollback_prefix + 1, rp,
+						       rlen);
+						rollback_prefix_len = 1 + rlen;
+					} else {
+						rollback_prefix
+						    [rollback_prefix_len] = '/';
+						memcpy(rollback_prefix +
+							   rollback_prefix_len +
+							   1,
+						       rp, rlen);
+						rollback_prefix_len += 1 + rlen;
+					}
 
-          rollback_prefix[rollback_prefix_len] = '\0';
-          (void)update_trusted_mountpoint_ref(ctx, rollback_prefix, 0);
-          remaining--;
+					rollback_prefix[rollback_prefix_len] =
+					    '\0';
+					(void)update_trusted_mountpoint_ref(
+					    ctx, rollback_prefix, 0);
+					remaining--;
 
-          if (!rnext)
-            break;
-          rp = (char *)rnext + 1;
-        }
-      }
-      return ret;
-    }
+					if (!rnext)
+						break;
+					rp = (char *)rnext + 1;
+				}
+			}
+			return ret;
+		}
 
-    applied++;
+		applied++;
 
-    if (!next)
-      break;
-    p = (char *)next + 1;
-  }
+		if (!next)
+			break;
+		p = (char *)next + 1;
+	}
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
-  struct trusted_lib_key key = {0};
-  struct stat st;
-  uint32_t value = 1;
-  int ret;
+int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
+{
+	struct trusted_lib_key key = {0};
+	struct stat st;
+	uint32_t value = 1;
+	int ret;
 
-  if (!ctx || !ctx->loaded || !path)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || !path)
+		return -EINVAL;
 
-  if (ctx->trusted_libs_fd < 0)
-    return -ENOTSUP;
+	if (ctx->trusted_libs_fd < 0)
+		return -ENOTSUP;
 
-  ret = stat_regular_file_nofollow(path, &st);
-  if (ret < 0)
-    return ret;
+	ret = stat_regular_file_nofollow(path, &st);
+	if (ret < 0)
+		return ret;
 
-  key.dev = (uint64_t)st.st_dev;
-  key.ino = (uint64_t)st.st_ino;
-  if (key.dev == 0 || key.ino == 0)
-    return -EINVAL;
+	key.dev = (uint64_t)st.st_dev;
+	key.ino = (uint64_t)st.st_ino;
+	if (key.dev == 0 || key.ino == 0)
+		return -EINVAL;
 
-  if (bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY) < 0)
-    return -errno;
+	if (bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY) <
+	    0)
+		return -errno;
 
-  ret = update_trusted_parent_mountpoints(ctx, path, 1);
-  if (ret < 0) {
-    (void)bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
-    return ret;
-  }
+	ret = update_trusted_parent_mountpoints(ctx, path, 1);
+	if (ret < 0) {
+		(void)bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
+		return ret;
+	}
 
-  return 0;
+	return 0;
 }
 
-int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
-  struct trusted_lib_key key = {0};
-  struct stat st;
-  int ret;
+int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
+{
+	struct trusted_lib_key key = {0};
+	struct stat st;
+	int ret;
 
-  if (!ctx || !ctx->loaded || !path)
-    return -EINVAL;
+	if (!ctx || !ctx->loaded || !path)
+		return -EINVAL;
 
-  if (ctx->trusted_libs_fd < 0)
-    return -ENOTSUP;
+	if (ctx->trusted_libs_fd < 0)
+		return -ENOTSUP;
 
-  ret = stat_regular_file_nofollow(path, &st);
-  if (ret < 0)
-    return ret;
+	ret = stat_regular_file_nofollow(path, &st);
+	if (ret < 0)
+		return ret;
 
-  key.dev = (uint64_t)st.st_dev;
-  key.ino = (uint64_t)st.st_ino;
-  if (key.dev == 0 || key.ino == 0)
-    return -EINVAL;
+	key.dev = (uint64_t)st.st_dev;
+	key.ino = (uint64_t)st.st_ino;
+	if (key.dev == 0 || key.ino == 0)
+		return -EINVAL;
 
-  if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 && errno != ENOENT)
-    return -errno;
+	if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 &&
+	    errno != ENOENT)
+		return -errno;
 
-  ret = update_trusted_parent_mountpoints(ctx, path, 0);
-  if (ret < 0)
-    return ret;
+	ret = update_trusted_parent_mountpoints(ctx, path, 0);
+	if (ret < 0)
+		return ret;
 
-  return 0;
+	return 0;
 }
 
 /*
  * read a single stat counter from the stats map
  */
-static int read_stat(int stats_fd, uint32_t key, uint64_t *out) {
-  uint64_t value;
-  int err;
+static int read_stat(int stats_fd, uint32_t key, uint64_t *out)
+{
+	uint64_t value;
+	int err;
 
-  err = bpf_map_lookup_elem(stats_fd, &key, &value);
-  *out = (err == 0) ? value : 0;
-  return 0;
+	err = bpf_map_lookup_elem(stats_fd, &key, &value);
+	*out = (err == 0) ? value : 0;
+	return 0;
 }
 
 int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
-                                  struct bpf_extended_stats *stats) {
-  if (!ctx || !stats || !ctx->loaded || ctx->stats_fd < 0)
-    return -EINVAL;
+				  struct bpf_extended_stats *stats)
+{
+	if (!ctx || !stats || !ctx->loaded || ctx->stats_fd < 0)
+		return -EINVAL;
 
-  read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, &stats->total_execs);
-  read_stat(ctx->stats_fd, STAT_EVENTS_SENT, &stats->events_sent);
-  read_stat(ctx->stats_fd, STAT_ERRORS, &stats->errors);
-  read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, &stats->drops);
-  read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, &stats->modules_blocked);
-  read_stat(ctx->stats_fd, STAT_MMAP_EXECS, &stats->mmap_execs);
-  read_stat(ctx->stats_fd, STAT_MMAP_BLOCKED, &stats->mmap_blocked);
-  read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, &stats->ptrace_attempts);
-  read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, &stats->ptrace_blocked);
-  read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, &stats->setuid_events);
-  read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
-            &stats->bpf_syscall_blocked);
+	read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, &stats->total_execs);
+	read_stat(ctx->stats_fd, STAT_EVENTS_SENT, &stats->events_sent);
+	read_stat(ctx->stats_fd, STAT_ERRORS, &stats->errors);
+	read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, &stats->drops);
+	read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, &stats->modules_blocked);
+	read_stat(ctx->stats_fd, STAT_MMAP_EXECS, &stats->mmap_execs);
+	read_stat(ctx->stats_fd, STAT_MMAP_BLOCKED, &stats->mmap_blocked);
+	read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, &stats->ptrace_attempts);
+	read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, &stats->ptrace_blocked);
+	read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, &stats->setuid_events);
+	read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
+		  &stats->bpf_syscall_blocked);
 
-  return 0;
+	return 0;
 }

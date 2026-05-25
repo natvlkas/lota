@@ -30,22 +30,22 @@
  *   STEAM_RT_UNKNOWN - inside a container but type unrecognised
  */
 enum steam_runtime_type {
-  STEAM_RT_NONE = 0,
-  STEAM_RT_SOLDIER,
-  STEAM_RT_SNIPER,
-  STEAM_RT_MEDIC,
-  STEAM_RT_HEAVY,
-  STEAM_RT_UNKNOWN,
+	STEAM_RT_NONE = 0,
+	STEAM_RT_SOLDIER,
+	STEAM_RT_SNIPER,
+	STEAM_RT_MEDIC,
+	STEAM_RT_HEAVY,
+	STEAM_RT_UNKNOWN,
 };
 
 /*
  * Container environment detection flags.
  */
 #define STEAM_ENV_PRESSURE_VESSEL (1U << 0) /* inside pressure-vessel */
-#define STEAM_ENV_FLATPAK (1U << 1)         /* inside Flatpak sandbox */
+#define STEAM_ENV_FLATPAK (1U << 1)	    /* inside Flatpak sandbox */
 #define STEAM_ENV_STEAM_ACTIVE (1U << 2)    /* Steam client is running */
 #define STEAM_ENV_XDG_AVAILABLE (1U << 3)   /* XDG_RUNTIME_DIR exists */
-#define STEAM_ENV_PROTON (1U << 4)          /* Proton/Wine detected */
+#define STEAM_ENV_PROTON (1U << 4)	    /* Proton/Wine detected */
 
 /*
  * Maximum number of extra socket paths the agent can manage.
@@ -67,18 +67,18 @@ enum steam_runtime_type {
  * Steam Runtime environment information.
  */
 struct steam_runtime_info {
-  enum steam_runtime_type type;
-  uint32_t env_flags;
+	enum steam_runtime_type type;
+	uint32_t env_flags;
 
-  /* Detected paths */
-  char xdg_runtime_dir[PATH_MAX];
-  char container_socket_path[PATH_MAX];
-  char steam_compat_path[PATH_MAX]; /* STEAM_COMPAT_DATA_PATH */
+	/* Detected paths */
+	char xdg_runtime_dir[PATH_MAX];
+	char container_socket_path[PATH_MAX];
+	char steam_compat_path[PATH_MAX]; /* STEAM_COMPAT_DATA_PATH */
 
-  char container_id[64];
+	char container_id[64];
 
-  /* Steam app ID (if available) */
-  uint32_t app_id;
+	/* Steam app ID (if available) */
+	uint32_t app_id;
 };
 
 /*

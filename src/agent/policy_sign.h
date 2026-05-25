@@ -35,7 +35,7 @@
  * Returns: 0 on success, negative errno on failure
  */
 int policy_sign_generate_keypair(const char *privkey_pem_path,
-                                 const char *pubkey_pem_path);
+				 const char *pubkey_pem_path);
 
 /*
  * policy_sign_file - Sign a file with Ed25519
@@ -50,7 +50,7 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
  * Returns: 0 on success, negative errno on failure
  */
 int policy_sign_file(const char *file_path, const char *privkey_pem_path,
-                     const char *sig_path);
+		     const char *sig_path);
 
 /*
  * policy_verify_file - Verify an Ed25519 signature on a file
@@ -62,7 +62,7 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
  * Returns: 0 if signature is valid, -EAUTH if invalid, negative errno otherwise
  */
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
-                       const char *sig_path);
+		       const char *sig_path);
 
 /*
  * policy_sign_buffer - Sign a buffer with Ed25519
@@ -77,7 +77,7 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
  * Returns: 0 on success, negative errno on failure
  */
 int policy_sign_buffer(const uint8_t *data, size_t data_len,
-                       const char *privkey_pem_path, uint8_t *sig_out);
+		       const char *privkey_pem_path, uint8_t *sig_out);
 
 /*
  * policy_verify_buffer - Verify Ed25519 signature on buffer
@@ -92,6 +92,6 @@ int policy_sign_buffer(const uint8_t *data, size_t data_len,
  * Returns: 0 if valid, -EAUTH if invalid, negative errno otherwise
  */
 int policy_verify_buffer(const uint8_t *data, size_t data_len,
-                         const char *pubkey_pem_path, const uint8_t *sig);
+			 const char *pubkey_pem_path, const uint8_t *sig);
 
 #endif /* LOTA_POLICY_SIGN_H */

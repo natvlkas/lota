@@ -28,7 +28,7 @@
 #include "lota_snapshot.h"
 
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
-               "heartbeat wire header must be exactly 74 bytes");
+	       "heartbeat wire header must be exactly 74 bytes");
 
 #define LOTA_AC_GAME_BINDING_HASH_DOMAIN "lota-ac-game-binding:v2"
 #define LOTA_AC_HEARTBEAT_NONCE_DOMAIN "lota-ac-heartbeat:v1"
@@ -36,248 +36,260 @@ _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
 
 static int
 compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
-                        const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
-                        uint8_t provider, uint32_t sequence,
-                        uint32_t lota_flags, uint64_t timestamp,
-                        const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]);
+			const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
+			uint8_t provider, uint32_t sequence,
+			uint32_t lota_flags, uint64_t timestamp,
+			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]);
 
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
 static int hash_file_sha256(const char *path,
-                            uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
+			    uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
 
 struct lota_ac_session {
-  enum lota_ac_provider provider;
-  enum lota_ac_state state;
+	enum lota_ac_provider provider;
+	enum lota_ac_state state;
 
-  uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
-  char game_id[LOTA_AC_MAX_GAME_ID];
-  uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
+	char game_id[LOTA_AC_MAX_GAME_ID];
+	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
 
-  uint64_t session_start;
-  uint64_t last_heartbeat;
-  uint32_t heartbeat_seq;
-  uint32_t heartbeat_interval;
-  uint32_t required_flags;
-  uint32_t lota_flags;
+	uint64_t session_start;
+	uint64_t last_heartbeat;
+	uint32_t heartbeat_seq;
+	uint32_t heartbeat_interval;
+	uint32_t required_flags;
+	uint32_t lota_flags;
 
-  /* direct SDK mode */
-  int direct;
-  struct lota_client *client;
+	/* direct SDK mode */
+	int direct;
+	struct lota_client *client;
 
-  /* file mode */
-  char token_dir[256];
-  char status_path[512];
-  char token_path[512];
-  char snapshot_path[512];
-  int snapshot_warned;
+	/* file mode */
+	char token_dir[256];
+	char status_path[512];
+	char token_path[512];
+	char snapshot_path[512];
+	int snapshot_warned;
 
-  /* cached token (wire format) */
-  uint8_t token_buf[LOTA_AC_MAX_TOKEN];
-  size_t token_len;
+	/* cached token (wire format) */
+	uint8_t token_buf[LOTA_AC_MAX_TOKEN];
+	size_t token_len;
 };
 
-static uint16_t read_le16_u(const uint8_t *p) {
-  return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+static uint16_t read_le16_u(const uint8_t *p)
+{
+	return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
-static uint32_t read_le32_u(const uint8_t *p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-         ((uint32_t)p[3] << 24);
+static uint32_t read_le32_u(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+	       ((uint32_t)p[3] << 24);
 }
 
-static uint64_t read_le64_u(const uint8_t *p) {
-  return (uint64_t)read_le32_u(p) | ((uint64_t)read_le32_u(p + 4) << 32);
+static uint64_t read_le64_u(const uint8_t *p)
+{
+	return (uint64_t)read_le32_u(p) | ((uint64_t)read_le32_u(p + 4) << 32);
 }
 
-static int read_snapshot(struct lota_ac_session *session) {
-  uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN];
-  ssize_t n = read_file_buf(session->snapshot_path, buf, sizeof(buf));
-  if (n < 0)
-    return (int)n;
-  if (n < LOTA_SNAPSHOT_HEADER_SIZE)
-    return -EIO;
+static int read_snapshot(struct lota_ac_session *session)
+{
+	uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN];
+	ssize_t n = read_file_buf(session->snapshot_path, buf, sizeof(buf));
+	if (n < 0)
+		return (int)n;
+	if (n < LOTA_SNAPSHOT_HEADER_SIZE)
+		return -EIO;
 
-  if (read_le32_u(buf + 0) != LOTA_SNAPSHOT_MAGIC)
-    return -EIO;
-  if (read_le16_u(buf + 4) != (uint16_t)LOTA_SNAPSHOT_VERSION)
-    return -EIO;
-  if (read_le16_u(buf + 6) != 0)
-    return -EIO;
+	if (read_le32_u(buf + 0) != LOTA_SNAPSHOT_MAGIC)
+		return -EIO;
+	if (read_le16_u(buf + 4) != (uint16_t)LOTA_SNAPSHOT_VERSION)
+		return -EIO;
+	if (read_le16_u(buf + 6) != 0)
+		return -EIO;
 
-  uint32_t flags = read_le32_u(buf + 8);
-  uint32_t token_size = read_le32_u(buf + 12);
-  if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
-    return -EIO;
-  if ((size_t)n < LOTA_SNAPSHOT_HEADER_SIZE + (size_t)token_size)
-    return -EIO;
+	uint32_t flags = read_le32_u(buf + 8);
+	uint32_t token_size = read_le32_u(buf + 12);
+	if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
+		return -EIO;
+	if ((size_t)n < LOTA_SNAPSHOT_HEADER_SIZE + (size_t)token_size)
+		return -EIO;
 
-  session->lota_flags = flags;
-  memcpy(session->token_buf, buf + LOTA_SNAPSHOT_HEADER_SIZE, token_size);
-  session->token_len = (size_t)token_size;
-  return 0;
+	session->lota_flags = flags;
+	memcpy(session->token_buf, buf + LOTA_SNAPSHOT_HEADER_SIZE, token_size);
+	session->token_len = (size_t)token_size;
+	return 0;
 }
 
 int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
-                                      uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
-  static const uint8_t domain[] = LOTA_AC_GAME_BINDING_HASH_DOMAIN;
-  uint8_t exe_digest[LOTA_AC_GAME_HASH_SIZE];
-  EVP_MD_CTX *ctx;
-  unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
-  int ok;
+				      uint8_t out[LOTA_AC_GAME_HASH_SIZE])
+{
+	static const uint8_t domain[] = LOTA_AC_GAME_BINDING_HASH_DOMAIN;
+	uint8_t exe_digest[LOTA_AC_GAME_HASH_SIZE];
+	EVP_MD_CTX *ctx;
+	unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
+	int ok;
 
-  if (!game_id || !exe_path || !out)
-    return -EINVAL;
-  if (game_id[0] == '\0')
-    return -EINVAL;
+	if (!game_id || !exe_path || !out)
+		return -EINVAL;
+	if (game_id[0] == '\0')
+		return -EINVAL;
 
-  if (hash_file_sha256(exe_path, exe_digest) < 0)
-    return -EIO;
+	if (hash_file_sha256(exe_path, exe_digest) < 0)
+		return -EIO;
 
-  ctx = EVP_MD_CTX_new();
-  if (!ctx)
-    return -ENOMEM;
+	ctx = EVP_MD_CTX_new();
+	if (!ctx)
+		return -ENOMEM;
 
-  ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
-       EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
-       EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
-       EVP_DigestUpdate(ctx, exe_digest, sizeof(exe_digest)) &&
-       EVP_DigestFinal_ex(ctx, out, &out_len);
+	ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
+	     EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+	     EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
+	     EVP_DigestUpdate(ctx, exe_digest, sizeof(exe_digest)) &&
+	     EVP_DigestFinal_ex(ctx, out, &out_len);
 
-  EVP_MD_CTX_free(ctx);
-  return ok ? 0 : -EIO;
+	EVP_MD_CTX_free(ctx);
+	return ok ? 0 : -EIO;
 }
 
 static int compute_game_id_hash(const char *game_id,
-                                uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
-  return lota_ac_compute_game_binding_hash(game_id, "/proc/self/exe", out);
+				uint8_t out[LOTA_AC_GAME_HASH_SIZE])
+{
+	return lota_ac_compute_game_binding_hash(game_id, "/proc/self/exe",
+						 out);
 }
 
 static int
 compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
-                        const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
-                        uint8_t provider, uint32_t sequence,
-                        uint32_t lota_flags, uint64_t timestamp,
-                        const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]) {
-  static const uint8_t domain[] = LOTA_AC_HEARTBEAT_NONCE_DOMAIN;
-  uint8_t le32[4];
-  uint8_t flags_le[4];
-  uint8_t le64[8];
-  EVP_MD_CTX *ctx;
-  unsigned int out_len = LOTA_NONCE_SIZE;
-  int ok;
+			const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
+			uint8_t provider, uint32_t sequence,
+			uint32_t lota_flags, uint64_t timestamp,
+			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE])
+{
+	static const uint8_t domain[] = LOTA_AC_HEARTBEAT_NONCE_DOMAIN;
+	uint8_t le32[4];
+	uint8_t flags_le[4];
+	uint8_t le64[8];
+	EVP_MD_CTX *ctx;
+	unsigned int out_len = LOTA_NONCE_SIZE;
+	int ok;
 
-  if (!out_nonce || !session_id || !game_id_hash)
-    return -EINVAL;
+	if (!out_nonce || !session_id || !game_id_hash)
+		return -EINVAL;
 
-  ctx = EVP_MD_CTX_new();
-  if (!ctx)
-    return -ENOMEM;
+	ctx = EVP_MD_CTX_new();
+	if (!ctx)
+		return -ENOMEM;
 
-  lota__write_le32(le32, sequence);
-  lota__write_le32(flags_le, lota_flags);
-  lota__write_le64(le64, timestamp);
+	lota__write_le32(le32, sequence);
+	lota__write_le32(flags_le, lota_flags);
+	lota__write_le64(le64, timestamp);
 
-  ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
-       EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
-       EVP_DigestUpdate(ctx, session_id, LOTA_AC_SESSION_ID_SIZE) &&
-       EVP_DigestUpdate(ctx, &provider, sizeof(provider)) &&
-       EVP_DigestUpdate(ctx, le32, sizeof(le32)) &&
-       EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
-       EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
-       EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
-       EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
+	ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
+	     EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+	     EVP_DigestUpdate(ctx, session_id, LOTA_AC_SESSION_ID_SIZE) &&
+	     EVP_DigestUpdate(ctx, &provider, sizeof(provider)) &&
+	     EVP_DigestUpdate(ctx, le32, sizeof(le32)) &&
+	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
+	     EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
+	     EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
+	     EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
 
-  EVP_MD_CTX_free(ctx);
-  return ok ? 0 : -EIO;
+	EVP_MD_CTX_free(ctx);
+	return ok ? 0 : -EIO;
 }
 
-static int generate_session_id(uint8_t id[LOTA_AC_SESSION_ID_SIZE]) {
-  ssize_t n = getrandom(id, LOTA_AC_SESSION_ID_SIZE, 0);
-  if (n != LOTA_AC_SESSION_ID_SIZE)
-    return -errno;
-  return 0;
+static int generate_session_id(uint8_t id[LOTA_AC_SESSION_ID_SIZE])
+{
+	ssize_t n = getrandom(id, LOTA_AC_SESSION_ID_SIZE, 0);
+	if (n != LOTA_AC_SESSION_ID_SIZE)
+		return -errno;
+	return 0;
 }
 
-static ssize_t read_file_buf(const char *path, void *buf, size_t buflen) {
-  int fd = open(path, O_RDONLY);
-  if (fd < 0)
-    return -errno;
+static ssize_t read_file_buf(const char *path, void *buf, size_t buflen)
+{
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -errno;
 
-  ssize_t total = 0;
-  while ((size_t)total < buflen) {
-    ssize_t n = read(fd, (uint8_t *)buf + total, buflen - (size_t)total);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      int err = errno;
-      close(fd);
-      return -err;
-    }
-    if (n == 0)
-      break;
-    total += n;
-  }
+	ssize_t total = 0;
+	while ((size_t)total < buflen) {
+		ssize_t n =
+		    read(fd, (uint8_t *)buf + total, buflen - (size_t)total);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			int err = errno;
+			close(fd);
+			return -err;
+		}
+		if (n == 0)
+			break;
+		total += n;
+	}
 
-  close(fd);
-  return total;
+	close(fd);
+	return total;
 }
 
 static int hash_file_sha256(const char *path,
-                            uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
-  uint8_t buf[4096];
-  EVP_MD_CTX *ctx = NULL;
-  unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
-  int fd = -1;
-  int ret = -EIO;
+			    uint8_t out[LOTA_AC_GAME_HASH_SIZE])
+{
+	uint8_t buf[4096];
+	EVP_MD_CTX *ctx = NULL;
+	unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
+	int fd = -1;
+	int ret = -EIO;
 
-  if (!path || !out)
-    return -EINVAL;
+	if (!path || !out)
+		return -EINVAL;
 
-  fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0)
-    return -errno;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
 
-  ctx = EVP_MD_CTX_new();
-  if (!ctx) {
-    ret = -ENOMEM;
-    goto out;
-  }
+	ctx = EVP_MD_CTX_new();
+	if (!ctx) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-  if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
-    ret = -EIO;
-    goto out;
-  }
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+		ret = -EIO;
+		goto out;
+	}
 
-  for (;;) {
-    ssize_t n = read(fd, buf, sizeof(buf));
-    if (n == 0)
-      break;
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      ret = -errno;
-      goto out;
-    }
-    if (EVP_DigestUpdate(ctx, buf, (size_t)n) != 1) {
-      ret = -EIO;
-      goto out;
-    }
-  }
+	for (;;) {
+		ssize_t n = read(fd, buf, sizeof(buf));
+		if (n == 0)
+			break;
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			ret = -errno;
+			goto out;
+		}
+		if (EVP_DigestUpdate(ctx, buf, (size_t)n) != 1) {
+			ret = -EIO;
+			goto out;
+		}
+	}
 
-  if (EVP_DigestFinal_ex(ctx, out, &out_len) != 1) {
-    ret = -EIO;
-    goto out;
-  }
+	if (EVP_DigestFinal_ex(ctx, out, &out_len) != 1) {
+		ret = -EIO;
+		goto out;
+	}
 
-  ret = 0;
+	ret = 0;
 
 out:
-  if (ctx)
-    EVP_MD_CTX_free(ctx);
-  if (fd >= 0)
-    close(fd);
-  return ret;
+	if (ctx)
+		EVP_MD_CTX_free(ctx);
+	if (fd >= 0)
+		close(fd);
+	return ret;
 }
 
 /*
@@ -285,397 +297,421 @@ out:
  * Priority: cfg->token_dir > $LOTA_HOOK_TOKEN_DIR > $XDG_RUNTIME_DIR/lota
  */
 static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
-                             size_t outlen) {
-  const char *dir = cfg->token_dir;
-  if (!dir)
-    dir = getenv("LOTA_HOOK_TOKEN_DIR");
+			     size_t outlen)
+{
+	const char *dir = cfg->token_dir;
+	if (!dir)
+		dir = getenv("LOTA_HOOK_TOKEN_DIR");
 
-  if (!dir) {
-    const char *xdg = getenv("XDG_RUNTIME_DIR");
-    if (xdg) {
-      int ret = snprintf(out, outlen, "%s/lota", xdg);
-      if (ret < 0 || (size_t)ret >= outlen)
-        return -ENAMETOOLONG;
-      return 0;
-    }
-    return -ENOENT;
-  }
+	if (!dir) {
+		const char *xdg = getenv("XDG_RUNTIME_DIR");
+		if (xdg) {
+			int ret = snprintf(out, outlen, "%s/lota", xdg);
+			if (ret < 0 || (size_t)ret >= outlen)
+				return -ENAMETOOLONG;
+			return 0;
+		}
+		return -ENOENT;
+	}
 
-  if (strlen(dir) >= outlen)
-    return -ENAMETOOLONG;
-  strncpy(out, dir, outlen - 1);
-  out[outlen - 1] = '\0';
-  return 0;
+	if (strlen(dir) >= outlen)
+		return -ENAMETOOLONG;
+	strncpy(out, dir, outlen - 1);
+	out[outlen - 1] = '\0';
+	return 0;
 }
 
-static int is_trusted(uint32_t flags, uint32_t required) {
-  if (required)
-    return (flags & required) == required;
-  return flags != 0;
+static int is_trusted(uint32_t flags, uint32_t required)
+{
+	if (required)
+		return (flags & required) == required;
+	return flags != 0;
 }
 
-struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg) {
-  if (!cfg)
-    return NULL;
-  if (!cfg->game_id || cfg->game_id[0] == '\0')
-    return NULL;
-  if (strlen(cfg->game_id) >= LOTA_AC_MAX_GAME_ID)
-    return NULL;
-  if (cfg->provider != LOTA_AC_PROVIDER_EAC &&
-      cfg->provider != LOTA_AC_PROVIDER_BATTLEYE)
-    return NULL;
+struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
+{
+	if (!cfg)
+		return NULL;
+	if (!cfg->game_id || cfg->game_id[0] == '\0')
+		return NULL;
+	if (strlen(cfg->game_id) >= LOTA_AC_MAX_GAME_ID)
+		return NULL;
+	if (cfg->provider != LOTA_AC_PROVIDER_EAC &&
+	    cfg->provider != LOTA_AC_PROVIDER_BATTLEYE)
+		return NULL;
 
-  struct lota_ac_session *s = calloc(1, sizeof(*s));
-  if (!s)
-    return NULL;
+	struct lota_ac_session *s = calloc(1, sizeof(*s));
+	if (!s)
+		return NULL;
 
-  s->provider = cfg->provider;
-  s->state = LOTA_AC_STATE_IDLE;
-  strncpy(s->game_id, cfg->game_id, LOTA_AC_MAX_GAME_ID - 1);
-  s->heartbeat_interval = cfg->heartbeat_interval_sec
-                              ? cfg->heartbeat_interval_sec
-                              : LOTA_AC_DEFAULT_HEARTBEAT_SEC;
-  s->required_flags = cfg->required_flags;
-  s->direct = cfg->direct;
+	s->provider = cfg->provider;
+	s->state = LOTA_AC_STATE_IDLE;
+	strncpy(s->game_id, cfg->game_id, LOTA_AC_MAX_GAME_ID - 1);
+	s->heartbeat_interval = cfg->heartbeat_interval_sec
+				    ? cfg->heartbeat_interval_sec
+				    : LOTA_AC_DEFAULT_HEARTBEAT_SEC;
+	s->required_flags = cfg->required_flags;
+	s->direct = cfg->direct;
 
-  if (generate_session_id(s->session_id) < 0) {
-    free(s);
-    return NULL;
-  }
-  if (compute_game_id_hash(s->game_id, s->game_id_hash) < 0) {
-    free(s);
-    return NULL;
-  }
+	if (generate_session_id(s->session_id) < 0) {
+		free(s);
+		return NULL;
+	}
+	if (compute_game_id_hash(s->game_id, s->game_id_hash) < 0) {
+		free(s);
+		return NULL;
+	}
 
-  s->session_start = (uint64_t)time(NULL);
+	s->session_start = (uint64_t)time(NULL);
 
-  if (cfg->direct) {
-    if (cfg->socket_path) {
-      struct lota_connect_opts opts = {0};
-      opts.socket_path = cfg->socket_path;
-      opts.timeout_ms = 5000;
-      s->client = lota_connect_opts(&opts);
-    } else {
-      s->client = lota_connect();
-    }
-    if (!s->client)
-      s->state = LOTA_AC_STATE_ERROR;
-    else
-      s->state = LOTA_AC_STATE_RUNNING;
-  } else {
-    if (resolve_token_dir(cfg, s->token_dir, sizeof(s->token_dir)) < 0) {
-      s->state = LOTA_AC_STATE_ERROR;
-    } else {
-      snprintf(s->status_path, sizeof(s->status_path), "%s/lota-status",
-               s->token_dir);
-      snprintf(s->token_path, sizeof(s->token_path), "%s/lota-token.bin",
-               s->token_dir);
-      snprintf(s->snapshot_path, sizeof(s->snapshot_path), "%s/%s",
-               s->token_dir, LOTA_SNAPSHOT_FILE_NAME);
-      s->state = LOTA_AC_STATE_RUNNING;
-    }
-  }
+	if (cfg->direct) {
+		if (cfg->socket_path) {
+			struct lota_connect_opts opts = {0};
+			opts.socket_path = cfg->socket_path;
+			opts.timeout_ms = 5000;
+			s->client = lota_connect_opts(&opts);
+		} else {
+			s->client = lota_connect();
+		}
+		if (!s->client)
+			s->state = LOTA_AC_STATE_ERROR;
+		else
+			s->state = LOTA_AC_STATE_RUNNING;
+	} else {
+		if (resolve_token_dir(cfg, s->token_dir, sizeof(s->token_dir)) <
+		    0) {
+			s->state = LOTA_AC_STATE_ERROR;
+		} else {
+			snprintf(s->status_path, sizeof(s->status_path),
+				 "%s/lota-status", s->token_dir);
+			snprintf(s->token_path, sizeof(s->token_path),
+				 "%s/lota-token.bin", s->token_dir);
+			snprintf(s->snapshot_path, sizeof(s->snapshot_path),
+				 "%s/%s", s->token_dir,
+				 LOTA_SNAPSHOT_FILE_NAME);
+			s->state = LOTA_AC_STATE_RUNNING;
+		}
+	}
 
-  /* initial tick to populate state */
-  if (s->state == LOTA_AC_STATE_RUNNING)
-    lota_ac_tick(s);
+	/* initial tick to populate state */
+	if (s->state == LOTA_AC_STATE_RUNNING)
+		lota_ac_tick(s);
 
-  return s;
+	return s;
 }
 
-void lota_ac_shutdown(struct lota_ac_session *session) {
-  if (!session)
-    return;
+void lota_ac_shutdown(struct lota_ac_session *session)
+{
+	if (!session)
+		return;
 
-  if (session->client) {
-    lota_disconnect(session->client);
-    session->client = NULL;
-  }
+	if (session->client) {
+		lota_disconnect(session->client);
+		session->client = NULL;
+	}
 
-  session->state = LOTA_AC_STATE_IDLE;
-  free(session);
+	session->state = LOTA_AC_STATE_IDLE;
+	free(session);
 }
 
-enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session) {
-  if (!session)
-    return LOTA_AC_STATE_IDLE;
-  return session->state;
+enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session)
+{
+	if (!session)
+		return LOTA_AC_STATE_IDLE;
+	return session->state;
 }
 
 int lota_ac_get_info(const struct lota_ac_session *session,
-                     struct lota_ac_info *info) {
-  if (!session || !info)
-    return -EINVAL;
+		     struct lota_ac_info *info)
+{
+	if (!session || !info)
+		return -EINVAL;
 
-  info->provider = session->provider;
-  info->state = (session->state == LOTA_AC_STATE_ERROR) ? LOTA_AC_STATE_ERROR
-                                                        : LOTA_AC_STATE_RUNNING;
-  memcpy(info->session_id, session->session_id, LOTA_AC_SESSION_ID_SIZE);
-  info->session_start = session->session_start;
-  info->last_heartbeat = session->last_heartbeat;
-  info->heartbeat_seq = session->heartbeat_seq;
-  info->lota_flags = session->lota_flags;
-  info->trusted = 0;
+	info->provider = session->provider;
+	info->state = (session->state == LOTA_AC_STATE_ERROR)
+			  ? LOTA_AC_STATE_ERROR
+			  : LOTA_AC_STATE_RUNNING;
+	memcpy(info->session_id, session->session_id, LOTA_AC_SESSION_ID_SIZE);
+	info->session_start = session->session_start;
+	info->last_heartbeat = session->last_heartbeat;
+	info->heartbeat_seq = session->heartbeat_seq;
+	info->lota_flags = session->lota_flags;
+	info->trusted = 0;
 
-  return 0;
+	return 0;
 }
 
-int lota_ac_tick(struct lota_ac_session *session) {
-  if (!session)
-    return -EINVAL;
-  if (session->state == LOTA_AC_STATE_IDLE)
-    return -EINVAL;
+int lota_ac_tick(struct lota_ac_session *session)
+{
+	if (!session)
+		return -EINVAL;
+	if (session->state == LOTA_AC_STATE_IDLE)
+		return -EINVAL;
 
-  if (session->direct) {
-    /* direct SDK mode */
-    if (!session->client) {
-      session->state = LOTA_AC_STATE_ERROR;
-      return -ENOTCONN;
-    }
+	if (session->direct) {
+		/* direct SDK mode */
+		if (!session->client) {
+			session->state = LOTA_AC_STATE_ERROR;
+			return -ENOTCONN;
+		}
 
-    struct lota_status status;
-    int ret = lota_get_status(session->client, &status);
-    if (ret != LOTA_OK) {
-      session->state = LOTA_AC_STATE_ERROR;
-      return -EIO;
-    }
-    session->lota_flags = status.flags;
+		struct lota_status status;
+		int ret = lota_get_status(session->client, &status);
+		if (ret != LOTA_OK) {
+			session->state = LOTA_AC_STATE_ERROR;
+			return -EIO;
+		}
+		session->lota_flags = status.flags;
 
-    struct lota_token token;
-    ret = lota_get_token(session->client, NULL, &token);
-    if (ret == LOTA_OK) {
-      size_t sz = lota_token_serialized_size(&token);
-      if (sz <= LOTA_AC_MAX_TOKEN)
-        lota_token_serialize(&token, session->token_buf, LOTA_AC_MAX_TOKEN,
-                             &session->token_len);
-      lota_token_free(&token);
-    } else {
-      session->token_len = 0;
-    }
-  } else {
-    int sret = read_snapshot(session);
-    if (sret < 0) {
-      if (!session->snapshot_warned) {
-        fprintf(stderr, "lota-ac: snapshot read failed (%s): %s\n",
-                session->snapshot_path, strerror(-sret));
-        session->snapshot_warned = 1;
-      }
-      session->lota_flags = 0;
-      session->token_len = 0;
-    }
-  }
+		struct lota_token token;
+		ret = lota_get_token(session->client, NULL, &token);
+		if (ret == LOTA_OK) {
+			size_t sz = lota_token_serialized_size(&token);
+			if (sz <= LOTA_AC_MAX_TOKEN)
+				lota_token_serialize(&token, session->token_buf,
+						     LOTA_AC_MAX_TOKEN,
+						     &session->token_len);
+			lota_token_free(&token);
+		} else {
+			session->token_len = 0;
+		}
+	} else {
+		int sret = read_snapshot(session);
+		if (sret < 0) {
+			if (!session->snapshot_warned) {
+				fprintf(
+				    stderr,
+				    "lota-ac: snapshot read failed (%s): %s\n",
+				    session->snapshot_path, strerror(-sret));
+				session->snapshot_warned = 1;
+			}
+			session->lota_flags = 0;
+			session->token_len = 0;
+		}
+	}
 
-  /* update state machine */
-  if (session->token_len > 0 || session->lota_flags != 0)
-    session->state = is_trusted(session->lota_flags, session->required_flags)
-                         ? LOTA_AC_STATE_TRUSTED
-                         : LOTA_AC_STATE_UNTRUSTED;
-  else
-    session->state = LOTA_AC_STATE_ERROR;
+	/* update state machine */
+	if (session->token_len > 0 || session->lota_flags != 0)
+		session->state =
+		    is_trusted(session->lota_flags, session->required_flags)
+			? LOTA_AC_STATE_TRUSTED
+			: LOTA_AC_STATE_UNTRUSTED;
+	else
+		session->state = LOTA_AC_STATE_ERROR;
 
-  return 0;
+	return 0;
 }
 
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
-                      size_t buflen, size_t *written) {
-  uint64_t timestamp;
-  uint32_t sequence;
-  uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
+		      size_t buflen, size_t *written)
+{
+	uint64_t timestamp;
+	uint32_t sequence;
+	uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
 
-  if (!session || !buf || !written)
-    return -EINVAL;
+	if (!session || !buf || !written)
+		return -EINVAL;
 
-  /*
-   * Replay-safe heartbeat requires nonce-bound token acquisition.
-   * File mode uses pre-generated snapshot tokens and cannot safely bind
-   * current sequence/timestamp challenge into TPM-signed nonce.
-   */
-  if (!session->direct)
-    return -EOPNOTSUPP;
+	/*
+	 * Replay-safe heartbeat requires nonce-bound token acquisition.
+	 * File mode uses pre-generated snapshot tokens and cannot safely bind
+	 * current sequence/timestamp challenge into TPM-signed nonce.
+	 */
+	if (!session->direct)
+		return -EOPNOTSUPP;
 
-  int ret = lota_ac_tick(session);
-  if (ret < 0 && session->token_len == 0)
-    return -ENODATA;
+	int ret = lota_ac_tick(session);
+	if (ret < 0 && session->token_len == 0)
+		return -ENODATA;
 
-  timestamp = (uint64_t)time(NULL);
-  sequence = session->heartbeat_seq;
+	timestamp = (uint64_t)time(NULL);
+	sequence = session->heartbeat_seq;
 
-  ret = compute_heartbeat_nonce(
-      heartbeat_nonce, session->session_id, (uint8_t)session->provider,
-      sequence, session->lota_flags, timestamp, session->game_id_hash);
-  if (ret < 0)
-    return ret;
+	ret = compute_heartbeat_nonce(
+	    heartbeat_nonce, session->session_id, (uint8_t)session->provider,
+	    sequence, session->lota_flags, timestamp, session->game_id_hash);
+	if (ret < 0)
+		return ret;
 
-  {
-    struct lota_token token;
-    size_t tok_written = 0;
+	{
+		struct lota_token token;
+		size_t tok_written = 0;
 
-    if (!session->client)
-      return -ENOTCONN;
+		if (!session->client)
+			return -ENOTCONN;
 
-    memset(&token, 0, sizeof(token));
-    ret = lota_get_token(session->client, heartbeat_nonce, &token);
-    if (ret != LOTA_OK) {
-      if (ret == LOTA_ERR_NOT_ATTESTED)
-        return -ENODATA;
-      return -EIO;
-    }
+		memset(&token, 0, sizeof(token));
+		ret = lota_get_token(session->client, heartbeat_nonce, &token);
+		if (ret != LOTA_OK) {
+			if (ret == LOTA_ERR_NOT_ATTESTED)
+				return -ENODATA;
+			return -EIO;
+		}
 
-    if (memcmp(token.nonce, heartbeat_nonce, LOTA_NONCE_SIZE) != 0) {
-      lota_token_free(&token);
-      return -EPROTO;
-    }
+		if (memcmp(token.nonce, heartbeat_nonce, LOTA_NONCE_SIZE) !=
+		    0) {
+			lota_token_free(&token);
+			return -EPROTO;
+		}
 
-    session->lota_flags = token.flags;
-    session->state = is_trusted(session->lota_flags, session->required_flags)
-                         ? LOTA_AC_STATE_TRUSTED
-                         : LOTA_AC_STATE_UNTRUSTED;
+		session->lota_flags = token.flags;
+		session->state =
+		    is_trusted(session->lota_flags, session->required_flags)
+			? LOTA_AC_STATE_TRUSTED
+			: LOTA_AC_STATE_UNTRUSTED;
 
-    ret = lota_token_serialize(&token, session->token_buf, LOTA_AC_MAX_TOKEN,
-                               &tok_written);
-    lota_token_free(&token);
-    if (ret != LOTA_OK)
-      return -EIO;
+		ret = lota_token_serialize(&token, session->token_buf,
+					   LOTA_AC_MAX_TOKEN, &tok_written);
+		lota_token_free(&token);
+		if (ret != LOTA_OK)
+			return -EIO;
 
-    session->token_len = tok_written;
-  }
+		session->token_len = tok_written;
+	}
 
-  if (session->token_len == 0)
-    return -ENODATA;
+	if (session->token_len == 0)
+		return -ENODATA;
 
-  size_t total = LOTA_AC_HEADER_SIZE + session->token_len;
-  if (buflen < total)
-    return -ENOSPC;
+	size_t total = LOTA_AC_HEADER_SIZE + session->token_len;
+	if (buflen < total)
+		return -ENOSPC;
 
-  lota__write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
-  buf[4] = (uint8_t)LOTA_AC_VERSION;
-  buf[5] = (uint8_t)session->provider;
-  lota__write_le16(buf + 6, (uint16_t)total);
-  memcpy(buf + 8, session->session_id, LOTA_AC_SESSION_ID_SIZE);
-  lota__write_le32(buf + 24, session->heartbeat_seq);
-  lota__write_le32(buf + 28, session->lota_flags);
-  lota__write_le64(buf + 32, timestamp);
-  memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
-  lota__write_le16(buf + 72, (uint16_t)session->token_len);
+	lota__write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
+	buf[4] = (uint8_t)LOTA_AC_VERSION;
+	buf[5] = (uint8_t)session->provider;
+	lota__write_le16(buf + 6, (uint16_t)total);
+	memcpy(buf + 8, session->session_id, LOTA_AC_SESSION_ID_SIZE);
+	lota__write_le32(buf + 24, session->heartbeat_seq);
+	lota__write_le32(buf + 28, session->lota_flags);
+	lota__write_le64(buf + 32, timestamp);
+	memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
+	lota__write_le16(buf + 72, (uint16_t)session->token_len);
 
-  memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf, session->token_len);
+	memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf,
+	       session->token_len);
 
-  session->heartbeat_seq++;
-  session->last_heartbeat = timestamp;
+	session->heartbeat_seq++;
+	session->last_heartbeat = timestamp;
 
-  *written = total;
-  return 0;
+	*written = total;
+	return 0;
 }
 
 int lota_ac_verify_heartbeat(
     const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
     size_t aik_pub_len,
     const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
-    struct lota_ac_info *info) {
-  if (!data || !expected_game_id_hash || !info)
-    return LOTA_SERVER_ERR_INVALID_ARG;
+    struct lota_ac_info *info)
+{
+	if (!data || !expected_game_id_hash || !info)
+		return LOTA_SERVER_ERR_INVALID_ARG;
 
-  if (len < LOTA_AC_HEADER_SIZE)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (len < LOTA_AC_HEADER_SIZE)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  uint32_t magic = read_le32_u(data + 0);
-  uint8_t version = data[4];
-  uint8_t provider = data[5];
-  uint16_t total_size = read_le16_u(data + 6);
-  uint32_t sequence = read_le32_u(data + 24);
-  uint32_t heartbeat_lota_flags = read_le32_u(data + 28);
-  uint64_t timestamp = read_le64_u(data + 32);
-  uint16_t token_size = read_le16_u(data + 72);
-  uint64_t now = (uint64_t)time(NULL);
-  uint8_t expected_nonce[LOTA_NONCE_SIZE];
-  int ret = LOTA_SERVER_OK;
+	uint32_t magic = read_le32_u(data + 0);
+	uint8_t version = data[4];
+	uint8_t provider = data[5];
+	uint16_t total_size = read_le16_u(data + 6);
+	uint32_t sequence = read_le32_u(data + 24);
+	uint32_t heartbeat_lota_flags = read_le32_u(data + 28);
+	uint64_t timestamp = read_le64_u(data + 32);
+	uint16_t token_size = read_le16_u(data + 72);
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t expected_nonce[LOTA_NONCE_SIZE];
+	int ret = LOTA_SERVER_OK;
 
-  if (magic != LOTA_AC_MAGIC)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (version != LOTA_AC_VERSION)
-    return LOTA_SERVER_ERR_BAD_VERSION;
-  if ((size_t)total_size > len)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if ((size_t)total_size != LOTA_AC_HEADER_SIZE + (size_t)token_size)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (provider != LOTA_AC_PROVIDER_EAC && provider != LOTA_AC_PROVIDER_BATTLEYE)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (magic != LOTA_AC_MAGIC)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (version != LOTA_AC_VERSION)
+		return LOTA_SERVER_ERR_BAD_VERSION;
+	if ((size_t)total_size > len)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if ((size_t)total_size != LOTA_AC_HEADER_SIZE + (size_t)token_size)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (provider != LOTA_AC_PROVIDER_EAC &&
+	    provider != LOTA_AC_PROVIDER_BATTLEYE)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  if (CRYPTO_memcmp(data + 40, expected_game_id_hash, LOTA_AC_GAME_HASH_SIZE) !=
-      0)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (CRYPTO_memcmp(data + 40, expected_game_id_hash,
+			  LOTA_AC_GAME_HASH_SIZE) != 0)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+	if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider, sequence,
-                                heartbeat_lota_flags, timestamp, data + 40);
-  if (ret < 0)
-    return LOTA_SERVER_ERR_CRYPTO;
+	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
+				      sequence, heartbeat_lota_flags, timestamp,
+				      data + 40);
+	if (ret < 0)
+		return LOTA_SERVER_ERR_CRYPTO;
 
-  const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
+	const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
 
-  struct lota_server_claims claims;
+	struct lota_server_claims claims;
 
-  if (!aik_pub_der || aik_pub_len == 0)
-    return LOTA_SERVER_ERR_INVALID_ARG;
+	if (!aik_pub_der || aik_pub_len == 0)
+		return LOTA_SERVER_ERR_INVALID_ARG;
 
-  ret = lota_server_verify_token(token, token_size, aik_pub_der, aik_pub_len,
-                                 expected_nonce, &claims);
+	ret = lota_server_verify_token(token, token_size, aik_pub_der,
+				       aik_pub_len, expected_nonce, &claims);
 
-  if (ret != LOTA_SERVER_OK)
-    return ret;
+	if (ret != LOTA_SERVER_OK)
+		return ret;
 
-  if (memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
-    return LOTA_SERVER_ERR_NONCE_FAIL;
+	if (memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
+		return LOTA_SERVER_ERR_NONCE_FAIL;
 
-  /*
-   * lota_flags in heartbeat header are plaintext transport metadata only.
-   * Trust token claims (nonce-bound and signature-verified when AIK is set)
-   * and fail closed if header/token disagree
-   */
-  if (heartbeat_lota_flags != claims.flags)
-    return LOTA_SERVER_ERR_BAD_TOKEN;
+	/*
+	 * lota_flags in heartbeat header are plaintext transport metadata only.
+	 * Trust token claims (nonce-bound and signature-verified when AIK is
+	 * set) and fail closed if header/token disagree
+	 */
+	if (heartbeat_lota_flags != claims.flags)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  info->provider = (enum lota_ac_provider)provider;
-  memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);
-  info->session_start = 0; /* not available from a single heartbeat */
-  info->last_heartbeat = timestamp;
-  info->heartbeat_seq = sequence;
-  info->lota_flags = claims.flags;
-  memcpy(info->game_id_hash, data + 40, LOTA_AC_GAME_HASH_SIZE);
-  info->trusted = (claims.flags != 0);
-  info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
+	info->provider = (enum lota_ac_provider)provider;
+	memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);
+	info->session_start = 0; /* not available from a single heartbeat */
+	info->last_heartbeat = timestamp;
+	info->heartbeat_seq = sequence;
+	info->lota_flags = claims.flags;
+	memcpy(info->game_id_hash, data + 40, LOTA_AC_GAME_HASH_SIZE);
+	info->trusted = (claims.flags != 0);
+	info->state =
+	    info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 
-  return 0;
+	return 0;
 }
 
-const char *lota_ac_state_str(enum lota_ac_state state) {
-  switch (state) {
-  case LOTA_AC_STATE_IDLE:
-    return "idle";
-  case LOTA_AC_STATE_RUNNING:
-    return "running";
-  case LOTA_AC_STATE_TRUSTED:
-    return "trusted";
-  case LOTA_AC_STATE_UNTRUSTED:
-    return "untrusted";
-  case LOTA_AC_STATE_ERROR:
-    return "error";
-  }
-  return "unknown";
+const char *lota_ac_state_str(enum lota_ac_state state)
+{
+	switch (state) {
+	case LOTA_AC_STATE_IDLE:
+		return "idle";
+	case LOTA_AC_STATE_RUNNING:
+		return "running";
+	case LOTA_AC_STATE_TRUSTED:
+		return "trusted";
+	case LOTA_AC_STATE_UNTRUSTED:
+		return "untrusted";
+	case LOTA_AC_STATE_ERROR:
+		return "error";
+	}
+	return "unknown";
 }
 
-const char *lota_ac_provider_str(enum lota_ac_provider provider) {
-  switch (provider) {
-  case LOTA_AC_PROVIDER_EAC:
-    return "EAC";
-  case LOTA_AC_PROVIDER_BATTLEYE:
-    return "BattlEye";
-  }
-  return "unknown";
+const char *lota_ac_provider_str(enum lota_ac_provider provider)
+{
+	switch (provider) {
+	case LOTA_AC_PROVIDER_EAC:
+		return "EAC";
+	case LOTA_AC_PROVIDER_BATTLEYE:
+		return "BattlEye";
+	}
+	return "unknown";
 }

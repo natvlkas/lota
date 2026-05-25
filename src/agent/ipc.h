@@ -22,8 +22,8 @@ struct ipc_client;
 #define IPC_CLIENT_MAP_SIZE 4096 /* must be a power of two */
 
 struct ipc_client_map_entry {
-  int fd; /* -1 empty, -2 tombstone */
-  struct ipc_client *client;
+	int fd; /* -1 empty, -2 tombstone */
+	struct ipc_client *client;
 };
 
 /*
@@ -35,57 +35,57 @@ struct ipc_client_map_entry {
  * Extra listener socket.
  */
 struct ipc_listener {
-  int fd;              /* Listening fd (-1 if unused) */
-  char path[PATH_MAX]; /* Socket path for cleanup */
+	int fd;		     /* Listening fd (-1 if unused) */
+	char path[PATH_MAX]; /* Socket path for cleanup */
 };
 
 /*
  * IPC server context
  */
 struct ipc_context {
-  int listen_fd; /* Primary listening socket */
-  int epoll_fd;  /* epoll instance */
-  bool running;
-  uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
+	int listen_fd; /* Primary listening socket */
+	int epoll_fd;  /* epoll instance */
+	bool running;
+	uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
 
-  /* Connected clients (lifetime bound) */
-  struct ipc_client *client_list;
-  int client_count;
+	/* Connected clients (lifetime bound) */
+	struct ipc_client *client_list;
+	int client_count;
 
-  /* O(1) lookup of client by fd (in addition to the linked list). */
-  struct ipc_client_map_entry client_map[IPC_CLIENT_MAP_SIZE];
+	/* O(1) lookup of client by fd (in addition to the linked list). */
+	struct ipc_client_map_entry client_map[IPC_CLIENT_MAP_SIZE];
 
-  /* Extra listener sockets */
-  struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
-  int extra_count;
+	/* Extra listener sockets */
+	struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
+	int extra_count;
 
-  /*
-   * TPM context for token signing.
-   *
-   * Borrowed, not owned. In the production daemon this points at
-   * g_agent.tpm_ctx and is used only from the same single-threaded
-   * epoll loop that owns all TPM mutations. ipc_context provides no
-   * locking around the pointer or the pointed-to tpm_context; a future
-   * threaded IPC implementation must serialize GET_TOKEN against the
-   * attestation loop, AIK rotation, lockout reconciliation, and cleanup.
-   */
-  struct tpm_context *tpm;
-  uint32_t quote_pcr_mask;
+	/*
+	 * TPM context for token signing.
+	 *
+	 * Borrowed, not owned. In the production daemon this points at
+	 * g_agent.tpm_ctx and is used only from the same single-threaded
+	 * epoll loop that owns all TPM mutations. ipc_context provides no
+	 * locking around the pointer or the pointed-to tpm_context; a future
+	 * threaded IPC implementation must serialize GET_TOKEN against the
+	 * attestation loop, AIK rotation, lockout reconciliation, and cleanup.
+	 */
+	struct tpm_context *tpm;
+	uint32_t quote_pcr_mask;
 
-  /* D-Bus context (optional, NULL if D-Bus unavailable) */
-  struct dbus_context *dbus;
-  int dbus_fd;
+	/* D-Bus context (optional, NULL if D-Bus unavailable) */
+	struct dbus_context *dbus;
+	int dbus_fd;
 
-  /* Attestation state */
-  uint32_t status_flags;
-  uint64_t last_attest_time;
-  uint64_t valid_until;
-  uint32_t attest_count;
-  uint32_t fail_count;
-  uint8_t mode;
+	/* Attestation state */
+	uint32_t status_flags;
+	uint64_t last_attest_time;
+	uint64_t valid_until;
+	uint32_t attest_count;
+	uint32_t fail_count;
+	uint8_t mode;
 
-  /* true when using socket activation (do not unlink socket) */
-  bool activated;
+	/* true when using socket activation (do not unlink socket) */
+	bool activated;
 };
 
 /*
@@ -133,7 +133,7 @@ int ipc_get_fd(struct ipc_context *ctx);
  * @valid_until: Token validity timestamp
  */
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
-                       uint64_t valid_until);
+		       uint64_t valid_until);
 
 /*
  * ipc_record_attestation - Record attestation attempt
@@ -160,7 +160,7 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
  * GET_TOKEN returns unsigned tokens for development/testing.
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
-                 uint32_t pcr_mask);
+		 uint32_t pcr_mask);
 
 /*
  * ipc_add_listener - Add an extra listener socket.

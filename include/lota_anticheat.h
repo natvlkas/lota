@@ -44,60 +44,60 @@ extern "C" {
 #define LOTA_AC_FILE_BATTLEYE "lota-ac-battleye.bin"
 
 enum lota_ac_provider {
-  LOTA_AC_PROVIDER_EAC = 1,
-  LOTA_AC_PROVIDER_BATTLEYE = 2,
+	LOTA_AC_PROVIDER_EAC = 1,
+	LOTA_AC_PROVIDER_BATTLEYE = 2,
 };
 
 enum lota_ac_state {
-  LOTA_AC_STATE_IDLE = 0,      /* not initialised */
-  LOTA_AC_STATE_RUNNING = 1,   /* active, agent reachable */
-  LOTA_AC_STATE_TRUSTED = 2,   /* attested: all required flags set */
-  LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
-  LOTA_AC_STATE_ERROR = 4,     /* cannot reach agent / internal fault */
+	LOTA_AC_STATE_IDLE = 0,	     /* not initialised */
+	LOTA_AC_STATE_RUNNING = 1,   /* active, agent reachable */
+	LOTA_AC_STATE_TRUSTED = 2,   /* attested: all required flags set */
+	LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
+	LOTA_AC_STATE_ERROR = 4,     /* cannot reach agent / internal fault */
 };
 
 /* error codes */
 enum {
-  LOTA_AC_ERR_OK = 0,
-  LOTA_AC_ERR_INVALID_ARG = -1,
-  LOTA_AC_ERR_MALFORMED = -2,
-  LOTA_AC_ERR_VERSION = -3,
-  LOTA_AC_ERR_SIG_FAIL = -4,
-  LOTA_AC_ERR_NONCE_FAIL = -5,
-  LOTA_AC_ERR_EXPIRED = -6,
-  LOTA_AC_ERR_CRYPTO = -7,
+	LOTA_AC_ERR_OK = 0,
+	LOTA_AC_ERR_INVALID_ARG = -1,
+	LOTA_AC_ERR_MALFORMED = -2,
+	LOTA_AC_ERR_VERSION = -3,
+	LOTA_AC_ERR_SIG_FAIL = -4,
+	LOTA_AC_ERR_NONCE_FAIL = -5,
+	LOTA_AC_ERR_EXPIRED = -6,
+	LOTA_AC_ERR_CRYPTO = -7,
 };
 
 struct lota_ac_config {
-  enum lota_ac_provider provider;
-  const char *game_id;             /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
-  uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
+	enum lota_ac_provider provider;
+	const char *game_id; /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
+	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
 
-  /*
-   * Required attestation flags. Heartbeat state is TRUSTED only if
-   * (lota_flags & required_flags) == required_flags.
-   * Use 0 to accept any non-zero flags.
-   */
-  uint32_t required_flags;
+	/*
+	 * Required attestation flags. Heartbeat state is TRUSTED only if
+	 * (lota_flags & required_flags) == required_flags.
+	 * Use 0 to accept any non-zero flags.
+	 */
+	uint32_t required_flags;
 
-  /*
-   * Client mode:
-   *   direct = 1 -> use lota_gaming SDK (native games)
-   *   direct = 0 -> read Wine hook files
-   */
-  int direct;
+	/*
+	 * Client mode:
+	 *   direct = 1 -> use lota_gaming SDK (native games)
+	 *   direct = 0 -> read Wine hook files
+	 */
+	int direct;
 
-  /*
-   * For file mode: directory containing lota-status and lota-token.bin.
-   * NULL -> auto-detect ($LOTA_HOOK_TOKEN_DIR / $XDG_RUNTIME_DIR/lota).
-   */
-  const char *token_dir;
+	/*
+	 * For file mode: directory containing lota-status and lota-token.bin.
+	 * NULL -> auto-detect ($LOTA_HOOK_TOKEN_DIR / $XDG_RUNTIME_DIR/lota).
+	 */
+	const char *token_dir;
 
-  /*
-   * For direct mode: custom socket path.
-   * NULL -> default (/run/lota/lota.sock).
-   */
-  const char *socket_path;
+	/*
+	 * For direct mode: custom socket path.
+	 * NULL -> default (/run/lota/lota.sock).
+	 */
+	const char *socket_path;
 };
 
 /*
@@ -119,30 +119,32 @@ struct lota_ac_config {
  *   74      var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {
-  uint32_t magic;
-  uint8_t version;
-  uint8_t provider;
-  uint16_t total_size;
-  uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
-  uint32_t sequence;
-  uint32_t lota_flags;
-  uint64_t timestamp;
-  uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
-  uint16_t token_size;
+	uint32_t magic;
+	uint8_t version;
+	uint8_t provider;
+	uint16_t total_size;
+	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
+	uint32_t sequence;
+	uint32_t lota_flags;
+	uint64_t timestamp;
+	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint16_t token_size;
 } __attribute__((packed));
 
 struct lota_ac_info {
-  enum lota_ac_provider provider;
-  enum lota_ac_state state; /* authoritative only for verify_heartbeat output */
-  uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
-  uint64_t session_start;  /* epoch */
-  uint64_t last_heartbeat; /* epoch */
-  uint32_t heartbeat_seq;  /* current counter */
-  uint32_t lota_flags;     /* last known attestation flags */
-  uint8_t
-      game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity binding */
-  int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from get_info
-                */
+	enum lota_ac_provider provider;
+	enum lota_ac_state
+	    state; /* authoritative only for verify_heartbeat output */
+	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
+	uint64_t session_start;	 /* epoch */
+	uint64_t last_heartbeat; /* epoch */
+	uint32_t heartbeat_seq;	 /* current counter */
+	uint32_t lota_flags;	 /* last known attestation flags */
+	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
+							 binding */
+	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from
+		      * get_info
+		      */
 };
 
 struct lota_ac_session;
@@ -180,7 +182,7 @@ enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
  * Returns 0 on success, -EINVAL if session or info is NULL.
  */
 int lota_ac_get_info(const struct lota_ac_session *session,
-                     struct lota_ac_info *info);
+		     struct lota_ac_info *info);
 
 /*
  * Refresh session state from agent (direct) or hook files (file mode).
@@ -208,7 +210,7 @@ int lota_ac_tick(struct lota_ac_session *session);
  * replay-safe nonce binding is unavailable (file mode).
  */
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
-                      size_t buflen, size_t *written);
+		      size_t buflen, size_t *written);
 
 /*
  * Compute canonical game-binding hash for a game ID and executable image.
@@ -220,7 +222,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  * Use this to precompute expected_game_id_hash for server-side checks.
  */
 int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
-                                      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
+				      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
 
 /*
  * Verify a heartbeat packet.

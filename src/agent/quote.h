@@ -28,28 +28,28 @@
  *   - Compares digests to ensure integrity
  */
 struct tpm_quote_response {
-  /* Raw attestation data */
-  uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
-  uint16_t attest_size;
+	/* Raw attestation data */
+	uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
+	uint16_t attest_size;
 
-  /* Signature over attest_data */
-  uint8_t signature[LOTA_MAX_SIG_SIZE];
-  uint16_t signature_size;
+	/* Signature over attest_data */
+	uint8_t signature[LOTA_MAX_SIG_SIZE];
+	uint16_t signature_size;
 
-  /* Signature algorithm (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS) */
-  uint16_t sig_alg;
+	/* Signature algorithm (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS) */
+	uint16_t sig_alg;
 
-  /* Signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
-  uint16_t hash_alg;
+	/* Signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
+	uint16_t hash_alg;
 
-  /* Server-provided nonce (echoed in TPMS_ATTEST.extraData) */
-  uint8_t nonce[LOTA_NONCE_SIZE];
+	/* Server-provided nonce (echoed in TPMS_ATTEST.extraData) */
+	uint8_t nonce[LOTA_NONCE_SIZE];
 
-  /* PCR selection mask used in quote */
-  uint32_t pcr_mask;
+	/* PCR selection mask used in quote */
+	uint32_t pcr_mask;
 
-  /* PCR values at time of quote */
-  uint8_t pcr_values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
+	/* PCR values at time of quote */
+	uint8_t pcr_values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
 } __attribute__((packed));
 
 #endif /* LOTA_QUOTE_H */

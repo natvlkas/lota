@@ -17,131 +17,140 @@
 #define RESET "\033[0m"
 #define BOLD "\033[1m"
 
-static uint8_t *read_file(const char *path, size_t *out_len) {
-  FILE *f = fopen(path, "rb");
-  if (!f)
-    return NULL;
+static uint8_t *read_file(const char *path, size_t *out_len)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return NULL;
 
-  fseek(f, 0, SEEK_END);
-  long sz = ftell(f);
-  fseek(f, 0, SEEK_SET);
+	fseek(f, 0, SEEK_END);
+	long sz = ftell(f);
+	fseek(f, 0, SEEK_SET);
 
-  uint8_t *buf = malloc((size_t)sz);
-  if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
-    free(buf);
-    fclose(f);
-    return NULL;
-  }
-  fclose(f);
-  *out_len = (size_t)sz;
-  return buf;
+	uint8_t *buf = malloc((size_t)sz);
+	if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+		free(buf);
+		fclose(f);
+		return NULL;
+	}
+	fclose(f);
+	*out_len = (size_t)sz;
+	return buf;
 }
 
-int main(void) {
-  printf(BOLD "\n=== C <- Go Cross-Language Verification ===\n\n" RESET);
+int main(void)
+{
+	printf(BOLD "\n=== C <- Go Cross-Language Verification ===\n\n" RESET);
 
-  size_t tok_len = 0;
-  uint8_t *tok = read_file("/tmp/lota_cross_token.bin", &tok_len);
-  if (!tok) {
-    fprintf(stderr, "Cannot read /tmp/lota_cross_token.bin\n");
-    return 1;
-  }
-  printf("[C] Token: %zu bytes\n", tok_len);
+	size_t tok_len = 0;
+	uint8_t *tok = read_file("/tmp/lota_cross_token.bin", &tok_len);
+	if (!tok) {
+		fprintf(stderr, "Cannot read /tmp/lota_cross_token.bin\n");
+		return 1;
+	}
+	printf("[C] Token: %zu bytes\n", tok_len);
 
-  size_t aik_len = 0;
-  uint8_t *aik = read_file("/tmp/lota_cross_aik.der", &aik_len);
-  if (!aik) {
-    fprintf(stderr, "Cannot read /tmp/lota_cross_aik.der\n");
-    return 1;
-  }
-  printf("[C] AIK pubkey: %zu bytes\n", aik_len);
+	size_t aik_len = 0;
+	uint8_t *aik = read_file("/tmp/lota_cross_aik.der", &aik_len);
+	if (!aik) {
+		fprintf(stderr, "Cannot read /tmp/lota_cross_aik.der\n");
+		return 1;
+	}
+	printf("[C] AIK pubkey: %zu bytes\n", aik_len);
 
-  size_t nonce_len = 0;
-  uint8_t *nonce = read_file("/tmp/lota_cross_nonce.bin", &nonce_len);
-  if (!nonce || nonce_len != 32) {
-    fprintf(stderr, "Cannot read /tmp/lota_cross_nonce.bin (or wrong size)\n");
-    return 1;
-  }
-  printf("[C] Nonce: %02x%02x%02x%02x...\n", nonce[0], nonce[1], nonce[2],
-         nonce[3]);
+	size_t nonce_len = 0;
+	uint8_t *nonce = read_file("/tmp/lota_cross_nonce.bin", &nonce_len);
+	if (!nonce || nonce_len != 32) {
+		fprintf(
+		    stderr,
+		    "Cannot read /tmp/lota_cross_nonce.bin (or wrong size)\n");
+		return 1;
+	}
+	printf("[C] Nonce: %02x%02x%02x%02x...\n", nonce[0], nonce[1], nonce[2],
+	       nonce[3]);
 
-  /* untrusted first */
-  struct lota_server_claims parse_claims;
-  int ret = lota_server_parse_token(tok, tok_len, &parse_claims);
-  if (ret != LOTA_SERVER_OK) {
-    printf(RED "[C] Parse failed: %s\n" RESET, lota_server_strerror(ret));
-    return 1;
-  }
-  printf("[C] Parse OK — valid_until=%lu, flags=0x%X, "
-         "pcr_mask=0x%X\n",
-         (unsigned long)parse_claims.valid_until, parse_claims.flags,
-         parse_claims.pcr_mask);
+	/* untrusted first */
+	struct lota_server_claims parse_claims;
+	int ret = lota_server_parse_token(tok, tok_len, &parse_claims);
+	if (ret != LOTA_SERVER_OK) {
+		printf(RED "[C] Parse failed: %s\n" RESET,
+		       lota_server_strerror(ret));
+		return 1;
+	}
+	printf("[C] Parse OK — valid_until=%lu, flags=0x%X, "
+	       "pcr_mask=0x%X\n",
+	       (unsigned long)parse_claims.valid_until, parse_claims.flags,
+	       parse_claims.pcr_mask);
 
-  /* full verify with nonce */
-  struct lota_server_claims claims;
-  ret = lota_server_verify_token(tok, tok_len, aik, aik_len, nonce, &claims);
-  if (ret != LOTA_SERVER_OK) {
-    printf(RED "[C] VERIFY FAILED: %s (code %d)\n" RESET,
-           lota_server_strerror(ret), ret);
-    free(tok);
-    free(aik);
-    free(nonce);
-    return 1;
-  }
+	/* full verify with nonce */
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tok, tok_len, aik, aik_len, nonce,
+				       &claims);
+	if (ret != LOTA_SERVER_OK) {
+		printf(RED "[C] VERIFY FAILED: %s (code %d)\n" RESET,
+		       lota_server_strerror(ret), ret);
+		free(tok);
+		free(aik);
+		free(nonce);
+		return 1;
+	}
 
-  printf("[C] Verify OK!\n");
-  printf("[C]   flags       = 0x%X\n", claims.flags);
-  printf("[C]   pcr_mask    = 0x%X\n", claims.pcr_mask);
-  printf("[C]   pcr_digest  = %zu bytes", claims.pcr_digest_len);
-  if (claims.pcr_digest_len > 0) {
-    printf(" [%02x%02x%02x%02x...]", claims.pcr_digest[0], claims.pcr_digest[1],
-           claims.pcr_digest[2], claims.pcr_digest[3]);
-  }
-  printf("\n");
-  printf("[C]   expired     = %d\n", claims.expired);
-  printf("[C]   nonce[0:4]  = %02x%02x%02x%02x\n", claims.nonce[0],
-         claims.nonce[1], claims.nonce[2], claims.nonce[3]);
+	printf("[C] Verify OK!\n");
+	printf("[C]   flags       = 0x%X\n", claims.flags);
+	printf("[C]   pcr_mask    = 0x%X\n", claims.pcr_mask);
+	printf("[C]   pcr_digest  = %zu bytes", claims.pcr_digest_len);
+	if (claims.pcr_digest_len > 0) {
+		printf(" [%02x%02x%02x%02x...]", claims.pcr_digest[0],
+		       claims.pcr_digest[1], claims.pcr_digest[2],
+		       claims.pcr_digest[3]);
+	}
+	printf("\n");
+	printf("[C]   expired     = %d\n", claims.expired);
+	printf("[C]   nonce[0:4]  = %02x%02x%02x%02x\n", claims.nonce[0],
+	       claims.nonce[1], claims.nonce[2], claims.nonce[3]);
 
-  /* validate claims match expected */
-  int ok = 1;
-  if (claims.flags != 0x07) {
-    printf(RED "[C] flags mismatch!\n" RESET);
-    ok = 0;
-  }
-  if (claims.pcr_mask != 0x4001) {
-    printf(RED "[C] pcr_mask mismatch!\n" RESET);
-    ok = 0;
-  }
-  if (claims.policy_digest[0] != 0x11 || claims.policy_digest[1] != 0x22) {
-    printf(RED "[C] policy_digest mismatch!\n" RESET);
-    ok = 0;
-  }
-  if (memcmp(claims.nonce, nonce, 32) != 0) {
-    printf(RED "[C] nonce mismatch!\n" RESET);
-    ok = 0;
-  }
-  if (claims.pcr_digest_len != 32) {
-    printf(RED "[C] pcr_digest_len=%zu, expected 32!\n" RESET,
-           claims.pcr_digest_len);
-    ok = 0;
-  }
-  /* check pcr_digest[0] == 0x00, [1] == 0x01, etc */
-  if (claims.pcr_digest_len == 32 && claims.pcr_digest[0] == 0x00 &&
-      claims.pcr_digest[1] == 0x01) {
-    printf("[C] PCR digest content verified ✓\n");
-  } else if (claims.pcr_digest_len == 32) {
-    printf(RED "[C] PCR digest content mismatch!\n" RESET);
-    ok = 0;
-  }
+	/* validate claims match expected */
+	int ok = 1;
+	if (claims.flags != 0x07) {
+		printf(RED "[C] flags mismatch!\n" RESET);
+		ok = 0;
+	}
+	if (claims.pcr_mask != 0x4001) {
+		printf(RED "[C] pcr_mask mismatch!\n" RESET);
+		ok = 0;
+	}
+	if (claims.policy_digest[0] != 0x11 ||
+	    claims.policy_digest[1] != 0x22) {
+		printf(RED "[C] policy_digest mismatch!\n" RESET);
+		ok = 0;
+	}
+	if (memcmp(claims.nonce, nonce, 32) != 0) {
+		printf(RED "[C] nonce mismatch!\n" RESET);
+		ok = 0;
+	}
+	if (claims.pcr_digest_len != 32) {
+		printf(RED "[C] pcr_digest_len=%zu, expected 32!\n" RESET,
+		       claims.pcr_digest_len);
+		ok = 0;
+	}
+	/* check pcr_digest[0] == 0x00, [1] == 0x01, etc */
+	if (claims.pcr_digest_len == 32 && claims.pcr_digest[0] == 0x00 &&
+	    claims.pcr_digest[1] == 0x01) {
+		printf("[C] PCR digest content verified ✓\n");
+	} else if (claims.pcr_digest_len == 32) {
+		printf(RED "[C] PCR digest content mismatch!\n" RESET);
+		ok = 0;
+	}
 
-  if (ok) {
-    printf(GREEN BOLD "\n[C] CROSS-LANGUAGE TEST PASSED ✓\n\n" RESET);
-  } else {
-    printf(RED BOLD "\n[C] CROSS-LANGUAGE TEST FAILED ✗\n\n" RESET);
-  }
+	if (ok) {
+		printf(GREEN BOLD
+		       "\n[C] CROSS-LANGUAGE TEST PASSED ✓\n\n" RESET);
+	} else {
+		printf(RED BOLD "\n[C] CROSS-LANGUAGE TEST FAILED ✗\n\n" RESET);
+	}
 
-  free(tok);
-  free(aik);
-  free(nonce);
-  return ok ? 0 : 1;
+	free(tok);
+	free(aik);
+	free(nonce);
+	return ok ? 0 : 1;
 }
