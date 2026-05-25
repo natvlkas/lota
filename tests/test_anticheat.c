@@ -161,10 +161,11 @@ static int compute_game_id_hash_test(const char *game_id, uint8_t out[32])
 static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 				 uint8_t provider, uint32_t sequence,
 				 uint32_t flags, uint64_t timestamp,
-				 const uint8_t game_hash[32])
+				 const uint8_t game_hash[32],
+				 uint32_t domain_version)
 {
 	static const char domain[] = "lota-ac-heartbeat:v1";
-	uint8_t seq_le[4], flags_le[4], ts_le[8];
+	uint8_t seq_le[4], flags_le[4], ts_le[8], ver_le[4];
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
 	unsigned int out_len = 32;
 	int ok;
@@ -174,6 +175,7 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 
 	write_le32(seq_le, sequence);
 	write_le32(flags_le, flags);
+	write_le32(ver_le, domain_version);
 	for (int i = 0; i < 8; i++)
 		ts_le[i] = (uint8_t)((timestamp >> (8 * i)) & 0xFF);
 
@@ -185,6 +187,7 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, ts_le, sizeof(ts_le)) &&
 	     EVP_DigestUpdate(ctx, game_hash, 32) &&
+	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
 	     EVP_DigestFinal_ex(ctx, out, &out_len);
 
 	EVP_MD_CTX_free(ctx);
@@ -210,7 +213,8 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 	if (compute_game_id_hash_test(game_id, game_hash) != 0)
 		return -EIO;
 	if (compute_hb_nonce_test(nonce, session_id, provider, sequence, flags,
-				  timestamp, game_hash) != 0)
+				  timestamp, game_hash,
+				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
 		return -EIO;
 
 	token_len = build_mock_token(token, sizeof(token), flags, nonce);
@@ -232,6 +236,7 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 		out[32 + i] = (uint8_t)((timestamp >> (8 * i)) & 0xFF);
 	memcpy(out + 40, game_hash, sizeof(game_hash));
 	write_le16(out + 72, (uint16_t)token_len);
+	write_le32(out + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
 	memcpy(out + LOTA_AC_HEADER_SIZE, token, token_len);
 
 	*out_len = total;
@@ -605,8 +610,8 @@ static void test_state_no_files(void)
 
 static void test_wire_header_size(void)
 {
-	TEST("wire: header struct == 74 bytes");
-	if (sizeof(struct lota_ac_heartbeat_wire) != 74) {
+	TEST("wire: header struct == 78 bytes");
+	if (sizeof(struct lota_ac_heartbeat_wire) != 78) {
 		FAIL("size mismatch");
 		return;
 	}
@@ -1115,6 +1120,37 @@ static void test_verify_header_flags_tamper_rejected(void)
 	PASS();
 }
 
+static void test_verify_rejects_unknown_domain_version(void)
+{
+	TEST("verify: unknown domain_version -> BAD_VERSION");
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
+	size_t written = 0;
+
+	if (build_bound_heartbeat_packet(buf, sizeof(buf), &written,
+					 LOTA_AC_PROVIDER_EAC,
+					 "test-domain-version", 0x07, 1) != 0) {
+		FAIL("packet build failed");
+		return;
+	}
+	if (compute_game_id_hash_test("test-domain-version",
+				      expected_game_hash) != 0) {
+		FAIL("expected game hash compute failed");
+		return;
+	}
+
+	/* stamp a domain version that is not in the accepted table */
+	write_le32(buf + 74, 0xdeadbeefU);
+
+	struct lota_ac_info info;
+	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
+				     &info) != LOTA_SERVER_ERR_BAD_VERSION) {
+		FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+		return;
+	}
+	PASS();
+}
+
 static void test_direct_mode_no_agent(void)
 {
 	TEST("direct mode: no agent -> ERROR state (graceful)");
@@ -1453,6 +1489,7 @@ int main(void)
 	test_verify_bad_provider();
 	test_verify_size_mismatch();
 	test_verify_header_flags_tamper_rejected();
+	test_verify_rejects_unknown_domain_version();
 
 	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();

@@ -28,18 +28,45 @@
 #include "lota_snapshot.h"
 
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
-	       "heartbeat wire header must be exactly 74 bytes");
+	       "heartbeat wire header size must match LOTA_AC_HEADER_SIZE");
 
-#define LOTA_AC_GAME_BINDING_HASH_DOMAIN "lota-ac-game-binding:v2"
-#define LOTA_AC_HEARTBEAT_NONCE_DOMAIN "lota-ac-heartbeat:v1"
 #define LOTA_AC_MAX_HEARTBEAT_AGE_SEC 120ULL
+
+/*
+ * Frozen string pairs selected by LOTA_AC_DOMAIN_VERSION_*. Adding a new
+ * version means appending a new row, never editing an existing one.
+ */
+struct lota_ac_domain_strings {
+	uint32_t version;
+	const char *game_binding;
+	const char *heartbeat_nonce;
+};
+
+static const struct lota_ac_domain_strings lota_ac_domain_table[] = {
+    {LOTA_AC_DOMAIN_VERSION_V1, "lota-ac-game-binding:v2",
+     "lota-ac-heartbeat:v1"},
+};
+
+static const struct lota_ac_domain_strings *
+lota_ac_domain_lookup(uint32_t version)
+{
+	size_t i;
+	for (i = 0;
+	     i < sizeof(lota_ac_domain_table) / sizeof(lota_ac_domain_table[0]);
+	     i++) {
+		if (lota_ac_domain_table[i].version == version)
+			return &lota_ac_domain_table[i];
+	}
+	return NULL;
+}
 
 static int
 compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
 			const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
 			uint8_t provider, uint32_t sequence,
 			uint32_t lota_flags, uint64_t timestamp,
-			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]);
+			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+			uint32_t domain_version);
 
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
@@ -125,7 +152,7 @@ static int read_snapshot(struct lota_ac_session *session)
 int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 				      uint8_t out[LOTA_AC_GAME_HASH_SIZE])
 {
-	static const uint8_t domain[] = LOTA_AC_GAME_BINDING_HASH_DOMAIN;
+	const struct lota_ac_domain_strings *dom;
 	uint8_t exe_digest[LOTA_AC_GAME_HASH_SIZE];
 	EVP_MD_CTX *ctx;
 	unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
@@ -136,6 +163,10 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 	if (game_id[0] == '\0')
 		return -EINVAL;
 
+	dom = lota_ac_domain_lookup(LOTA_AC_DOMAIN_VERSION_CURRENT);
+	if (!dom)
+		return -EINVAL;
+
 	if (hash_file_sha256(exe_path, exe_digest) < 0)
 		return -EIO;
 
@@ -144,7 +175,8 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 		return -ENOMEM;
 
 	ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
-	     EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+	     EVP_DigestUpdate(ctx, dom->game_binding,
+			      strlen(dom->game_binding) + 1) &&
 	     EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
 	     EVP_DigestUpdate(ctx, exe_digest, sizeof(exe_digest)) &&
 	     EVP_DigestFinal_ex(ctx, out, &out_len);
@@ -160,22 +192,26 @@ static int compute_game_id_hash(const char *game_id,
 						 out);
 }
 
-static int
-compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
-			const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
-			uint8_t provider, uint32_t sequence,
-			uint32_t lota_flags, uint64_t timestamp,
-			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE])
+static int compute_heartbeat_nonce(
+    uint8_t out_nonce[LOTA_NONCE_SIZE],
+    const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
+    uint32_t sequence, uint32_t lota_flags, uint64_t timestamp,
+    const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE], uint32_t domain_version)
 {
-	static const uint8_t domain[] = LOTA_AC_HEARTBEAT_NONCE_DOMAIN;
+	const struct lota_ac_domain_strings *dom;
 	uint8_t le32[4];
 	uint8_t flags_le[4];
 	uint8_t le64[8];
+	uint8_t ver_le[4];
 	EVP_MD_CTX *ctx;
 	unsigned int out_len = LOTA_NONCE_SIZE;
 	int ok;
 
 	if (!out_nonce || !session_id || !game_id_hash)
+		return -EINVAL;
+
+	dom = lota_ac_domain_lookup(domain_version);
+	if (!dom)
 		return -EINVAL;
 
 	ctx = EVP_MD_CTX_new();
@@ -185,15 +221,18 @@ compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
 	lota__write_le32(le32, sequence);
 	lota__write_le32(flags_le, lota_flags);
 	lota__write_le64(le64, timestamp);
+	lota__write_le32(ver_le, domain_version);
 
 	ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
-	     EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+	     EVP_DigestUpdate(ctx, dom->heartbeat_nonce,
+			      strlen(dom->heartbeat_nonce) + 1) &&
 	     EVP_DigestUpdate(ctx, session_id, LOTA_AC_SESSION_ID_SIZE) &&
 	     EVP_DigestUpdate(ctx, &provider, sizeof(provider)) &&
 	     EVP_DigestUpdate(ctx, le32, sizeof(le32)) &&
 	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
 	     EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
+	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
 	     EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
 
 	EVP_MD_CTX_free(ctx);
@@ -529,7 +568,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 
 	ret = compute_heartbeat_nonce(
 	    heartbeat_nonce, session->session_id, (uint8_t)session->provider,
-	    sequence, session->lota_flags, timestamp, session->game_id_hash);
+	    sequence, session->lota_flags, timestamp, session->game_id_hash,
+	    LOTA_AC_DOMAIN_VERSION_CURRENT);
 	if (ret < 0)
 		return ret;
 
@@ -586,6 +626,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	lota__write_le64(buf + 32, timestamp);
 	memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
 	lota__write_le16(buf + 72, (uint16_t)session->token_len);
+	lota__write_le32(buf + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
 
 	memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf,
 	       session->token_len);
@@ -617,6 +658,7 @@ int lota_ac_verify_heartbeat(
 	uint32_t heartbeat_lota_flags = read_le32_u(data + 28);
 	uint64_t timestamp = read_le64_u(data + 32);
 	uint16_t token_size = read_le16_u(data + 72);
+	uint32_t domain_version = read_le32_u(data + 74);
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t expected_nonce[LOTA_NONCE_SIZE];
 	int ret = LOTA_SERVER_OK;
@@ -635,6 +677,9 @@ int lota_ac_verify_heartbeat(
 	    provider != LOTA_AC_PROVIDER_BATTLEYE)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
+	if (!lota_ac_domain_lookup(domain_version))
+		return LOTA_SERVER_ERR_BAD_VERSION;
+
 	if (CRYPTO_memcmp(data + 40, expected_game_id_hash,
 			  LOTA_AC_GAME_HASH_SIZE) != 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -646,7 +691,7 @@ int lota_ac_verify_heartbeat(
 
 	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
 				      sequence, heartbeat_lota_flags, timestamp,
-				      data + 40);
+				      data + 40, domain_version);
 	if (ret < 0)
 		return LOTA_SERVER_ERR_CRYPTO;
 

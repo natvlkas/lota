@@ -28,13 +28,27 @@ extern "C" {
 #endif
 
 #define LOTA_AC_MAGIC 0x4C414348 /* "LACH" little-endian */
-#define LOTA_AC_VERSION 1
-#define LOTA_AC_HEADER_SIZE 74
+#define LOTA_AC_VERSION 2
+#define LOTA_AC_HEADER_SIZE 78
 #define LOTA_AC_MAX_TOKEN 1608
 #define LOTA_AC_MAX_HEARTBEAT (LOTA_AC_HEADER_SIZE + LOTA_AC_MAX_TOKEN)
 #define LOTA_AC_MAX_GAME_ID 64
 #define LOTA_AC_SESSION_ID_SIZE 16
 #define LOTA_AC_GAME_HASH_SIZE 32
+
+/*
+ * Domain-version negotiation.
+ *
+ * Each value names a frozen pair of hash domain strings used to derive
+ * the game-binding hash and the heartbeat nonce. Producer stamps the
+ * value into the wire; verifier rejects anything outside its accepted
+ * set. New string variants must allocate the next integer rather than
+ * silently replacing an existing one.
+ *
+ * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v1\\0"
+ */
+#define LOTA_AC_DOMAIN_VERSION_V1 1u
+#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
 
 /* default heartbeat interval in seconds */
 #define LOTA_AC_DEFAULT_HEARTBEAT_SEC 30
@@ -105,7 +119,7 @@ struct lota_ac_config {
  *
  *   offset  size   field
  *   0       4      magic           0x4C414348
- *   4       1      version         0x01
+ *   4       1      version         0x02
  *   5       1      provider        EAC=1, BE=2
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
@@ -113,10 +127,13 @@ struct lota_ac_config {
  *   28      4      lota_flags      mirror of token flags (integrity-checked
  *                                  against embedded token during verify)
  *   32      8      timestamp       Unix epoch (seconds, nonce-bound)
- *   40      32     game_id_hash    SHA-256("lota-ac-game-binding:v2\\0" ||
+ *   40      32     game_id_hash    SHA-256(<game-binding domain> ||
  *                                  game_id || SHA-256(executable-bytes))
  *   72      2      token_size      embedded LOTA token length
- *   74      var    lota_token[]    full LOTA token (wire format)
+ *   74      4      domain_version  LOTA_AC_DOMAIN_VERSION_*; selects the
+ *                                  game-binding/heartbeat domain pair and
+ *                                  is itself bound into the heartbeat nonce
+ *   78      var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {
 	uint32_t magic;
@@ -129,6 +146,7 @@ struct lota_ac_heartbeat_wire {
 	uint64_t timestamp;
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint16_t token_size;
+	uint32_t domain_version;
 } __attribute__((packed));
 
 struct lota_ac_info {
