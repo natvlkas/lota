@@ -1198,6 +1198,177 @@ static void test_tick_null(void)
 	PASS();
 }
 
+/*
+ * Emit a wine-hook style lota-status text file at the EAC-expected path.
+ * Matches the format produced by src/sdk/lota_wine_hook.c::write_status().
+ */
+static void write_wine_status_file(const char *dir, uint32_t flags,
+				   uint64_t valid_until)
+{
+	char buf[512];
+	int len =
+	    snprintf(buf, sizeof(buf),
+		     "LOTA_ATTESTED=%d\n"
+		     "LOTA_FLAGS=0x%08x\n"
+		     "LOTA_VALID_UNTIL=%lu\n"
+		     "LOTA_ATTEST_COUNT=%u\n"
+		     "LOTA_FAIL_COUNT=%u\n"
+		     "LOTA_UPDATED=%lu\n"
+		     "LOTA_PID=%d\n",
+		     (flags & 0x01) ? 1 : 0, flags, (unsigned long)valid_until,
+		     1u, 0u, (unsigned long)time(NULL), (int)getpid());
+	if (len < 0 || (size_t)len >= sizeof(buf))
+		return;
+	write_test_file(dir, "lota-status", buf, (size_t)len);
+}
+
+static int unlink_in_dir(const char *dir, const char *name)
+{
+	char path[1024];
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >=
+	    (int)sizeof(path))
+		return -1;
+	return unlink(path);
+}
+
+static void test_integration_wine_artifacts_consumed_by_eac(void)
+{
+	TEST("integration: wine hook artifacts -> EAC TRUSTED");
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s/wine_to_eac", test_dir);
+	mkdir(dir, 0700);
+
+	const uint32_t attested_flags = 0x07;
+	write_wine_status_file(dir, attested_flags,
+			       (uint64_t)time(NULL) + 3600);
+	write_mock_snapshot(dir, attested_flags);
+
+	struct lota_ac_config cfg = {
+	    .provider = LOTA_AC_PROVIDER_EAC,
+	    .game_id = "wine-to-eac",
+	    .token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("expected TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	struct lota_ac_info info;
+	if (lota_ac_get_info(s, &info) != 0 ||
+	    info.lota_flags != attested_flags) {
+		FAIL("flags not propagated from snapshot");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+static void test_integration_eac_detects_agent_death(void)
+{
+	TEST("integration: snapshot disappears mid-session -> ERROR");
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s/agent_death", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, 0x07);
+
+	struct lota_ac_config cfg = {
+	    .provider = LOTA_AC_PROVIDER_EAC,
+	    .game_id = "agent-death",
+	    .token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("preconditions: expected TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	/* simulate wine hook + agent stopping: snapshot pulled off disk */
+	if (unlink_in_dir(dir, LOTA_SNAPSHOT_FILE_NAME) != 0) {
+		FAIL("unlink snapshot");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	if (lota_ac_tick(s) != 0) {
+		FAIL("tick reported error");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR) {
+		FAIL("expected ERROR after snapshot loss");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	struct lota_ac_info info;
+	if (lota_ac_get_info(s, &info) != 0 || info.lota_flags != 0) {
+		FAIL("flags not cleared on agent death");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+static void test_integration_eac_detects_attestation_loss(void)
+{
+	TEST("integration: attestation revoked mid-session -> UNTRUSTED");
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s/att_loss", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, 0x07);
+
+	struct lota_ac_config cfg = {
+	    .provider = LOTA_AC_PROVIDER_EAC,
+	    .game_id = "attestation-loss",
+	    .token_dir = dir,
+	    .required_flags = 0x07,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("preconditions: expected TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	/* agent still writes snapshots, but attestation flag bit cleared */
+	write_mock_snapshot(dir, 0x00);
+
+	if (lota_ac_tick(s) != 0) {
+		FAIL("tick reported error");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED) {
+		FAIL("expected UNTRUSTED after revocation");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	lota_ac_shutdown(s);
+	PASS();
+}
+
 static void test_session_id_unique(void)
 {
 	TEST("session_id: different sessions have different IDs");
@@ -1285,6 +1456,11 @@ int main(void)
 
 	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();
+
+	printf("\nIntegration:\n");
+	test_integration_wine_artifacts_consumed_by_eac();
+	test_integration_eac_detects_agent_death();
+	test_integration_eac_detects_attestation_loss();
 
 	printf("\nMisc:\n");
 	test_state_str();
