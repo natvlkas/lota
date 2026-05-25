@@ -70,7 +70,7 @@ HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
 # Agent link flags
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
-LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd -lseccomp
+LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
 
 # Detect architecture from compiler if not specified
 ifndef ARCH
@@ -450,7 +450,7 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)

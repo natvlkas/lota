@@ -206,6 +206,7 @@ struct aik_metadata {
 struct tpm_context {
 	ESYS_CONTEXT *esys_ctx;
 	TSS2_TCTI_CONTEXT *tcti_ctx;
+	bool tcti_from_loader;
 	bool initialized;
 
 	/* Optional explicit kernel image path override */

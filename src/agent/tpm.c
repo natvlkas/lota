@@ -32,6 +32,7 @@
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tcti.h>
 #include <tss2/tss2_tcti_device.h>
+#include <tss2/tss2_tctildr.h>
 
 #include "quote.h"
 #include "tpm.h"
@@ -650,6 +651,8 @@ int tpm_init(struct tpm_context *ctx)
 {
 	TSS2_RC rc;
 	size_t tcti_size;
+	const char *tcti_conf;
+	const char *aik_meta_path;
 
 	if (!ctx)
 		return -EINVAL;
@@ -661,6 +664,7 @@ int tpm_init(struct tpm_context *ctx)
 	/* reset runtime state */
 	ctx->esys_ctx = NULL;
 	ctx->tcti_ctx = NULL;
+	ctx->tcti_from_loader = false;
 	ctx->initialized = false;
 	memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 	ctx->aik_meta_loaded = false;
@@ -676,23 +680,43 @@ int tpm_init(struct tpm_context *ctx)
 	ctx->self_hash_ready = false;
 	ctx->boot_commitment_locked = false;
 
-	/*
-	 * Initialize TCTI context for device access.
-	 * First call with NULL to get required size.
-	 */
-	rc = Tss2_Tcti_Device_Init(NULL, &tcti_size, TPM_DEVICE_PATH);
-	if (rc != TSS2_RC_SUCCESS)
-		return tss2_rc_to_errno(rc);
+	aik_meta_path = getenv("LOTA_AIK_META_PATH");
+	if (aik_meta_path && aik_meta_path[0]) {
+		if (aik_meta_path[0] != '/')
+			return -EINVAL;
+		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
+			     "%s", aik_meta_path) >=
+		    (int)sizeof(ctx->aik_meta_path))
+			return -ENAMETOOLONG;
+	}
 
-	ctx->tcti_ctx = calloc(1, tcti_size);
-	if (!ctx->tcti_ctx)
-		return -ENOMEM;
+	tcti_conf = getenv("TSS2_TCTI");
+	if (tcti_conf && tcti_conf[0]) {
+		rc = Tss2_TctiLdr_Initialize(tcti_conf, &ctx->tcti_ctx);
+		if (rc != TSS2_RC_SUCCESS)
+			return tss2_rc_to_errno(rc);
+		ctx->tcti_from_loader = true;
+	} else {
+		/*
+		 * Initialize TCTI context for device access.
+		 * First call with NULL to get required size.
+		 */
+		rc = Tss2_Tcti_Device_Init(NULL, &tcti_size,
+					   TPM_DEVICE_PATH);
+		if (rc != TSS2_RC_SUCCESS)
+			return tss2_rc_to_errno(rc);
 
-	rc = Tss2_Tcti_Device_Init(ctx->tcti_ctx, &tcti_size, TPM_DEVICE_PATH);
-	if (rc != TSS2_RC_SUCCESS) {
-		free(ctx->tcti_ctx);
-		ctx->tcti_ctx = NULL;
-		return tss2_rc_to_errno(rc);
+		ctx->tcti_ctx = calloc(1, tcti_size);
+		if (!ctx->tcti_ctx)
+			return -ENOMEM;
+
+		rc = Tss2_Tcti_Device_Init(ctx->tcti_ctx, &tcti_size,
+					   TPM_DEVICE_PATH);
+		if (rc != TSS2_RC_SUCCESS) {
+			free(ctx->tcti_ctx);
+			ctx->tcti_ctx = NULL;
+			return tss2_rc_to_errno(rc);
+		}
 	}
 
 	/*
@@ -701,9 +725,14 @@ int tpm_init(struct tpm_context *ctx)
 	 */
 	rc = Esys_Initialize(&ctx->esys_ctx, ctx->tcti_ctx, NULL);
 	if (rc != TSS2_RC_SUCCESS) {
-		Tss2_Tcti_Finalize(ctx->tcti_ctx);
-		free(ctx->tcti_ctx);
+		if (ctx->tcti_from_loader) {
+			Tss2_TctiLdr_Finalize(&ctx->tcti_ctx);
+		} else {
+			Tss2_Tcti_Finalize(ctx->tcti_ctx);
+			free(ctx->tcti_ctx);
+		}
 		ctx->tcti_ctx = NULL;
+		ctx->tcti_from_loader = false;
 		return tss2_rc_to_errno(rc);
 	}
 
@@ -727,10 +756,15 @@ void tpm_cleanup(struct tpm_context *ctx)
 	}
 
 	if (ctx->tcti_ctx) {
-		Tss2_Tcti_Finalize(ctx->tcti_ctx);
-		free(ctx->tcti_ctx);
+		if (ctx->tcti_from_loader) {
+			Tss2_TctiLdr_Finalize(&ctx->tcti_ctx);
+		} else {
+			Tss2_Tcti_Finalize(ctx->tcti_ctx);
+			free(ctx->tcti_ctx);
+		}
 		ctx->tcti_ctx = NULL;
 	}
+	ctx->tcti_from_loader = false;
 
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
