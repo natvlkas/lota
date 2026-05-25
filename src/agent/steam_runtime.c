@@ -56,9 +56,6 @@ static enum steam_runtime_type classify_runtime(const char *runtime_str)
 	return STEAM_RT_UNKNOWN;
 }
 
-/*
- * Parse a uint32 from a string.  Returns 0 for NULL or invalid.
- */
 static uint32_t parse_uint32(const char *s)
 {
 	unsigned long val;
@@ -75,9 +72,6 @@ static uint32_t parse_uint32(const char *s)
 	return (uint32_t)val;
 }
 
-/*
- * Check if a path exists and is a directory (not a symlink).
- */
 static int is_directory(const char *path)
 {
 	struct stat st;
@@ -87,9 +81,6 @@ static int is_directory(const char *path)
 	return S_ISDIR(st.st_mode);
 }
 
-/*
- * Check if a regular file exists (not a symlink).
- */
 static int is_regular_file(const char *path)
 {
 	struct stat st;

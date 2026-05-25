@@ -146,14 +146,8 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 			    struct lota_server_claims *claims);
 
-/*
- * Get error description.
- */
 const char *lota_server_strerror(int error);
 
-/*
- * Get SDK version string.
- */
 const char *lota_server_sdk_version(void);
 
 #ifdef __cplusplus

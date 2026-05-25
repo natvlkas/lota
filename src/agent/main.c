@@ -196,10 +196,6 @@ struct run_daemon_params {
 	struct lota_config *cfg;
 };
 
-/*
- * Main daemon loop
- */
-
 static int run_daemon(const struct run_daemon_params *params)
 {
 	int ret, epoll_fd, sfd;

@@ -110,9 +110,6 @@ static void make_ctx(struct tpm_context *ctx)
 		 "%s/aik_meta.dat", tmp_dir);
 }
 
-/*
- * save + load round-trip
- */
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -159,9 +156,6 @@ static void test_metadata_save_load(void)
 	PASS();
 }
 
-/*
- * load creates default metadata when file does not exist
- */
 static void test_metadata_default_creation(void)
 {
 	struct tpm_context ctx;
@@ -209,9 +203,6 @@ static void test_metadata_default_creation(void)
 	PASS();
 }
 
-/*
- * reject corrupted magic
- */
 static void test_metadata_bad_magic(void)
 {
 	struct tpm_context ctx;
@@ -249,9 +240,6 @@ static void test_metadata_bad_magic(void)
 	PASS();
 }
 
-/*
- * reject unsupported version
- */
 static void test_metadata_bad_version(void)
 {
 	struct tpm_context ctx;
@@ -289,9 +277,6 @@ static void test_metadata_bad_version(void)
 	PASS();
 }
 
-/*
- * tpm_aik_age returns correct seconds
- */
 static void test_aik_age(void)
 {
 	struct tpm_context ctx;
@@ -319,9 +304,6 @@ static void test_aik_age(void)
 	PASS();
 }
 
-/*
- * tpm_aik_age fails without loaded metadata
- */
 static void test_aik_age_no_metadata(void)
 {
 	struct tpm_context ctx;
@@ -340,9 +322,6 @@ static void test_aik_age_no_metadata(void)
 	PASS();
 }
 
-/*
- * needs_rotation returns 0 when key is fresh
- */
 static void test_needs_rotation_fresh(void)
 {
 	struct tpm_context ctx;
@@ -365,9 +344,6 @@ static void test_needs_rotation_fresh(void)
 	PASS();
 }
 
-/*
- * needs_rotation returns 1 when key expired
- */
 static void test_needs_rotation_expired(void)
 {
 	struct tpm_context ctx;
@@ -390,9 +366,6 @@ static void test_needs_rotation_expired(void)
 	PASS();
 }
 
-/*
- * needs_rotation uses default TTL when max_age_sec == 0
- */
 static void test_needs_rotation_default_ttl(void)
 {
 	struct tpm_context ctx;
@@ -424,9 +397,6 @@ static void test_needs_rotation_default_ttl(void)
 	PASS();
 }
 
-/*
- * grace period inactive by default
- */
 static void test_grace_period_inactive(void)
 {
 	struct tpm_context ctx;
@@ -442,9 +412,6 @@ static void test_grace_period_inactive(void)
 	PASS();
 }
 
-/*
- * grace period active within deadline
- */
 static void test_grace_period_active(void)
 {
 	struct tpm_context ctx;
@@ -464,9 +431,6 @@ static void test_grace_period_active(void)
 	PASS();
 }
 
-/*
- * grace period expires and clears state
- */
 static void test_grace_period_expired(void)
 {
 	struct tpm_context ctx;
@@ -495,9 +459,6 @@ static void test_grace_period_expired(void)
 	PASS();
 }
 
-/*
- * get_prev_public returns key during grace period
- */
 static void test_get_prev_public_grace(void)
 {
 	struct tpm_context ctx;
@@ -529,9 +490,6 @@ static void test_get_prev_public_grace(void)
 	PASS();
 }
 
-/*
- * get_prev_public returns -ENOENT outside grace period
- */
 static void test_get_prev_public_no_grace(void)
 {
 	struct tpm_context ctx;
@@ -551,9 +509,6 @@ static void test_get_prev_public_no_grace(void)
 	PASS();
 }
 
-/*
- * save metadata creates parent directories
- */
 static void test_save_creates_dirs(void)
 {
 	struct tpm_context ctx;
@@ -587,9 +542,6 @@ static void test_save_creates_dirs(void)
 	PASS();
 }
 
-/*
- * truncated file rejected
- */
 static void test_metadata_truncated(void)
 {
 	struct tpm_context ctx;
@@ -625,9 +577,6 @@ static void test_metadata_truncated(void)
 	PASS();
 }
 
-/*
- * needs_rotation boundary (age == max_age_sec)
- */
 static void test_needs_rotation_boundary(void)
 {
 	struct tpm_context ctx;
@@ -651,9 +600,6 @@ static void test_needs_rotation_boundary(void)
 	PASS();
 }
 
-/*
- * get_prev_public -> -ENOSPC when buffer too small
- */
 static void test_get_prev_public_small_buf(void)
 {
 	struct tpm_context ctx;

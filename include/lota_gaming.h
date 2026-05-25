@@ -308,9 +308,6 @@ int lota_unsubscribe(struct lota_client *client);
  */
 int lota_poll_events(struct lota_client *client, int timeout_ms);
 
-/*
- * lota_strerror - Get error message for error code
- */
 const char *lota_strerror(int error);
 
 /*

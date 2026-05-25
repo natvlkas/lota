@@ -136,9 +136,6 @@ static int prop_get_version(sd_bus *bus, const char *path,
 	return sd_bus_message_append(reply, "s", "1.0.0");
 }
 
-/*
- * Ping() -> (t uptime_sec, u pid)
- */
 static int method_ping(sd_bus_message *msg, void *userdata, sd_bus_error *error)
 {
 	struct dbus_context *ctx = userdata;

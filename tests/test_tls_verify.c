@@ -37,9 +37,6 @@ static void test_result(const char *name, int passed)
 	}
 }
 
-/*
- * 1: Default mode (system CAs) should reject self-signed cert
- */
 static void test_system_ca_rejects_selfsigned(void)
 {
 	struct net_context ctx;
@@ -57,9 +54,6 @@ static void test_system_ca_rejects_selfsigned(void)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 2: Custom CA cert should accept server cert
- */
 static void test_custom_ca_accepts(const char *ca_path)
 {
 	struct net_context ctx;
@@ -79,9 +73,6 @@ static void test_custom_ca_accepts(const char *ca_path)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 3: Wrong hostname should be rejected even with correct CA
- */
 static void test_hostname_mismatch(const char *ca_path)
 {
 	struct net_context ctx;
@@ -110,9 +101,6 @@ static void test_hostname_mismatch(const char *ca_path)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 4: skip_verify bypasses all checks
- */
 static void test_skip_verify(void)
 {
 	struct net_context ctx;
@@ -131,9 +119,6 @@ static void test_skip_verify(void)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 5: Non-existent CA cert file
- */
 static void test_bad_ca_path(void)
 {
 	struct net_context ctx;
@@ -146,9 +131,6 @@ static void test_bad_ca_path(void)
 		net_context_cleanup(&ctx);
 }
 
-/*
- * 6: NULL server address
- */
 static void test_null_server(void)
 {
 	struct net_context ctx;
@@ -158,9 +140,6 @@ static void test_null_server(void)
 	test_result("NULL server returns EINVAL", ret == -EINVAL);
 }
 
-/*
- * 7: skip_verify field stored in context
- */
 static void test_skip_verify_stored(void)
 {
 	struct net_context ctx;
@@ -184,9 +163,6 @@ static void test_skip_verify_stored(void)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 8: pin_sha256 stored in context when provided
- */
 static void test_pin_stored_in_context(void)
 {
 	struct net_context ctx;
@@ -205,9 +181,6 @@ static void test_pin_stored_in_context(void)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 9: NULL pin means no pinning
- */
 static void test_null_pin_no_pinning(void)
 {
 	struct net_context ctx;
@@ -222,9 +195,6 @@ static void test_null_pin_no_pinning(void)
 	net_context_cleanup(&ctx);
 }
 
-/*
- * 10: net_parse_pin_sha256 with valid lowercase hex
- */
 static void test_parse_pin_valid_hex(void)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];
@@ -238,9 +208,6 @@ static void test_parse_pin_valid_hex(void)
 	test_result("parse pin: last byte correct", out[31] == 0xee);
 }
 
-/*
- * 11: net_parse_pin_sha256 with uppercase hex
- */
 static void test_parse_pin_uppercase(void)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];
@@ -253,9 +220,6 @@ static void test_parse_pin_uppercase(void)
 	test_result("parse pin: uppercase first byte", out[0] == 0xa1);
 }
 
-/*
- * 12: net_parse_pin_sha256 with colons (openssl fingerprint format)
- */
 static void test_parse_pin_with_colons(void)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];
@@ -269,9 +233,6 @@ static void test_parse_pin_with_colons(void)
 	test_result("parse pin: colon format last byte", out[31] == 0xee);
 }
 
-/*
- * 13: net_parse_pin_sha256 rejects invalid input
- */
 static void test_parse_pin_invalid(void)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];
@@ -308,9 +269,6 @@ static void test_parse_pin_invalid(void)
 	test_result("parse pin: empty string rejected", ret == -EINVAL);
 }
 
-/*
- * 14: net_parse_pin_sha256 with spaces
- */
 static void test_parse_pin_with_spaces(void)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];

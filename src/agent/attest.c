@@ -244,9 +244,6 @@ int export_policy(int mode)
 	return 0;
 }
 
-/*
- * Build attestation report for verifier
- */
 static int build_attestation_report(const struct verifier_challenge *challenge,
 				    struct lota_attestation_report *report)
 {
@@ -709,9 +706,6 @@ cleanup:
 	return ret;
 }
 
-/*
- * One-shot remote attestation
- */
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256)
 {

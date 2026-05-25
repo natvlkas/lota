@@ -30,9 +30,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/*
- * Write a SHA-256 hash as a lowercase hex string.
- */
 static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE])
 {
 	for (int i = 0; i < LOTA_HASH_SIZE; i++)
@@ -90,9 +87,6 @@ static void emit_yaml_string(FILE *out, const char *s)
 	fputc('"', out);
 }
 
-/*
- * Write a sanitized YAML comment line.
- */
 static void emit_yaml_comment(FILE *out, const char *prefix, const char *s)
 {
 	fprintf(out, "# %s: ", prefix);

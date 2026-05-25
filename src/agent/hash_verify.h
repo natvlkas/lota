@@ -59,9 +59,6 @@ struct hash_verify_ctx {
  */
 int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size);
 
-/*
- * Clean up hash verification context and free cache.
- */
 void hash_verify_cleanup(struct hash_verify_ctx *ctx);
 
 /*

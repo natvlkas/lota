@@ -2400,9 +2400,6 @@ cleanup:
 	return ret;
 }
 
-/*
- * Create directory path recursively.
- */
 static int mkdirs(const char *path, mode_t mode)
 {
 	char tmp[PATH_MAX];

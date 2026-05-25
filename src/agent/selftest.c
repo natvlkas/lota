@@ -18,9 +18,6 @@
 #include "selftest.h"
 #include "tpm.h"
 
-/*
- * Print hex dump of buffer
- */
 void print_hex(const char *label, const uint8_t *data, size_t len)
 {
 	size_t i;
@@ -32,9 +29,6 @@ void print_hex(const char *label, const uint8_t *data, size_t len)
 	printf("\n");
 }
 
-/*
- * Test TPM operations
- */
 int test_tpm(void)
 {
 	int ret;
@@ -232,9 +226,6 @@ int test_tpm(void)
 	return 0;
 }
 
-/*
- * Test IOMMU verification
- */
 int test_iommu(void)
 {
 	struct iommu_status status;

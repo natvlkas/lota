@@ -360,9 +360,6 @@ static int write_token(struct lota_client *client, uint32_t flags)
 	return 0;
 }
 
-/*
- * Connect (or reconnect) to the LOTA agent.
- */
 static struct lota_client *hook_connect(void)
 {
 	struct lota_connect_opts opts;
@@ -419,9 +416,6 @@ static void refresh_once(void)
 	}
 }
 
-/*
- * Callback for push notifications
- */
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)
 {
@@ -502,9 +496,6 @@ static void *refresh_thread_fn(void *arg)
 	return NULL;
 }
 
-/*
- * Reset state so the child does not try to join a non-existent thread.
- */
 static void hook_child_after_fork(void)
 {
 	g_hook.thread_started = 0;

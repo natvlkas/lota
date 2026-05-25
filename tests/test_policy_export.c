@@ -35,9 +35,6 @@ static int tests_passed;
 		printf("FAIL: %s\n", msg);                                     \
 	} while (0)
 
-/*
- * Build a fully-populated snapshot with deterministic data.
- */
 static void build_full_snapshot(struct policy_snapshot *snap)
 {
 	memset(snap, 0, sizeof(*snap));
@@ -90,9 +87,6 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	snap->lockdown = false;
 }
 
-/*
- * Emit snapshot to buffer and return pointer. Returns NULL on error.
- */
 static char *emit_to_string(const struct policy_snapshot *snap, size_t *out_len)
 {
 	static char buf[8192];
@@ -109,17 +103,11 @@ static char *emit_to_string(const struct policy_snapshot *snap, size_t *out_len)
 	return buf;
 }
 
-/*
- * Check that a string contains a given substring.
- */
 static int contains(const char *haystack, const char *needle)
 {
 	return strstr(haystack, needle) != NULL;
 }
 
-/*
- * Check that a YAML line "key: value" exists.
- */
 static int has_yaml_line(const char *yaml, const char *line)
 {
 	const char *p = yaml;

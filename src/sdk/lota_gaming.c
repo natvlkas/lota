@@ -43,9 +43,6 @@ struct lota_client {
 	void *user_data;
 };
 
-/*
- * Send all data, handling partial writes
- */
 static int send_all(int fd, const void *buf, size_t len)
 {
 	const char *p = buf;
@@ -67,9 +64,6 @@ static int send_all(int fd, const void *buf, size_t len)
 	return 0;
 }
 
-/*
- * Set socket to non-blocking mode
- */
 static int set_nonblock(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);
@@ -79,9 +73,6 @@ static int set_nonblock(int fd)
 	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/*
- * Restore socket to blocking mode after non-blocking connect completes.
- */
 static int clear_nonblock(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);
@@ -91,9 +82,6 @@ static int clear_nonblock(int fd)
 	return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 }
 
-/*
- * Wait for socket to be readable/writable with timeout
- */
 static int wait_for_socket(int fd, int events, int timeout_ms)
 {
 	struct pollfd pfd = {
@@ -113,9 +101,6 @@ static int wait_for_socket(int fd, int events, int timeout_ms)
 	return 0;
 }
 
-/*
- * Send request with timeout
- */
 static int send_request(struct lota_client *client,
 			const struct lota_ipc_request *req, const void *payload,
 			size_t payload_len)
@@ -156,9 +141,6 @@ static int64_t monotonic_ms(void)
 	return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
 }
 
-/*
- * Receive exactly len bytes using non-blocking recv + poll-based timeout.
- */
 static int recv_exact_timeout(int fd, void *buf, size_t len, int timeout_ms)
 {
 	uint8_t *p = buf;
@@ -206,9 +188,6 @@ static int recv_exact_timeout(int fd, void *buf, size_t len, int timeout_ms)
 	return 0;
 }
 
-/*
- * Receive response with timeout
- */
 static int recv_response(struct lota_client *client,
 			 struct lota_ipc_response *resp, void *payload,
 			 size_t payload_size, size_t *payload_len)
@@ -277,9 +256,6 @@ static int recv_response(struct lota_client *client,
 	return 0;
 }
 
-/*
- * Map IPC result to SDK error code
- */
 static int ipc_result_to_error(uint32_t result)
 {
 	switch (result) {
@@ -328,9 +304,6 @@ static int dispatch_notification(struct lota_client *client,
 	return 1;
 }
 
-/*
- * Drain and discard a response payload from the socket.
- */
 static int drain_payload(int fd, size_t remaining, int timeout_ms)
 {
 	char discard[256];
@@ -780,9 +753,6 @@ void lota_token_free(struct lota_token *token)
 	token->protect_pid_count = 0;
 }
 
-/*
- * Serialization using shared definitions
- */
 size_t lota_token_serialized_size(const struct lota_token *token)
 {
 	size_t total;

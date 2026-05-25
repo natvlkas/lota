@@ -88,9 +88,6 @@ static int harden_fd_cloexec(int fd, const char *label)
 	return 0;
 }
 
-/*
- * Returns 1 in initial PID namespace, 0 in nested PID namespace, <0 on error.
- */
 static int running_in_initial_pidns(void)
 {
 	FILE *fp;
@@ -134,9 +131,6 @@ static int running_in_initial_pidns(void)
 	return (nspid_count == 1) ? 1 : 0;
 }
 
-/*
- * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
- */
 static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks)
 {
 	static int pidns_state = -1;
@@ -222,9 +216,6 @@ static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags)
 #endif
 }
 
-/*
- * libbpf print callback - redirect to stderr with prefix
- */
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
 			   va_list args)
 {
@@ -1863,9 +1854,6 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	return 0;
 }
 
-/*
- * read a single stat counter from the stats map
- */
 static int read_stat(int stats_fd, uint32_t key, uint64_t *out)
 {
 	uint64_t value;

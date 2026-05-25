@@ -2060,9 +2060,6 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	return 0;
 }
 
-/*
- * Check if fd is any listener socket (primary or extra).
- */
 int ipc_is_listener(struct ipc_context *ctx, int fd)
 {
 	if (fd == ctx->listen_fd)

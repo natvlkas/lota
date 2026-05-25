@@ -254,9 +254,6 @@ static uint8_t *rsa_sign(EVP_PKEY *pkey, const EVP_MD *md, const uint8_t *data,
 	return sig;
 }
 
-/*
- * Export AIK public key as DER (PKIX/SPKI format)
- */
 static uint8_t *export_pubkey_der(EVP_PKEY *pkey, size_t *out_len)
 {
 	int len = i2d_PUBKEY(pkey, NULL);

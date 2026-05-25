@@ -26,9 +26,6 @@
 /* upper bound for kernel log buffer allocation */
 #define KLOG_MAX_SIZE (1 << 22) /* 4 MB */
 
-/*
- * check if a space-delimited kernel cmdline parameter is present
- */
 static bool cmdline_has_param(const char *cmdline, const char *param)
 {
 	size_t plen = strlen(param);

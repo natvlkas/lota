@@ -69,43 +69,28 @@ static size_t hash_alg_digest_len(uint16_t hash_alg)
  */
 #define LOTA_MAX_AIK_PUB_DER_SIZE 512
 
-/*
- * Read big-endian uint16 from buffer
- */
 static uint16_t read_be16(const uint8_t *p)
 {
 	return (uint16_t)((uint16_t)p[0] << 8 | (uint16_t)p[1]);
 }
 
-/*
- * Read big-endian uint32 from buffer
- */
 static uint32_t read_be32(const uint8_t *p)
 {
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
 	       (uint32_t)p[2] << 8 | (uint32_t)p[3];
 }
 
-/*
- * Read little-endian uint16 from buffer
- */
 static uint16_t read_le16(const uint8_t *p)
 {
 	return (uint16_t)((uint16_t)p[1] << 8 | (uint16_t)p[0]);
 }
 
-/*
- * Read little-endian uint32 from buffer
- */
 static uint32_t read_le32(const uint8_t *p)
 {
 	return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 |
 	       (uint32_t)p[1] << 8 | (uint32_t)p[0];
 }
 
-/*
- * Read little-endian uint64 from buffer
- */
 static uint64_t read_le64(const uint8_t *p)
 {
 	return (uint64_t)read_le32(p) | ((uint64_t)read_le32(p + 4) << 32);
@@ -271,9 +256,6 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 	return 0;
 }
 
-/*
- * Verify RSA signature over SHA-256(attest_data) using AIK public key
- */
 static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 				const uint8_t *signature, size_t sig_len,
 				uint16_t sig_alg, uint16_t hash_alg,
@@ -358,9 +340,6 @@ out:
 	return ret;
 }
 
-/*
- * Parse token header from wire format
- */
 static int parse_wire_header(const uint8_t *data, size_t len,
 			     struct lota_token_wire *hdr)
 {

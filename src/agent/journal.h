@@ -51,9 +51,6 @@ journal_print(const char *file, int line, const char *func, int priority,
  */
 void journal_set_level(int priority);
 
-/*
- * journal_get_level - Return current minimum priority.
- */
 int journal_get_level(void);
 
 /*

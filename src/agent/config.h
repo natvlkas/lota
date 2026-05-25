@@ -80,9 +80,6 @@ struct lota_config {
 	char log_level[16];
 };
 
-/*
- * config_init - Fill config with compiled-in defaults.
- */
 void config_init(struct lota_config *cfg);
 
 /*

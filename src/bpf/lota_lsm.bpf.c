@@ -1004,9 +1004,6 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
 		bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-		/*
-		 * attempt to extract filename from dentry
-		 */
 		struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
 		const unsigned char *name = NULL;
 		int ret_path = -1;

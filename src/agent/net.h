@@ -73,9 +73,6 @@ struct verifier_result {
  */
 int net_init(void);
 
-/*
- * Cleanup network subsystem.
- */
 void net_cleanup(void);
 
 /*
@@ -116,9 +113,6 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
  */
 int net_parse_pin_sha256(const char *hex, uint8_t *out);
 
-/*
- * Cleanup network context.
- */
 void net_context_cleanup(struct net_context *ctx);
 
 /*
@@ -130,9 +124,6 @@ void net_context_cleanup(struct net_context *ctx);
  */
 int net_connect(struct net_context *ctx);
 
-/*
- * Disconnect from server.
- */
 void net_disconnect(struct net_context *ctx);
 
 /*
@@ -187,9 +178,6 @@ typedef int (*build_report_fn)(const struct verifier_challenge *challenge,
 int net_attest(struct net_context *ctx, build_report_fn build_report,
 	       void *user_data, struct verifier_result *result);
 
-/*
- * Get human-readable result string.
- */
 const char *net_result_str(uint32_t result);
 
 #endif /* LOTA_NET_H */

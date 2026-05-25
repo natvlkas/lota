@@ -164,9 +164,6 @@ static void test_subscribe_unsubscribe_mask(void)
 	PASS();
 }
 
-/*
- * Send a complete IPC response frame.
- */
 static int send_response(int fd, uint32_t result, const void *payload,
 			 uint32_t payload_len)
 {
@@ -188,9 +185,6 @@ static int send_response(int fd, uint32_t result, const void *payload,
 	return 0;
 }
 
-/*
- * Send a notification frame.
- */
 static int send_notify(int fd, uint32_t events, uint32_t flags,
 		       uint64_t attest_time, uint64_t valid_until,
 		       uint32_t attest_count, uint32_t fail_count, uint8_t mode)
@@ -209,9 +203,6 @@ static int send_notify(int fd, uint32_t events, uint32_t flags,
 	return send_response(fd, LOTA_IPC_NOTIFY, &notify, sizeof(notify));
 }
 
-/*
- * Read a complete IPC request and its payload.
- */
 static int recv_request(int fd, struct lota_ipc_request *req, void *payload,
 			size_t max_payload)
 {
@@ -233,9 +224,6 @@ static int recv_request(int fd, struct lota_ipc_request *req, void *payload,
 	return 0;
 }
 
-/*
- * subscribe, receive 2 notifications
- */
 static void server_subscribe_and_notify(int client_fd)
 {
 	struct lota_ipc_request req;
@@ -269,9 +257,6 @@ static void server_subscribe_and_notify(int client_fd)
 	usleep(200000);
 }
 
-/*
- * subscribe, response, interleaved notification, response
- */
 static void server_interleaved_notify(int client_fd)
 {
 	struct lota_ipc_request req;
@@ -307,9 +292,6 @@ static void server_interleaved_notify(int client_fd)
 	usleep(200000);
 }
 
-/*
- * subscribe then unsubscribe
- */
 static void server_unsubscribe(int client_fd)
 {
 	struct lota_ipc_request req;
