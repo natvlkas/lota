@@ -544,18 +544,8 @@ cleanup_bpf:
 	 * the dirty-shutdown -> tampered-rootfs branch is no longer
 	 * authenticated end to end on that host.
 	 */
-	if (g_agent.tpm_ctx.initialized && g_agent.bpf_ctx.loaded) {
-		int poison_ret = poison_runtime_pcr(&g_agent.tpm_ctx);
-		if (poison_ret < 0) {
-			lota_err("Failed to poison runtime PCR before BPF "
-				 "unload: %s",
-				 strerror(-poison_ret));
-			if (ret == 0)
-				ret = poison_ret;
-		} else {
-			lota_notice("Runtime PCR poisoned before BPF unload");
-		}
-	}
+	ret = agent_poison_runtime_pcr_before_bpf_unload(&g_agent.tpm_ctx,
+							 &g_agent.bpf_ctx, ret);
 
 	bpf_loader_cleanup(&g_agent.bpf_ctx);
 cleanup_tpm:

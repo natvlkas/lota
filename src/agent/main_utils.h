@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "ipc.h"
+#include "shutdown.h"
 #include "tpm.h"
 
 const char *mode_to_string(int mode);
@@ -26,6 +27,5 @@ void setup_dbus(struct ipc_context *ctx);
 void setup_container_listener(struct ipc_context *ctx);
 int ipc_init_or_activate(struct ipc_context *ctx);
 int self_measure(struct tpm_context *ctx);
-int poison_runtime_pcr(struct tpm_context *ctx);
 
 #endif /* LOTA_MAIN_UTILS_H */

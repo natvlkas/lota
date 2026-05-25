@@ -10,6 +10,7 @@
 #define LOTA_BPF_LOADER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "../../include/lota.h"

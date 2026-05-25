@@ -102,6 +102,7 @@ AGTEST_SRCS = tests/test_main.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
+              $(AGENT_DIR)/shutdown.c \
               $(AGENT_DIR)/policy.c \
               $(AGENT_DIR)/policy_sign.c \
 
@@ -122,6 +123,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
+              $(AGENT_DIR)/shutdown.c \
               $(AGENT_DIR)/policy.c \
               $(AGENT_DIR)/policy_sign.c \
               $(AGENT_DIR)/config.c \
@@ -322,6 +324,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_steam_runtime \
 	$(TEST_BIN_DIR)/test_wine_hook \
 	$(TEST_BIN_DIR)/test_daemon \
+	$(TEST_BIN_DIR)/test_signal_shutdown \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_config \
@@ -370,6 +373,10 @@ $(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c 
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_signal_shutdown: tests/test_signal_shutdown.c $(AGENT_DIR)/daemon.c $(AGENT_DIR)/shutdown.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -pthread
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_daemon_loop: tests/test_daemon_loop.c $(AGENT_DIR)/daemon_loop_telemetry.c | $(BUILD_DIR)
@@ -449,6 +456,7 @@ test-unit: all $(TEST_BINS)
 	@./build/test_steam_runtime
 	@./build/test_wine_hook
 	@./build/test_daemon
+	@./build/test_signal_shutdown
 	@./build/test_daemon_loop
 	@./build/test_config
 	@./build/test_subscribe
