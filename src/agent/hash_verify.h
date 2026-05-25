@@ -16,48 +16,24 @@
 
 #include "../../include/lota.h"
 
-/* Default cache size (number of entries) */
-#define HASH_CACHE_DEFAULT_SIZE 4096
-
-/* Sentinel: pass as cache_size to hash_verify_init to disable caching */
-#define HASH_CACHE_DISABLED SIZE_MAX
-
 /*
- * Single cache entry: maps a file identity to its content hash.
- *
- * Cache key is (dev, ino, meta_fingerprint):
- *  - dev + ino uniquely identify a file on the filesystem
- *  - meta_fingerprint detects content changes (mtime, size, i_version)
- */
-struct hash_cache_entry {
-	uint64_t dev;				  /* device number (st_dev) */
-	uint64_t ino;				  /* inode number (st_ino) */
-	uint8_t meta_fingerprint[LOTA_HASH_SIZE]; /* BPF metadata fingerprint */
-	uint8_t content_sha256[LOTA_HASH_SIZE];	  /* SHA-256 of file content */
-	uint64_t last_used; /* monotonic timestamp for LRU */
-	int valid;	    /* nonzero if entry is populated */
-};
-
-/*
- * Hash verification context.
+ * Hash verification context. Tracks running counters for the agent's
+ * shutdown statistics log. There is no userspace content-hash cache:
+ * every fingerprint comes from the kernel's fs-verity measurement, so
+ * a cache layer in userspace would either be redundant (the kernel
+ * already serves the digest from its own state) or unsafe (it would
+ * have to bypass the kernel and re-open a TOCTOU window).
  */
 struct hash_verify_ctx {
-	struct hash_cache_entry *cache;
-	size_t cache_capacity;
-	uint64_t hits;
-	uint64_t misses;
+	uint64_t resolved;
 	uint64_t errors;
 };
 
 /*
- * Initialize hash verification context.
- *
- * @ctx: Context to initialize
- * @cache_size: Number of cache entries (0 for default)
- *
- * Returns: 0 on success, negative errno on failure
+ * Initialize hash verification context. Returns 0 on success or
+ * -EINVAL when ctx is NULL.
  */
-int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size);
+int hash_verify_init(struct hash_verify_ctx *ctx);
 
 void hash_verify_cleanup(struct hash_verify_ctx *ctx);
 
@@ -90,14 +66,13 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
 		      uint8_t sha256_out[LOTA_HASH_SIZE]);
 
 /*
- * Get cache statistics.
+ * Get verification statistics.
  *
  * @ctx: Hash verification context
- * @hits: Output - cache hits (NULL to skip)
- * @misses: Output - cache misses (NULL to skip)
- * @errors: Output - hash computation errors (NULL to skip)
+ * @resolved: Output - successful fingerprint resolutions (NULL to skip)
+ * @errors: Output - resolution failures (NULL to skip)
  */
-void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *hits,
-		       uint64_t *misses, uint64_t *errors);
+void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *resolved,
+		       uint64_t *errors);
 
 #endif /* LOTA_HASH_VERIFY_H */

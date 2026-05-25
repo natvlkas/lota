@@ -26,24 +26,12 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Sentinel value: pass as cache_size to disable caching entirely */
-#define HASH_CACHE_DISABLED SIZE_MAX
-
-int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size)
+int hash_verify_init(struct hash_verify_ctx *ctx)
 {
 	if (!ctx)
 		return -EINVAL;
 
 	memset(ctx, 0, sizeof(*ctx));
-
-	/*
-	 * Caching is disabled due to security concerns
-	 * TODO: fs-verity in the future.
-	 */
-	(void)cache_size; /* unused */
-	ctx->cache_capacity = 0;
-	ctx->cache = NULL;
-
 	return 0;
 }
 
@@ -51,9 +39,7 @@ void hash_verify_cleanup(struct hash_verify_ctx *ctx)
 {
 	if (!ctx)
 		return;
-	free(ctx->cache);
-	ctx->cache = NULL;
-	ctx->cache_capacity = 0;
+	memset(ctx, 0, sizeof(*ctx));
 }
 
 /*
@@ -184,21 +170,17 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
 		return ret;
 	}
 
-	/* count successful integrity fingerprint resolutions */
-	ctx->misses++;
-
+	ctx->resolved++;
 	return 0;
 }
 
-void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *hits,
-		       uint64_t *misses, uint64_t *errors)
+void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *resolved,
+		       uint64_t *errors)
 {
 	if (!ctx)
 		return;
-	if (hits)
-		*hits = ctx->hits;
-	if (misses)
-		*misses = ctx->misses;
+	if (resolved)
+		*resolved = ctx->resolved;
 	if (errors)
 		*errors = ctx->errors;
 }

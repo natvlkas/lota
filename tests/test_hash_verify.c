@@ -137,13 +137,13 @@ static void test_event_no_caching(void)
 	struct hash_verify_ctx ctx;
 	struct lota_exec_event event;
 	uint8_t hash1[LOTA_HASH_SIZE], hash2[LOTA_HASH_SIZE];
-	uint64_t hits, misses, errors;
+	uint64_t resolved, errors;
 	char *path;
 	int ret;
 
 	TEST("hash_verify_event fail-closed without fs-verity");
 
-	ret = hash_verify_init(&ctx, 64);
+	ret = hash_verify_init(&ctx);
 	ASSERT(ret == 0, "init failed");
 
 	path = create_tmp_file("cache test content", 18);
@@ -160,9 +160,8 @@ static void test_event_no_caching(void)
 	ASSERT(ret < 0,
 	       "expected first hash_verify_event failure without verity");
 
-	hash_verify_stats(&ctx, &hits, &misses, &errors);
-	ASSERT(misses == 0, "expected 0 misses");
-	ASSERT(hits == 0, "expected 0 hits");
+	hash_verify_stats(&ctx, &resolved, &errors);
+	ASSERT(resolved == 0, "expected 0 resolutions");
 	ASSERT(errors == 1, "expected 1 error");
 
 	/* second call */
@@ -170,9 +169,8 @@ static void test_event_no_caching(void)
 	ASSERT(ret < 0,
 	       "expected second hash_verify_event failure without verity");
 
-	hash_verify_stats(&ctx, &hits, &misses, &errors);
-	ASSERT(hits == 0, "expected 0 hits (caching disabled)");
-	ASSERT(misses == 0, "expected 0 misses");
+	hash_verify_stats(&ctx, &resolved, &errors);
+	ASSERT(resolved == 0, "expected 0 resolutions");
 	ASSERT(errors == 2, "expected 2 errors");
 
 	hash_verify_cleanup(&ctx);
@@ -185,16 +183,16 @@ static void test_event_no_caching(void)
 static void test_stats(void)
 {
 	struct hash_verify_ctx ctx;
-	uint64_t h, m, e;
+	uint64_t r, e;
 	int ret;
 
 	TEST("hash_verify_stats correctness");
 
-	ret = hash_verify_init(&ctx, 8);
+	ret = hash_verify_init(&ctx);
 	ASSERT(ret == 0, "init failed");
 
-	hash_verify_stats(&ctx, &h, &m, &e);
-	ASSERT(h == 0 && m == 0 && e == 0, "stats not zero after init");
+	hash_verify_stats(&ctx, &r, &e);
+	ASSERT(r == 0 && e == 0, "stats not zero after init");
 
 	/* trigger an error (nonexistent file) */
 	{
@@ -208,7 +206,7 @@ static void test_stats(void)
 		hash_verify_event(&ctx, &event, hash);
 	}
 
-	hash_verify_stats(&ctx, &h, &m, &e);
+	hash_verify_stats(&ctx, &r, &e);
 	ASSERT(e == 1, "expected 1 error after bad path");
 
 	hash_verify_cleanup(&ctx);
@@ -262,7 +260,7 @@ static void test_null_args(void)
 	ret = hash_verify_file("/tmp/whatever", NULL);
 	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL output");
 
-	ret = hash_verify_init(NULL, 0);
+	ret = hash_verify_init(NULL);
 	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL ctx");
 
 	{
@@ -272,7 +270,7 @@ static void test_null_args(void)
 		ASSERT(ret == -EINVAL, "expected -EINVAL for NULL ctx");
 	}
 
-	ret = hash_verify_init(&ctx, 8);
+	ret = hash_verify_init(&ctx);
 	ASSERT(ret == 0, "init failed");
 	ret = hash_verify_event(&ctx, NULL, hash);
 	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL event");

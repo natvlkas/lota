@@ -33,7 +33,6 @@ static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
 static char g_allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
 static int g_allow_verity_count;
-static int g_no_hash_cache;
 
 uint32_t **cli_runtime_protect_pids(void)
 {
@@ -57,11 +56,6 @@ char (*cli_runtime_allow_verity(void)) [PATH_MAX] { return g_allow_verity; }
 int *cli_runtime_allow_verity_count(void)
 {
 	return &g_allow_verity_count;
-}
-
-int cli_runtime_no_hash_cache(void)
-{
-	return g_no_hash_cache;
 }
 
 static int validate_path_arg(const char *key, const char *p)
@@ -248,7 +242,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"verify-policy", required_argument, 0, 'V'},
 	    {"signing-key", required_argument, 0, 'k'},
 	    {"policy-pubkey", required_argument, 0, 'Q'},
-	    {"no-hash-cache", no_argument, 0, 'H'},
 	    {"help", no_argument, 0, 'h'},
 	    {0, 0, 0, 0}};
 
@@ -275,7 +268,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 
 	while ((opt = getopt_long(
 		    argc, argv,
-		    "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:Hh",
+		    "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:h",
 		    long_options, NULL)) != -1) {
 		switch (opt) {
 		case 't':
@@ -483,9 +476,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 'Q':
 			opts->policy_pubkey_path = optarg;
-			break;
-		case 'H':
-			g_no_hash_cache = 1;
 			break;
 		case 'f':
 			/* --config: handled in pre-scan above */

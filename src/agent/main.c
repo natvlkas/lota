@@ -164,19 +164,16 @@ static int run_daemon(const struct run_daemon_params *params)
 		return -errno;
 	}
 
-	ret = hash_verify_init(&g_agent.hash_ctx, cli_runtime_no_hash_cache()
-						      ? HASH_CACHE_DISABLED
-						      : 0);
+	ret = hash_verify_init(&g_agent.hash_ctx);
 	if (ret < 0) {
-		lota_err("Failed to initialize hash cache: %s", strerror(-ret));
+		lota_err("Failed to initialize hash verification: %s",
+			 strerror(-ret));
 		close(sfd);
 		close(epoll_fd);
 		return ret;
 	}
-	if (cli_runtime_no_hash_cache())
-		lota_info("Hash cache disabled (--no-hash-cache)");
-	else
-		lota_info("Hash verification cache ready");
+	lota_info(
+	    "Hash verification ready (fs-verity backed, no userspace cache)");
 
 	lota_info("Starting IPC server");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
@@ -380,11 +377,10 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	{
-		uint64_t h_hits, h_misses, h_errors;
-		hash_verify_stats(&g_agent.hash_ctx, &h_hits, &h_misses,
-				  &h_errors);
-		lota_info("Hash cache: hits=%lu misses=%lu errors=%lu", h_hits,
-			  h_misses, h_errors);
+		uint64_t h_resolved, h_errors;
+		hash_verify_stats(&g_agent.hash_ctx, &h_resolved, &h_errors);
+		lota_info("Hash verification: resolved=%lu errors=%lu",
+			  h_resolved, h_errors);
 	}
 
 cleanup_bpf:

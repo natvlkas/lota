@@ -111,6 +111,5 @@ char (*cli_runtime_trust_libs(void))[PATH_MAX];
 int *cli_runtime_trust_lib_count(void);
 char (*cli_runtime_allow_verity(void))[PATH_MAX];
 int *cli_runtime_allow_verity_count(void);
-int cli_runtime_no_hash_cache(void);
 
 #endif /* LOTA_AGENT_CLI_H */
