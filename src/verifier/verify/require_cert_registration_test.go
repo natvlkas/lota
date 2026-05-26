@@ -186,6 +186,21 @@ func TestRequireCert_NewClientRejectsMismatchedHardwareIDEK(t *testing.T) {
 		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
+	// Generate RSA keys and cert DERs before issuing the nonce: on slow CI
+	// runners two 2048-bit key generations can outlast NonceLifetime and
+	// the nonce expires before VerifyReport runs, masking the assertion
+	// path under test with a spurious "unknown nonce" reject.
+	aikKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey(AIK cert): %v", err)
+	}
+	ekKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey(EK cert): %v", err)
+	}
+	aikCertDER := makeTestDERCert(t, aikKey, "test-aik")
+	ekCertDER := makeTestDERCert(t, ekKey, "test-ek")
+
 	challengeID := "first-connect-mismatch"
 	challenge, err := verifier.GenerateChallenge(challengeID)
 	if err != nil {
@@ -198,18 +213,6 @@ func TestRequireCert_NewClientRejectsMismatchedHardwareIDEK(t *testing.T) {
 	}
 
 	reportData := createValidReport(t, challengeID, challenge.Nonce, pcr14)
-
-	aikKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey(AIK cert): %v", err)
-	}
-	ekKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey(EK cert): %v", err)
-	}
-	aikCertDER := makeTestDERCert(t, aikKey, "test-aik")
-	ekCertDER := makeTestDERCert(t, ekKey, "test-ek")
-
 	reportData = injectCerts(t, reportData, aikCertDER, ekCertDER)
 
 	res, err := verifier.VerifyReport(challengeID, reportData)
