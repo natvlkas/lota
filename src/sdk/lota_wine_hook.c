@@ -775,21 +775,6 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	LOG_INF("hook active (pid=%d)", (int)getpid());
 }
 
-/*
- * Safely unlink a path after verifying it is a regular file
- * owned by the current user (not a symlink).
- */
-static void safe_unlink(const char *path)
-{
-	struct stat st;
-
-	if (lstat(path, &st) < 0)
-		return;
-	if (S_ISLNK(st.st_mode) || st.st_uid != getuid())
-		return;
-	unlink(path);
-}
-
 __attribute__((destructor)) static void lota_wine_hook_fini(void)
 {
 	if (g_hook.init_pid != getpid())
@@ -812,12 +797,23 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 		g_hook.client = NULL;
 	}
 
-	if (g_hook.status_path[0])
-		safe_unlink(g_hook.status_path);
-	if (g_hook.token_path[0])
-		safe_unlink(g_hook.token_path);
-	if (g_hook.snapshot_path[0])
-		safe_unlink(g_hook.snapshot_path);
+	/*
+	 * Do NOT unlink the status / token / snapshot files here. The
+	 * Steam launch chain inherits LD_PRELOAD into every fork+exec;
+	 * each one runs its own constructor and destructor, all sharing
+	 * the same $XDG_RUNTIME_DIR/lota/ token sink. A helper that
+	 * exits before the game binary would otherwise unlink the
+	 * artefacts the still-running cs2 hook just wrote, leaving the
+	 * consumer (verify-attested.sh, server-side bridge) with a
+	 * vanished token while the game is still attested.
+	 *
+	 * The OFFLINE contract is owned by publish_offline_status() in
+	 * refresh_once(): when the agent becomes unreachable the hook
+	 * actively rewrites lota-status with LOTA_ATTESTED=0 and
+	 * unlinks the token / snapshot files. Stale artefacts from a
+	 * prior session are overwritten by the next refresh_once() on
+	 * the next launch.
+	 */
 
 	LOG_INF("hook detached");
 }
