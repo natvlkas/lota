@@ -256,10 +256,14 @@ EOF
 }
 
 if $install_dropin; then
-    install_systemd_dropin
-    # explicitly fall through to the verify pass below so the
-    # operator sees the new listener show up under
-    # /run/user/<uid>/lota/lota.sock.
+    install_systemd_dropin || exit 1
+    echo ""
+    echo "Drop-in active. From the operator account run:"
+    echo "  lota-steam-setup --verify"
+    echo "to confirm the new /run/user/${SUDO_UID}/lota/lota.sock listener,"
+    echo "then paste the printed Steam launch options into the game's"
+    echo "Properties -> General -> Launch options field."
+    exit 0
 fi
 
 echo "=== LOTA Steam Runtime Integration Setup ==="

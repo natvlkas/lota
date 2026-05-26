@@ -69,16 +69,19 @@ not tracked.
 
    The fastest path is the helper baked into
    `lota-steam-setup`, which generates the drop-in for the
-   calling user:
+   operator that wrapped sudo. Run it from your own login
+   shell, not from a root shell:
 
    ```sh
-   sudo -E -u "$USER" lota-steam-setup --install-systemd-dropin
+   sudo lota-steam-setup --install-systemd-dropin
    ```
 
-   The drop-in lands at
+   The helper reads `$SUDO_UID` to recover the operator UID,
+   refuses to run when `$SUDO_UID` is missing (direct root
+   login or `su -`), writes the drop-in at
    `/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf`
-   with `Environment=XDG_RUNTIME_DIR=/run/user/<uid>` and the
-   helper restarts `lota-agent.socket` so the listener is live.
+   with `Environment=XDG_RUNTIME_DIR=/run/user/<uid>`, and
+   restarts `lota-agent.socket` so the listener is live.
    The same file can be installed manually from the in-tree
    template at
    [`systemd/lota-agent.service.d/10-xdg-runtime.conf.example`](../../systemd/lota-agent.service.d/10-xdg-runtime.conf.example)
