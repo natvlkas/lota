@@ -116,8 +116,19 @@ int run_signed_ipc_test_server(void)
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
 
+	/* Mirror the --test-ipc fixture so GET_TOKEN passes the
+	 * policy_digest_set gate; startup_policy_apply() is skipped on
+	 * the test server paths and is the only real producer of the
+	 * digest. The signed-token path then runs through the real TPM
+	 * quote. */
+	agent_globals_lock(&g_agent);
+	memset(g_agent.policy_digest, 0xA5, sizeof(g_agent.policy_digest));
+	g_agent.policy_digest_set = 1;
+	agent_globals_unlock(&g_agent);
+
 	printf("IPC server running (simulated ATTESTED state).\n");
 	printf("Tokens will be SIGNED by TPM AIK!\n");
+	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 
 	sdnotify_ready();
