@@ -659,6 +659,219 @@ static void test_write_status_zero_flags(void)
 	PASS();
 }
 
+/*
+ * Process-activation policy. policy_should_activate() is pure and
+ * takes the exe path plus the two env-string overrides as
+ * arguments so each scenario can drive the decision with synthetic
+ * paths instead of round-tripping through /proc/self/exe.
+ *
+ * Tests pass NULL/NULL for the env overrides when they mean the
+ * default FHS policy; the env-read wrapper in should_activate()
+ * is trivial and is covered by the live agent runs.
+ */
+
+static void test_policy_default_skips_usr_bin(void)
+{
+	TEST("policy: default skips /usr/bin/* (FHS system path)");
+	if (!policy_should_activate("/usr/bin/bash", NULL, NULL) &&
+	    !policy_should_activate("/usr/bin/basename", NULL, NULL) &&
+	    !policy_should_activate("/usr/bin/sudo", NULL, NULL) &&
+	    !policy_should_activate("/usr/sbin/ldconfig", NULL, NULL) &&
+	    !policy_should_activate("/usr/libexec/foo", NULL, NULL))
+		PASS();
+	else
+		FAIL("FHS /usr path must be skipped by default");
+}
+
+static void test_policy_default_skips_legacy_bin(void)
+{
+	TEST("policy: default skips /bin /sbin /lib /lib64 (non-usrmerge)");
+	if (!policy_should_activate("/bin/sh", NULL, NULL) &&
+	    !policy_should_activate("/sbin/init", NULL, NULL) &&
+	    !policy_should_activate("/lib/x86_64-linux-gnu/ld-linux.so.2", NULL,
+				    NULL) &&
+	    !policy_should_activate("/lib64/ld-linux-x86-64.so.2", NULL, NULL))
+		PASS();
+	else
+		FAIL(
+		    "legacy /bin /sbin /lib /lib64 must be skipped by default");
+}
+
+static void test_policy_default_skips_pressure_vessel_host(void)
+{
+	TEST("policy: default skips /run/host/usr/* (pressure-vessel)");
+	if (!policy_should_activate("/run/host/usr/bin/basename", NULL, NULL) &&
+	    !policy_should_activate("/run/host/usr/sbin/ldconfig", NULL,
+				    NULL) &&
+	    !policy_should_activate("/run/host/lib64/ld-linux.so.2", NULL,
+				    NULL))
+		PASS();
+	else
+		FAIL("pressure-vessel /run/host/usr path must be skipped");
+}
+
+static void test_policy_default_activates_steam_path(void)
+{
+	TEST("policy: default activates Steam install paths");
+	if (policy_should_activate(
+		"~/.local/share/Steam/steamapps/common/"
+		"Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2",
+		NULL, NULL) &&
+	    policy_should_activate("~/.local/share/Steam/ubuntu12_32/reaper",
+				   NULL, NULL))
+		PASS();
+	else
+		FAIL("Steam-tree binaries must activate by default");
+}
+
+static void test_policy_default_activates_opt_and_home(void)
+{
+	TEST("policy: default activates /opt, /home, /srv (non-FHS-system)");
+	if (policy_should_activate("/opt/games/cs2", NULL, NULL) &&
+	    policy_should_activate("/home/user/games/foo", NULL, NULL) &&
+	    policy_should_activate("/srv/games/bar", NULL, NULL))
+		PASS();
+	else
+		FAIL("/opt /home /srv must activate by default");
+}
+
+static void test_policy_default_activates_snap_and_flatpak(void)
+{
+	TEST("policy: default activates /snap and Flatpak paths");
+	if (policy_should_activate("/snap/cs2/current/cs2", NULL, NULL) &&
+	    policy_should_activate(
+		"/var/lib/flatpak/app/com.valvesoftware.Steam/current/cs2",
+		NULL, NULL))
+		PASS();
+	else
+		FAIL("Snap and Flatpak operator-installed paths must activate");
+}
+
+static void test_policy_empty_exe_defaults_to_activate(void)
+{
+	TEST(
+	    "policy: empty exe falls back to activate (read_self_exe failure)");
+	if (policy_should_activate("", NULL, NULL) &&
+	    policy_should_activate(NULL, NULL, NULL))
+		PASS();
+	else
+		FAIL("empty/NULL exe must fall back to activate");
+}
+
+static void test_policy_handles_deleted_suffix(void)
+{
+	TEST("policy: handles '(deleted)' suffix on /proc/self/exe");
+	/* unlinked binary in /usr/ -> still matches /usr/ prefix -> skip */
+	if (!policy_should_activate("/usr/bin/cat (deleted)", NULL, NULL) &&
+	    /* unlinked binary outside /usr/ -> still activates */
+	    policy_should_activate("~/Steam/cs2 (deleted)", NULL, NULL))
+		PASS();
+	else
+		FAIL("(deleted) suffix must not change prefix match outcome");
+}
+
+static void test_policy_activate_pin_is_positive(void)
+{
+	TEST("policy: LOTA_HOOK_ACTIVATE_PATH is a positive pin");
+	const char *allow = "~/.local/share/Steam,/opt/games";
+	if (policy_should_activate(
+		"~/.local/share/Steam/steamapps/common/cs2/cs2", allow, NULL) &&
+	    policy_should_activate("/opt/games/foo", allow, NULL) &&
+	    !policy_should_activate("/usr/bin/bash", allow, NULL) &&
+	    !policy_should_activate("/tmp/random/binary", allow, NULL) &&
+	    !policy_should_activate("~/other/path", allow, NULL))
+		PASS();
+	else
+		FAIL("ACTIVATE_PATH must be exclusive whitelist");
+}
+
+static void test_policy_activate_pin_overrides_fhs_skip(void)
+{
+	TEST("policy: ACTIVATE_PATH overrides FHS skip default");
+	/*
+	 * A deliberately weird configuration: pin to /usr/local/games.
+	 * The default FHS rule would skip any path under /usr/local/games;
+	 * the explicit pin must win because the operator has spoken.
+	 */
+	const char *allow = "/usr/local/games/";
+	if (policy_should_activate("/usr/local/games/foo", allow, NULL) &&
+	    !policy_should_activate("/usr/bin/bash", allow, NULL))
+		PASS();
+	else
+		FAIL("ACTIVATE_PATH must override the FHS default");
+}
+
+static void test_policy_skip_extends_default(void)
+{
+	TEST("policy: LOTA_HOOK_SKIP_PATH extends the FHS skip list");
+	const char *skip = "/nix/store/,/run/current-system/";
+	if (!policy_should_activate("/nix/store/abcdef/bin/bash", NULL, skip) &&
+	    !policy_should_activate("/run/current-system/sw/bin/foo", NULL,
+				    skip) &&
+	    /* FHS default still applies */
+	    !policy_should_activate("/usr/bin/cat", NULL, skip) &&
+	    /* paths outside both skip lists activate */
+	    policy_should_activate("~/Steam/cs2", NULL, skip))
+		PASS();
+	else
+		FAIL("SKIP_PATH must extend FHS without replacing it");
+}
+
+static void test_policy_activate_pin_ignores_skip(void)
+{
+	TEST("policy: ACTIVATE_PATH set short-circuits SKIP_PATH");
+	const char *allow = "~/Steam/";
+	const char *skip = "~/Steam/";
+	/* ACTIVATE_PATH is evaluated first; SKIP_PATH never consulted */
+	if (policy_should_activate("~/Steam/cs2", allow, skip) &&
+	    !policy_should_activate("/usr/bin/cat", allow, skip))
+		PASS();
+	else
+		FAIL("ACTIVATE_PATH must take precedence over SKIP_PATH");
+}
+
+static void test_policy_empty_env_strings_ignored(void)
+{
+	TEST("policy: empty env strings behave as unset");
+	if (!policy_should_activate("/usr/bin/cat", "", "") &&
+	    policy_should_activate("~/Steam/cs2", "", "") &&
+	    /* whitespace-only entries inside lists are ignored */
+	    !policy_should_activate("/usr/bin/cat", NULL, "   ,, ") &&
+	    policy_should_activate("~/Steam/cs2", "", NULL))
+		PASS();
+	else
+		FAIL("empty env strings must not flip the decision");
+}
+
+static void test_policy_prefix_must_match_at_start(void)
+{
+	TEST("policy: prefix match anchors at the start of the path");
+	/* "/usrlocal/..." must not match "/usr/" (no trailing slash boundary)
+	 */
+	if (policy_should_activate("/usrlocal/bin/foo", NULL, NULL) &&
+	    /* "/home/usr/x" must not be skipped just because "usr" appears */
+	    policy_should_activate("/home/usr/x", NULL, NULL) &&
+	    /* "/usr/" exact prefix still skips */
+	    !policy_should_activate("/usr/bin/cat", NULL, NULL))
+		PASS();
+	else
+		FAIL("prefix match must anchor at index 0");
+}
+
+static void test_policy_whitespace_tolerant(void)
+{
+	TEST("policy: comma list tolerates whitespace around entries");
+	const char *allow = " /opt/games ,  /home/games/ ,/srv/games/";
+	if (policy_should_activate("/opt/games/foo", allow, NULL) &&
+	    policy_should_activate("/home/games/bar", allow, NULL) &&
+	    policy_should_activate("/srv/games/baz", allow, NULL) &&
+	    !policy_should_activate("/usr/bin/cat", allow, NULL))
+		PASS();
+	else
+		FAIL("path_has_prefix_in must strip leading/trailing "
+		     "whitespace");
+}
+
 static void test_hook_active_when_not_started(void)
 {
 	TEST("lota_hook_active() returns 0 when not initialized");
@@ -770,6 +983,23 @@ int main(void)
 	test_write_status_attested();
 	test_write_status_not_attested();
 	test_write_status_zero_flags();
+
+	/* process activation policy */
+	test_policy_default_skips_usr_bin();
+	test_policy_default_skips_legacy_bin();
+	test_policy_default_skips_pressure_vessel_host();
+	test_policy_default_activates_steam_path();
+	test_policy_default_activates_opt_and_home();
+	test_policy_default_activates_snap_and_flatpak();
+	test_policy_empty_exe_defaults_to_activate();
+	test_policy_handles_deleted_suffix();
+	test_policy_activate_pin_is_positive();
+	test_policy_activate_pin_overrides_fhs_skip();
+	test_policy_skip_extends_default();
+	test_policy_activate_pin_ignores_skip();
+	test_policy_empty_env_strings_ignored();
+	test_policy_prefix_must_match_at_start();
+	test_policy_whitespace_tolerant();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();

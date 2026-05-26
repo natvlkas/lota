@@ -81,11 +81,14 @@ static struct {
 #define LOG_WRN(fmt, ...) HOOK_LOG(HOOK_LOG_WARN, fmt, ##__VA_ARGS__)
 #define LOG_ERR(fmt, ...) HOOK_LOG(HOOK_LOG_ERROR, fmt, ##__VA_ARGS__)
 
+#ifndef LOTA_HOOK_TESTING
 /*
  * Resolve /proc/self/exe into a caller-owned buffer. Returns 0 on
  * success, -errno on failure. The buffer is left empty on failure so
  * callers can treat an empty path as "unknown" and fall back to the
- * permissive default.
+ * permissive default. Gated on !LOTA_HOOK_TESTING because the
+ * /proc-free unit tests drive the policy decision directly through
+ * policy_should_activate() with synthetic paths.
  */
 static int read_self_exe(char *out, size_t out_sz)
 {
@@ -100,6 +103,7 @@ static int read_self_exe(char *out, size_t out_sz)
 	out[n] = '\0';
 	return 0;
 }
+#endif
 
 /*
  * Check whether path begins with any comma-separated prefix in list.
@@ -134,6 +138,66 @@ static bool path_has_prefix_in(const char *path, const char *list)
 }
 
 /*
+ * FHS-mandated system-binary path prefixes.
+ *
+ * The Filesystem Hierarchy Standard fixes system binaries under
+ * /usr/, /bin, /sbin, /lib, /lib64. On usrmerge distros (Fedora)
+ * /bin, /sbin, /lib, /lib64 are symlinks back into /usr,
+ * so /proc/self/exe always resolves to the /usr form after
+ * readlink; the extra entries cover non-usrmerge layouts where the
+ * legacy paths survive verbatim. The /run/host/ entries cover the
+ * Steam pressure-vessel case where the container exposes the host
+ * /usr tree as /run/host/usr/ so a process exec'd through that path
+ * still resolves to a system binary.
+ *
+ * Kept as a compile-time string so the constants live next to the
+ * policy that consumes them; distro-specific paths that fall
+ * outside FHS are an operator concern and reach the policy through
+ * LOTA_HOOK_SKIP_PATH.
+ */
+#define LOTA_HOOK_FHS_SYSTEM_PREFIXES                                          \
+	"/usr/,/bin/,/sbin/,/lib/,/lib64/,"                                    \
+	"/run/host/usr/,/run/host/bin/,/run/host/sbin/,"                       \
+	"/run/host/lib/,/run/host/lib64/"
+
+/*
+ * Pure policy decision: should the hook activate for the process
+ * whose /proc/self/exe resolves to @exe, with @allow as the
+ * positive-pin prefix list and @skip as the additional skip prefix
+ * list (both comma-separated, both nullable / may be empty)?
+ *
+ * Decision order matches should_activate():
+ *
+ *   1. Empty @exe (read_self_exe failed): default to activate.
+ *      This preserves the original constructor contract on systems
+ *      where /proc is not mounted (build-time test, chroot smoke).
+ *   2. Non-empty @allow: positive pin. Activate iff @exe starts
+ *      with one of the comma-separated prefixes; otherwise skip.
+ *      The default FHS list is ignored when @allow is set so a
+ *      pin to /opt/games/ does not get widened by accident.
+ *   3. Non-empty @skip and @exe matches: skip. Used by
+ *      operators on non-FHS distros to extend the built-in list
+ *      without rebuilding the hook.
+ *   4. Default: skip iff @exe starts with one of
+ *      LOTA_HOOK_FHS_SYSTEM_PREFIXES; otherwise activate.
+ */
+static bool policy_should_activate(const char *exe, const char *allow,
+				   const char *skip)
+{
+	if (!exe || !exe[0])
+		return true;
+
+	if (allow && *allow)
+		return path_has_prefix_in(exe, allow);
+
+	if (skip && path_has_prefix_in(exe, skip))
+		return false;
+
+	return !path_has_prefix_in(exe, LOTA_HOOK_FHS_SYSTEM_PREFIXES);
+}
+
+#ifndef LOTA_HOOK_TESTING
+/*
  * Decide whether the hook should activate in the current process.
  *
  * LD_PRELOAD is inherited by every fork+exec inside the launcher
@@ -142,12 +206,9 @@ static bool path_has_prefix_in(const char *path, const char *list)
  * dirname, ldconfig, sudo, ...) stalls the launcher script and
  * thrashes the per-process token sink for no value.
  *
- * The hook treats /proc/self/exe as the source of truth. System
- * utilities live under FHS-mandated paths (/usr/, /bin, /sbin); game
- * binaries do not. The default policy is therefore "skip if the
- * executable resolves to a system path, activate everywhere else".
- *
- * Two operator-visible overrides apply on top of the default:
+ * The hook treats /proc/self/exe as the source of truth and
+ * delegates the policy decision to policy_should_activate(). Two
+ * operator-visible overrides apply on top of the FHS default:
  *
  *   LOTA_HOOK_ACTIVATE_PATH=~/.local/share/Steam,/opt/games
  *     If set and non-empty, the hook activates ONLY when
@@ -161,27 +222,22 @@ static bool path_has_prefix_in(const char *path, const char *list)
  *     recompiling the hook.
  *
  * Returns true when the hook should run its constructor body,
- * false when the constructor should early-return cleanly.
+ * false when the constructor should early-return cleanly. Gated on
+ * !LOTA_HOOK_TESTING because the unit tests drive
+ * policy_should_activate() directly with synthetic paths and would
+ * trip -Werror=unused-function otherwise.
  */
 static bool should_activate(void)
 {
-	static const char *const fhs_system_prefixes =
-	    "/usr/,/bin/,/sbin/,/lib/,/lib64/";
-	const char *allow_env = getenv("LOTA_HOOK_ACTIVATE_PATH");
-	const char *skip_env = getenv("LOTA_HOOK_SKIP_PATH");
 	char exe[PATH_MAX];
 
 	if (read_self_exe(exe, sizeof(exe)) != 0 || !exe[0])
 		return true;
 
-	if (allow_env && *allow_env)
-		return path_has_prefix_in(exe, allow_env);
-
-	if (skip_env && path_has_prefix_in(exe, skip_env))
-		return false;
-
-	return !path_has_prefix_in(exe, fhs_system_prefixes);
+	return policy_should_activate(exe, getenv("LOTA_HOOK_ACTIVATE_PATH"),
+				      getenv("LOTA_HOOK_SKIP_PATH"));
 }
+#endif
 
 /*
  * Parse log level string. Returns HOOK_LOG_WARN for NULL or
