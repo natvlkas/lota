@@ -28,6 +28,7 @@ TPM_DIR=""
 RUNTIME_DIR=""
 AIK_DIR=""
 AIK_PEM=""
+TAMPER_MARKER=""
 TCTI=""
 AGENT_STARTED=0
 
@@ -302,6 +303,7 @@ init_tmp() {
 	RUNTIME_DIR="$TMP_DIR/runtime"
 	AIK_DIR="$TMP_DIR/aik"
 	AIK_PEM="$AIK_DIR/aik.pem"
+	TAMPER_MARKER="$TMP_DIR/tamper.marker"
 	TCTI="swtpm:host=127.0.0.1,port=$TPM_PORT"
 
 	mkdir -p "$LOG_DIR" "$TPM_DIR" "$RUNTIME_DIR" "$AIK_DIR"
@@ -404,6 +406,7 @@ start_heartbeat() {
 
 	log "Step 6/7: launch demo_anticheat heartbeat producer"
 	once_log="$LOG_DIR/demo_anticheat_once.log"
+	note "tamper marker (for examples/demo/demo_tamper.sh): $TAMPER_MARKER"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		run_or_print "$EXAMPLES_BIN/demo_anticheat" \
@@ -414,7 +417,8 @@ start_heartbeat() {
 		start_bg demo_anticheat "$EXAMPLES_BIN/demo_anticheat" \
 			--server "$SERVER_URL/heartbeat" \
 			--game-id "$GAME_ID" \
-			--interval "$INTERVAL_SEC"
+			--interval "$INTERVAL_SEC" \
+			--tamper-marker "$TAMPER_MARKER"
 		return
 	fi
 
@@ -430,7 +434,8 @@ start_heartbeat() {
 	start_bg demo_anticheat "$EXAMPLES_BIN/demo_anticheat" \
 		--server "$SERVER_URL/heartbeat" \
 		--game-id "$GAME_ID" \
-		--interval "$INTERVAL_SEC"
+		--interval "$INTERVAL_SEC" \
+		--tamper-marker "$TAMPER_MARKER"
 }
 
 launch_game() {
@@ -484,6 +489,7 @@ main() {
 		RUNTIME_DIR="$TMP_DIR/runtime"
 		AIK_DIR="$TMP_DIR/aik"
 		AIK_PEM="$AIK_DIR/aik.pem"
+		TAMPER_MARKER="$TMP_DIR/tamper.marker"
 		TCTI="swtpm:host=127.0.0.1,port=$TPM_PORT"
 	fi
 

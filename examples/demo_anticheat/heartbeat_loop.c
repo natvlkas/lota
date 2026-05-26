@@ -45,6 +45,7 @@ struct demo_options {
 	const char *server_url;
 	const char *game_id;
 	const char *socket_path;
+	const char *tamper_marker;
 	enum lota_ac_provider provider;
 	unsigned int interval_sec;
 	bool once;
@@ -69,11 +70,19 @@ static void print_usage(const char *argv0)
 	    stderr,
 	    "Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 	    "          [--provider eac|battleye] [--interval SEC] [--once]\n"
+	    "          [--tamper-marker PATH]\n"
 	    "\n"
 	    "Opens an lota_ac_session against the local LOTA agent and\n"
 	    "POSTs heartbeats to the demo server. Exit code in --once mode\n"
 	    "matches the server verdict: 0=TRUSTED, 1=UNTRUSTED, 2=REJECT,\n"
-	    "3=transport error, 64=usage error.\n",
+	    "3=transport error, 64=usage error.\n"
+	    "\n"
+	    "When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
+	    "exported) and the named path exists at heartbeat time, the\n"
+	    "producer flips one byte inside the signed token before POSTing\n"
+	    "so the server's signature check fails and the verdict flips to\n"
+	    "UNTRUSTED. The wire format itself stays well-formed, so this\n"
+	    "exercises the integrity path rather than the parser.\n",
 	    argv0);
 }
 
@@ -97,6 +106,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->server_url = DEMO_DEFAULT_URL;
 	opt->game_id = DEMO_DEFAULT_GAME_ID;
 	opt->socket_path = NULL;
+	opt->tamper_marker = NULL;
 	opt->provider = LOTA_AC_PROVIDER_EAC;
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
@@ -108,6 +118,10 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 			opt->interval_sec = (unsigned int)v;
 	}
 
+	const char *env_marker = getenv("LOTA_DEMO_TAMPER_MARKER");
+	if (env_marker && *env_marker)
+		opt->tamper_marker = env_marker;
+
 	static const struct option long_opts[] = {
 	    {"server", required_argument, NULL, 's'},
 	    {"game-id", required_argument, NULL, 'g'},
@@ -115,13 +129,14 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	    {"provider", required_argument, NULL, 'p'},
 	    {"interval", required_argument, NULL, 'i'},
 	    {"once", no_argument, NULL, '1'},
+	    {"tamper-marker", required_argument, NULL, 'T'},
 	    {"help", no_argument, NULL, 'h'},
 	    {0, 0, 0, 0},
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1h", long_opts, NULL)) !=
-	       -1) {
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:h", long_opts,
+				NULL)) != -1) {
 		switch (c) {
 		case 's':
 			opt->server_url = optarg;
@@ -149,6 +164,14 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		}
 		case '1':
 			opt->once = true;
+			break;
+		case 'T':
+			if (!optarg || !*optarg) {
+				fprintf(stderr,
+					"--tamper-marker requires PATH\n");
+				return -EINVAL;
+			}
+			opt->tamper_marker = optarg;
 			break;
 		case 'h':
 			print_usage(argv[0]);
@@ -263,6 +286,20 @@ static int post_heartbeat(CURL *curl, const char *url, const uint8_t *body,
 	return 0;
 }
 
+/*
+ * Returns true when the operator has armed the tamper marker. The check
+ * is intentionally a plain access(F_OK) on every tick rather than an
+ * inotify watch: the marker is created and removed by demo_tamper.sh
+ * out-of-band and the heartbeat cadence (default 5s) makes polling
+ * cheap and race-free against the script's own EXIT trap.
+ */
+static bool tamper_marker_armed(const char *path)
+{
+	if (!path || !*path)
+		return false;
+	return access(path, F_OK) == 0;
+}
+
 static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 			      const struct demo_options *opt, uint32_t *out_seq,
 			      enum demo_exit *out_verdict)
@@ -279,6 +316,24 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 	/* sequence lives at offset 24 in the LACH header (LE u32). */
 	*out_seq = (uint32_t)buf[24] | ((uint32_t)buf[25] << 8) |
 		   ((uint32_t)buf[26] << 16) | ((uint32_t)buf[27] << 24);
+
+	/*
+	 * Tamper hook for the live demo. Flip the first byte of the
+	 * signed token blob so the server's signature verification
+	 * fails while the LACH wire format itself remains structurally
+	 * valid. The verdict path is the UNTRUSTED branch in
+	 * heartbeat.go rather than REJECT, which is the path a
+	 * production verifier would also take against a genuinely
+	 * mangled signature.
+	 */
+	if (written > LOTA_AC_HEADER_SIZE &&
+	    tamper_marker_armed(opt->tamper_marker)) {
+		buf[LOTA_AC_HEADER_SIZE] ^= 0xFF;
+		fprintf(stderr,
+			"demo_anticheat: tamper marker %s present, flipped "
+			"token byte at offset %u\n",
+			opt->tamper_marker, (unsigned int)LOTA_AC_HEADER_SIZE);
+	}
 
 	struct response_buf resp = {0};
 	long http_status = 0;
@@ -356,9 +411,10 @@ int main(int argc, char **argv)
 
 	fprintf(stderr,
 		"demo_anticheat: producer up (server=%s game=%s provider=%s "
-		"interval=%us once=%s)\n",
+		"interval=%us once=%s tamper_marker=%s)\n",
 		opt.server_url, opt.game_id, lota_ac_provider_str(opt.provider),
-		opt.interval_sec, opt.once ? "yes" : "no");
+		opt.interval_sec, opt.once ? "yes" : "no",
+		opt.tamper_marker ? opt.tamper_marker : "(none)");
 
 	enum demo_exit verdict = DEMO_EXIT_TRANSPORT;
 	int exit_code = DEMO_EXIT_TRANSPORT;
