@@ -28,6 +28,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,108 @@ static struct {
 #define LOG_INF(fmt, ...) HOOK_LOG(HOOK_LOG_INFO, fmt, ##__VA_ARGS__)
 #define LOG_WRN(fmt, ...) HOOK_LOG(HOOK_LOG_WARN, fmt, ##__VA_ARGS__)
 #define LOG_ERR(fmt, ...) HOOK_LOG(HOOK_LOG_ERROR, fmt, ##__VA_ARGS__)
+
+/*
+ * Resolve /proc/self/exe into a caller-owned buffer. Returns 0 on
+ * success, -errno on failure. The buffer is left empty on failure so
+ * callers can treat an empty path as "unknown" and fall back to the
+ * permissive default.
+ */
+static int read_self_exe(char *out, size_t out_sz)
+{
+	ssize_t n;
+
+	if (!out || out_sz < 2)
+		return -EINVAL;
+	out[0] = '\0';
+	n = readlink("/proc/self/exe", out, out_sz - 1);
+	if (n < 0)
+		return -errno;
+	out[n] = '\0';
+	return 0;
+}
+
+/*
+ * Check whether path begins with any comma-separated prefix in list.
+ * Empty list or empty path returns false. Each prefix is matched
+ * against path verbatim; leading and trailing whitespace inside the
+ * list entry is ignored.
+ */
+static bool path_has_prefix_in(const char *path, const char *list)
+{
+	const char *p;
+	size_t path_len;
+
+	if (!path || !*path || !list || !*list)
+		return false;
+	path_len = strlen(path);
+	for (p = list; *p;) {
+		const char *end = strchr(p, ',');
+		size_t span = end ? (size_t)(end - p) : strlen(p);
+		while (span > 0 && (p[0] == ' ' || p[0] == '\t')) {
+			p++;
+			span--;
+		}
+		while (span > 0 && (p[span - 1] == ' ' || p[span - 1] == '\t'))
+			span--;
+		if (span > 0 && path_len >= span && strncmp(path, p, span) == 0)
+			return true;
+		if (!end)
+			break;
+		p = end + 1;
+	}
+	return false;
+}
+
+/*
+ * Decide whether the hook should activate in the current process.
+ *
+ * LD_PRELOAD is inherited by every fork+exec inside the launcher
+ * shell. Running the hook's agent-connect + background-thread
+ * machinery in throwaway shells and POSIX utilities (basename,
+ * dirname, ldconfig, sudo, ...) stalls the launcher script and
+ * thrashes the per-process token sink for no value.
+ *
+ * The hook treats /proc/self/exe as the source of truth. System
+ * utilities live under FHS-mandated paths (/usr/, /bin, /sbin); game
+ * binaries do not. The default policy is therefore "skip if the
+ * executable resolves to a system path, activate everywhere else".
+ *
+ * Two operator-visible overrides apply on top of the default:
+ *
+ *   LOTA_HOOK_ACTIVATE_PATH=~/.local/share/Steam,/opt/games
+ *     If set and non-empty, the hook activates ONLY when
+ *     /proc/self/exe begins with one of the comma-separated
+ *     prefixes. Use this to pin attestation to a specific install
+ *     tree rather than the FHS default.
+ *
+ *   LOTA_HOOK_SKIP_PATH=/extra/skip/prefix
+ *     Extends the built-in system-path skip list. Useful when a
+ *     distro keeps utilities outside FHS (e.g. /nix/store) without
+ *     recompiling the hook.
+ *
+ * Returns true when the hook should run its constructor body,
+ * false when the constructor should early-return cleanly.
+ */
+static bool should_activate(void)
+{
+	static const char *const fhs_system_prefixes =
+	    "/usr/,/bin/,/sbin/,/lib/,/lib64/";
+	const char *allow_env = getenv("LOTA_HOOK_ACTIVATE_PATH");
+	const char *skip_env = getenv("LOTA_HOOK_SKIP_PATH");
+	char exe[PATH_MAX];
+
+	if (read_self_exe(exe, sizeof(exe)) != 0 || !exe[0])
+		return true;
+
+	if (allow_env && *allow_env)
+		return path_has_prefix_in(exe, allow_env);
+
+	if (skip_env && path_has_prefix_in(exe, skip_env))
+		return false;
+
+	return !path_has_prefix_in(exe, fhs_system_prefixes);
+}
 
 /*
  * Parse log level string. Returns HOOK_LOG_WARN for NULL or
@@ -513,6 +616,17 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	if (env && (strcmp(env, "1") == 0 || strcmp(env, "true") == 0))
 		return;
 
+	/*
+	 * LD_PRELOAD is inherited by every fork+exec inside the launcher
+	 * shell, including throwaway POSIX utilities. Skip those so the
+	 * hook never blocks `basename cs2.sh` or its peers on agent I/O.
+	 * Operators can override with LOTA_HOOK_ACTIVATE_COMM (positive
+	 * allowlist) or LOTA_HOOK_SKIP_COMM (extend the built-in skip
+	 * list); see should_activate() for the policy.
+	 */
+	if (!should_activate())
+		return;
+
 	/* parse configuration from environment */
 	g_hook.log_level = parse_log_level(getenv(LOTA_HOOK_ENV_LOG_LEVEL));
 
@@ -547,15 +661,14 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	g_hook.init_pid = getpid();
 	pthread_atfork(NULL, NULL, hook_child_after_fork);
 
-	g_hook.client = hook_connect();
-	if (!g_hook.client) {
-		LOG_WRN("agent not available (will retry in background)");
-	} else {
-		LOG_INF("connected to agent");
-		refresh_once();
-	}
-
-	/* background refresh thread */
+	/*
+	 * Connect + first refresh are deferred to the background thread.
+	 * The constructor must return immediately so the host process
+	 * (game binary or its launcher shell) does not block on agent
+	 * I/O. The thread's first loop iteration drives hook_connect()
+	 * and refresh_once() and retries every refresh_sec seconds while
+	 * the agent is unreachable.
+	 */
 	g_hook.running = 1;
 	if (pthread_create(&g_hook.thread, NULL, refresh_thread_fn, NULL) !=
 	    0) {
