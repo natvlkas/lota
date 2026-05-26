@@ -242,6 +242,24 @@ This matters for two operator scenarios:
   (boot commitment, runtime BPF telemetry) continue to fire
   whether or not the hook is loaded into the game.
 
+## Verification scenarios
+
+Three operator-runnable scenarios under
+[scenarios/](scenarios/README.md) exercise the integration end-to-
+end and demonstrate the contracts the hook claims:
+
+- [`scenarios/verify-attested.sh`](scenarios/verify-attested.sh)
+  watches `$XDG_RUNTIME_DIR/lota/lota-status` and prints
+  `TRUSTED` / `UNTRUSTED` / `OFFLINE` transitions in real time.
+- [`scenarios/agent-down.md`](scenarios/agent-down.md) drives
+  agent disconnect and recovery against a live CS2 session,
+  showing the hook degrades gracefully without taking the game
+  with it.
+- [`scenarios/lib-block.md`](scenarios/lib-block.md) loads an
+  unauthorised `LD_PRELOAD` library into the CS2 process tree
+  and watches the BPF LSM gate block the
+  `security_mmap_file` call before the constructor runs.
+
 ## Caveats vs Valve Anti-Cheat (VAC)
 
 VAC inspects loaded shared objects in the game process and flags
