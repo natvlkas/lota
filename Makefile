@@ -347,6 +347,9 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/lib/systemd/system
 	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
+	install -d $(DESTDIR)/usr/share/lota/systemd
+	install -m 644 systemd/lota-agent.service.d/10-xdg-runtime.conf.example \
+		$(DESTDIR)/usr/share/lota/systemd/
 	install -d $(DESTDIR)/usr/lib/udev/rules.d
 	install -m 644 configs/udev/99-lota-tpm.rules $(DESTDIR)/usr/lib/udev/rules.d/
 	install -m 755 src/initramfs/90lota/module-setup.sh $(DESTDIR)/usr/lib/dracut/modules.d/90lota/

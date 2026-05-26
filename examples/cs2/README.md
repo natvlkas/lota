@@ -59,11 +59,49 @@ not tracked.
    # CS2 inherits the new group.
    ```
 
-2. **Start the agent with the operator's `XDG_RUNTIME_DIR`** so it
-   creates the container-accessible secondary listener at
-   `$XDG_RUNTIME_DIR/lota/lota.sock`. The systemd unit runs the
-   agent as root and ignores the operator's runtime dir by
-   default, so for the integration test launch it directly:
+2. **Pin `XDG_RUNTIME_DIR` for `lota-agent.service`** so the
+   agent's container-accessible secondary listener at
+   `$XDG_RUNTIME_DIR/lota/lota.sock` comes up on boot. The
+   systemd unit runs as root and inherits no
+   `XDG_RUNTIME_DIR`, so without the override only
+   `/run/lota/lota.sock` is bound and pressure-vessel cannot
+   reach it.
+
+   The fastest path is the helper baked into
+   `lota-steam-setup`, which generates the drop-in for the
+   calling user:
+
+   ```sh
+   sudo -E -u "$USER" lota-steam-setup --install-systemd-dropin
+   ```
+
+   The drop-in lands at
+   `/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf`
+   with `Environment=XDG_RUNTIME_DIR=/run/user/<uid>` and the
+   helper restarts `lota-agent.socket` so the listener is live.
+   The same file can be installed manually from the in-tree
+   template at
+   [`systemd/lota-agent.service.d/10-xdg-runtime.conf.example`](../../systemd/lota-agent.service.d/10-xdg-runtime.conf.example)
+   (`make install` deploys it to
+   `/usr/share/lota/systemd/` as a reference).
+
+   With the drop-in in place start the agent via systemd:
+
+   ```sh
+   sudo systemctl start lota-agent.socket
+   ```
+
+   The agent banner (visible in
+   `journalctl -u lota-agent.service`) names both listeners; the
+   second one is the path the hook will use:
+
+   ```
+   IPC listening on /run/lota/lota.sock
+   IPC extra listener on /run/user/1000/lota/lota.sock
+   ```
+
+   For ad-hoc bring-up without touching systemd state, run the
+   agent directly under the operator's `XDG_RUNTIME_DIR`:
 
    ```sh
    sudo systemctl stop lota-agent.socket lota-agent.service
@@ -71,19 +109,10 @@ not tracked.
        /usr/bin/lota-agent --test-ipc
    ```
 
-   The startup banner names both listeners; the second one is the
-   path the hook will use:
-
-   ```
-   IPC listening on /run/lota/lota.sock
-   IPC extra listener on /run/user/1000/lota/lota.sock
-   ```
-
    `--test-ipc` is a no-TPM simulated-attested mode that proves
    the IPC bridge end-to-end without a TPM quote; `--test-signed`
    takes the same shape but routes through the real TPM, and the
-   full systemd unit is for the eventual production path once the
-   `Environment=XDG_RUNTIME_DIR=...` wiring lands there.
+   full systemd path is the production target.
 
 3. **Run `lota-steam-setup`** under the operator account (not
    root) to confirm the runtime preconditions:
