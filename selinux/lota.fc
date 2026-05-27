@@ -8,11 +8,18 @@
 # /dev/tpmrm[0-9]* with the generic tpm_device_t label; the LOTA
 # udev rule (configs/udev/99-lota-tpm.rules) overrides this at
 # device-add time to fence the device behind lota_tpm_device_t.
-# These restorecon contexts ensure `restorecon /dev/tpm*` after
-# manual relabel still ends up under the lota_agent_t allow set.
 #
-/dev/tpm[0-9]*					-c	gen_context(system_u:object_r:lota_tpm_device_t,s0)
-/dev/tpmrm[0-9]*				-c	gen_context(system_u:object_r:lota_tpm_device_t,s0)
+# No file_contexts entry is shipped for the /dev/tpm[0-9]* regex.
+# The base targeted policy (tpm.fc inside selinux-policy-targeted)
+# already registers that pattern against tpm_device_t, and
+# semodule -i refuses a second module that claims the same regex
+# with a different context: sefcontext_compile aborts and the
+# install rolls back.
+# The runtime relabel from tpm_device_t to lota_tpm_device_t is
+# performed by the udev rule at device-add time and persists for
+# the lifetime of the device node; the dev_node() declaration on
+# lota_tpm_device_t in lota.te keeps the type valid for chr_file
+# operations once udev has applied the label.
 
 #
 # Executables
