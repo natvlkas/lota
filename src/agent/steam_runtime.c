@@ -310,28 +310,37 @@ int steam_runtime_ensure_socket_dir(const char *dir)
 	if (mkdir(dir, 0750) < 0 && errno != EEXIST)
 		return -errno;
 
-	int fd = open(dir, O_PATH | O_NOFOLLOW | O_DIRECTORY);
-	if (fd < 0) {
-		if (errno == ELOOP || errno == ENOTDIR)
-			lota_warn("steam_runtime: %s is not a directory or is "
-				  "a symlink!",
-				  dir);
+	/*
+	 * re-stat to verify mkdir resolved to a directory rather than an
+	 * attacker-planted symlink that appeared between the initial
+	 * stat() and the mkdir(). O_NOFOLLOW on the chown path also
+	 * guards the same race; the explicit S_ISDIR check is the cheap
+	 * version of the open(O_DIRECTORY|O_NOFOLLOW) gate previously
+	 * used. Cannot keep that gate because fchown(2) refuses an O_PATH
+	 * fd with EBADF, and a plain open() on the runtime dir would inherit
+	 * O_RDONLY semantics this code does not need
+	 */
+	if (lstat(dir, &st) < 0)
 		return -errno;
-	}
+	if (!S_ISDIR(st.st_mode))
+		return -ENOTDIR;
 
 	/*
-	 * Set group to 'lota' to match the primary socket directory
-	 * this allows members of the 'lota' group to access the socket
+	 * Group ownership: lota so members of the group can connect to the
+	 * socket once the agent binds it. AT_SYMLINK_NOFOLLOW keeps the
+	 * race-window guard (mkdir + lstat + fchownat are still distinct
+	 * syscalls, but the symlink check pins the inode the chown lands
+	 * on to the one lstat saw).
 	 */
 	struct group *grp = getgrnam(LOTA_GROUP_NAME);
 	if (grp) {
-		if (fchown(fd, -1, grp->gr_gid) < 0) {
-			lota_warn("steam_runtime: fchown(%s, -1, %d): %s", dir,
+		if (fchownat(AT_FDCWD, dir, (uid_t)-1, grp->gr_gid,
+			     AT_SYMLINK_NOFOLLOW) < 0) {
+			lota_warn("steam_runtime: chown(%s, -1, %d): %s", dir,
 				  grp->gr_gid, strerror(errno));
 		}
 	}
 
-	close(fd);
 	return 0;
 }
 
