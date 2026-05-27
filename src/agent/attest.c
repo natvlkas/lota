@@ -719,8 +719,13 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	 * Long-running attestation path: install tracer refusal and the
 	 * seccomp blocklist before any TPM/IPC work. Diagnostic CLI paths
 	 * already skipped this in main() so admins keep strace access.
+	 *
+	 * --attest / continuous-attest entry points are independent
+	 * of the dev-kernel flag (--attest does not load BPF). Keep the
+	 * production KILL_PROCESS action so a denied syscall in this
+	 * path remains a tamper-evidence terminator.
 	 */
-	ret = hardening_apply_daemon();
+	ret = hardening_apply_daemon(false);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to apply daemon hardening: %s\n",
 			strerror(-ret));
@@ -760,7 +765,10 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		return ret;
 	}
 
-	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+	/* --attest paths are independent of dev-kernel; production
+	 * semantics: missing metadata + AIK present remains -EKEYREVOKED.
+	 */
+	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx, false);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to load AIK metadata: %s\n",
 			tpm_strerror(ret));
@@ -846,8 +854,13 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	 * seccomp blocklist before any TPM/IPC/BPF work. Diagnostic CLI
 	 * paths already skipped this in main() so admins keep strace
 	 * access on --shutdown, --test-tpm, and similar one-shots.
+	 *
+	 * --attest / continuous-attest entry points are independent
+	 * of the dev-kernel flag (--attest does not load BPF). Keep the
+	 * production KILL_PROCESS action so a denied syscall in this
+	 * path remains a tamper-evidence terminator.
 	 */
-	ret = hardening_apply_daemon();
+	ret = hardening_apply_daemon(false);
 	if (ret < 0) {
 		lota_err("Failed to apply daemon hardening: %s",
 			 strerror(-ret));
@@ -920,7 +933,10 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 		    LOTA_TOKEN_QUOTE_PCR_MASK);
 
-	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+	/* --attest paths are independent of dev-kernel; production
+	 * semantics: missing metadata + AIK present remains -EKEYREVOKED.
+	 */
+	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx, false);
 	if (ret < 0) {
 		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);

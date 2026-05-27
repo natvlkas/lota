@@ -212,11 +212,29 @@ static const int hardening_denied_syscalls[] = {
     SCMP_SYS(personality),
 };
 
-int hardening_apply_seccomp(void)
+int hardening_apply_seccomp(bool allow_dev_kernel)
 {
 	scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
 	if (!ctx)
 		return -ENOMEM;
+
+	/*
+	 * Production: SCMP_ACT_KILL_PROCESS so a hit is the tamper-
+	 * evidence signal and systemd's Restart= cycles the agent.
+	 * Dev: SCMP_ACT_ERRNO(EPERM) so a stacked systemd filter that
+	 * routes a libc call (LockPersonality=yes -> personality(),
+	 * for example) into the blocklist does not SIGSYS the daemon
+	 * before the operator can read which call failed.
+	 */
+	uint32_t deny_action =
+	    allow_dev_kernel ? SCMP_ACT_ERRNO(EPERM) : SCMP_ACT_KILL_PROCESS;
+
+	if (allow_dev_kernel)
+		lota_warn(
+		    "INSECURE: seccomp blocklist installed with ERRNO action "
+		    "instead of KILL_PROCESS (--insecure-allow-dev-kernel); "
+		    "a denied syscall on this host returns EPERM rather than "
+		    "terminating the agent");
 
 	int rc = 0;
 	for (size_t i = 0; i < sizeof(hardening_denied_syscalls) / sizeof(int);
@@ -226,7 +244,7 @@ int hardening_apply_seccomp(void)
 			continue; /* libseccomp returns __NR_SCMP_ERROR
 				     (negative) on unknown */
 
-		rc = seccomp_rule_add(ctx, SCMP_ACT_KILL_PROCESS, sc, 0);
+		rc = seccomp_rule_add(ctx, deny_action, sc, 0);
 		if (rc < 0) {
 			/*
 			 * EOPNOTSUPP/EDOM may indicate a syscall absent on this
@@ -289,7 +307,7 @@ int hardening_apply_basics(void)
 	return 0;
 }
 
-int hardening_apply_daemon(void)
+int hardening_apply_daemon(bool allow_dev_kernel)
 {
 	int ret;
 
@@ -297,7 +315,7 @@ int hardening_apply_daemon(void)
 	if (ret < 0)
 		return ret;
 
-	ret = hardening_apply_seccomp();
+	ret = hardening_apply_seccomp(allow_dev_kernel);
 	if (ret < 0) {
 		lota_err("hardening: seccomp filter load failed: %s",
 			 strerror(-ret));
@@ -308,10 +326,10 @@ int hardening_apply_daemon(void)
 	return 0;
 }
 
-int hardening_apply_all(void)
+int hardening_apply_all(bool allow_dev_kernel)
 {
 	int ret = hardening_apply_basics();
 	if (ret < 0)
 		return ret;
-	return hardening_apply_daemon();
+	return hardening_apply_daemon(allow_dev_kernel);
 }

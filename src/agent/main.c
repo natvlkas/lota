@@ -116,7 +116,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	 * under strace while the long-running daemon remains locked down.
 	 */
 	{
-		int harden_ret = hardening_apply_daemon();
+		int harden_ret =
+		    hardening_apply_daemon(params->allow_dev_kernel);
 		if (harden_ret < 0) {
 			lota_err("Failed to apply daemon hardening: %s",
 				 strerror(-harden_ret));
@@ -232,7 +233,8 @@ static int run_daemon(const struct run_daemon_params *params)
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
 
-			ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+			ret = tpm_aik_load_metadata(&g_agent.tpm_ctx,
+						    params->allow_dev_kernel);
 			if (ret < 0) {
 				lota_err("Failed to load AIK metadata: %s",
 					 tpm_strerror(ret));
