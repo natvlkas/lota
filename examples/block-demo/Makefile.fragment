@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+#
+# Build rules for the block-demo evil-load proof.
+#
+# Two artifacts:
+#   - evil.so:        dummy shared object loaded via dlopen().
+#                     Constructor writes to stderr so the demo
+#                     never executes anything beyond a printf.
+#   - block_victim:   self-protected process that asks the dynamic
+#                     loader to map evil.so and reports whether the
+#                     BPF gate rejected the load.
+#
+# Invoked by the top-level Makefile under `make examples`.
+# TOP_DIR / BUILD_DIR / INC_DIR / SDK_BUILD_DIR are passed in from
+# the parent.
+
+VICTIM := $(BUILD_DIR)/block_victim
+EVIL := $(BUILD_DIR)/evil.so
+
+CC ?= gcc
+CFLAGS := -Wall -Wextra -Werror -O2 -g
+CFLAGS += -I$(INC_DIR)
+CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong -fstack-clash-protection
+CFLAGS += -fcf-protection=full
+CFLAGS += -D_FORTIFY_SOURCE=2 -fPIE
+CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
+
+VICTIM_LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
+		  -Wl,-z,separate-code
+VICTIM_LDLIBS := -L$(SDK_BUILD_DIR) -llotagaming
+VICTIM_LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR) -ldl
+
+# evil.so deliberately drops -Wmissing-prototypes: constructor
+# functions are static + attribute-tagged and the loader resolves
+# them without a forward declaration
+EVIL_CFLAGS := -Wall -Wextra -Werror -O2 -g -fPIC -D_GNU_SOURCE
+EVIL_LDFLAGS := -shared -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
+		-Wl,-z,separate-code
+
+.PHONY: all clean
+
+all: $(VICTIM) $(EVIL)
+
+$(VICTIM): victim.c $(SDK_BUILD_DIR)/liblotagaming.so
+	$(CC) $(CFLAGS) -o $@ victim.c $(VICTIM_LDFLAGS) $(VICTIM_LDLIBS)
+	@echo "Built: $@"
+
+$(EVIL): evil.c
+	$(CC) $(EVIL_CFLAGS) $(EVIL_LDFLAGS) -o $@ evil.c
+	@echo "Built: $@"
+
+clean:
+	rm -f $(VICTIM) $(EVIL)

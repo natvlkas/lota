@@ -12,6 +12,7 @@ intentionally a single-purpose component; they are wired together by
 | `demo_game/`       | SDL2 client (`trust_pong`) that mirrors the server verdict   |
 | `demo/`            | End-to-end deploy + tampering scenario + asciinema cast      |
 | `cs2/`             | Proton / CS2 integration smoke note                          |
+| `block-demo/`      | Self-protecting victim + dummy evil.so; proves the BPF LSM gate rejects an unauthorised dlopen end-to-end. |
 
 The whole tree is built with `make examples` from the repository root.
 The target is opt-in: `make all` does not depend on it, so the agent

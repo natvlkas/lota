@@ -126,6 +126,14 @@ Launch CS2.
 
 ### Reproducing the block without launching CS2
 
+A self-contained out-of-game reproduction lives under
+[`examples/block-demo/`](../../block-demo/) and is the path
+`tests/integration/test_bpf_gates.sh` exercises in CI. It builds
+a tiny victim that calls `lota_protect_self()` and then asks the
+loader to `dlopen()` a dummy "evil" .so, asserting the kernel
+rejected the load. Reach for that demo whenever you want to
+verify the gate without bringing up the full CS2 launch chain.
+
 The same gate fires for any process registered in `protected_pids`.
 Reproduce out-of-game by registering the shell that runs the
 LD_PRELOAD victim and then preloading the evil library inside it:
