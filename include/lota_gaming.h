@@ -191,6 +191,33 @@ int lota_get_fd(struct lota_client *client);
 int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
 
 /*
+ * lota_protect_self - Register the caller's PID as protected
+ *
+ * Sends LOTA_IPC_CMD_PROTECT_PID for the calling process. The
+ * agent verifies the connection's SO_PEERCRED PID matches the
+ * registration target and that the live start_time_ticks still
+ * matches the credentials captured at connect(), so a recycled
+ * PID cannot piggy-back on a prior registration. Self-registration
+ * does not require the trusted-executable allowlist that other
+ * PROTECT_PID callers must satisfy: opting yourself in to stricter
+ * LSM enforcement is not a privilege escalation.
+ *
+ * Idempotent: a second call from the same task returns LOTA_OK
+ * without mutating the runtime PID set.
+ *
+ * Once registered, the agent's BPF strict_mmap, block_anon_exec,
+ * ptrace_access_check, and task_kill hooks gate every access into
+ * or out of this process against the trust set.
+ *
+ * Returns LOTA_OK on success.
+ *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails.
+ *         LOTA_ERR_RATE_LIMITED  if the caller's UID exceeded the
+ *                                privileged-PID rate window.
+ *         LOTA_ERR_PROTOCOL      on IPC framing errors.
+ */
+int lota_protect_self(struct lota_client *client);
+
+/*
  * lota_get_status - Get current attestation status
  *
  * Retrieves the current status from the agent.

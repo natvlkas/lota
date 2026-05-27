@@ -152,6 +152,14 @@ int main(void)
 		printf("  Agent uptime: %lu seconds\n", (unsigned long)uptime);
 	}
 
+	printf("\n--- Test 6b: Protect self ---\n");
+	ret = lota_protect_self(client);
+	test_result("lota_protect_self() first call", ret == LOTA_OK,
+		    lota_strerror(ret));
+	ret = lota_protect_self(client);
+	test_result("lota_protect_self() idempotent", ret == LOTA_OK,
+		    lota_strerror(ret));
+
 	printf("\n--- Test 7: Reconnection ---\n");
 	lota_disconnect(client);
 	test_result("lota_disconnect()", 1, "");

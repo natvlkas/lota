@@ -1153,6 +1153,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	int ret;
 	int had;
 	bool mutated = false;
+	bool self_target;
 
 	(void)ctx;
 
@@ -1167,11 +1168,40 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		return;
 	}
 
-	/* privileged-only: this mutates enforcement policy */
-	if (!ipc_client_is_privileged(ctx, client)) {
-		lota_warn("%s denied for uid=%d pid=%d",
+	/*
+	 * Privilege model:
+	 * - Registering a third-party PID still requires
+	 *   ipc_client_is_privileged (same UID + trusted executable).
+	 * - A process registering its own PID is allowed without the
+	 *   trusted-executable gate because opting yourself in to
+	 *   stricter LSM enforcement is not a privilege escalation.
+	 *   PID identity is still verified against the live
+	 *   start_time_ticks so a PID-recycle attacker cannot use the
+	 *   shortcut.
+	 * - UNPROTECT_PID is privileged-only regardless of target: a
+	 *   process unprotecting itself would loosen the gate against
+	 *   its own task and break the threat model.
+	 */
+	self_target = add && (req.pid == (uint32_t)client->peer_pid);
+
+	if (self_target) {
+		uint64_t current_ticks = 0;
+
+		if (client->peer_start_time_ticks == 0 ||
+		    read_pid_start_time_ticks(client->peer_pid,
+					      &current_ticks) < 0 ||
+		    current_ticks != client->peer_start_time_ticks) {
+			lota_warn("PROTECT_SELF denied for uid=%d pid=%d "
+				  "(stale PID identity)",
+				  client->peer_uid, client->peer_pid);
+			build_error_response(client,
+					     LOTA_IPC_ERR_ACCESS_DENIED);
+			return;
+		}
+	} else if (!ipc_client_is_privileged(ctx, client)) {
+		lota_warn("%s denied for uid=%d pid=%d target=%u",
 			  add ? "PROTECT_PID" : "UNPROTECT_PID",
-			  client->peer_uid, client->peer_pid);
+			  client->peer_uid, client->peer_pid, pid);
 		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
 		return;
 	}

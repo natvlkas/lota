@@ -68,19 +68,18 @@ BPF programs attached: 11
 LSM mode: enforce
 ```
 
-The gate is now armed but has nothing to guard until at least one
-process opts in. Currently the only way in is to pass
-`--protect-pid` at agent startup.
+The gate is armed but has nothing to guard until at least one
+process opts in. Two paths feed the protected_pids map:
 
-An SDK wrapper that lets the Wine/Proton hook register the game on
-its own lands in a follow-up commit. Until then the demo flow is:
-
-1. Start the long-lived victim first and note its PID.
-2. Restart the agent with `--protect-pid <pid>` added to the
-   command above.
-
-For the out-of-game reproduction below, the victim is the shell
-that will run the `LD_PRELOAD` invocation, so its PID is `$$`.
+- **Game-side auto-register.** `liblota_wine_hook.so` calls
+  `lota_protect_self()` on its first successful connect, so any
+  CS2 / Proton launch wired through `lota-proton-hook` registers
+  itself without operator intervention. This is the production
+  path; nothing else needs to happen on the agent CLI.
+- **Manual register.** For out-of-game reproductions, or for a
+  binary that does not link the hook, pass `--protect-pid <pid>`
+  to the agent at startup. The PID must already exist when the
+  agent attaches its BPF programs.
 
 ### Terminal 2: follow the kernel-side block events
 

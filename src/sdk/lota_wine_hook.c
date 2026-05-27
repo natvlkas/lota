@@ -65,6 +65,7 @@ static struct {
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	pid_t init_pid;
+	atomic_int self_protected;
 } g_hook;
 
 #define HOOK_PREFIX "lota-hook"
@@ -583,6 +584,29 @@ static void refresh_once(void)
 			return;
 		}
 		LOG_DBG("connected to agent");
+
+		/*
+		 * Opt this process into the BPF strict_mmap and
+		 * block_anon_exec gates. The agent's hooks are scoped
+		 * to protected_pids; without the call the game process
+		 * is invisible to the runtime enforcement layer and any
+		 * LD_PRELOAD-style injection would slip through. One
+		 * shot per process: a successful response sets
+		 * self_protected so a later reconnect (post agent
+		 * restart) does not re-issue the request.
+		 */
+		if (!atomic_load(&g_hook.self_protected)) {
+			ret = lota_protect_self(g_hook.client);
+			if (ret == LOTA_OK) {
+				atomic_store(&g_hook.self_protected, 1);
+				LOG_INF("registered pid=%d for runtime "
+					"enforcement",
+					(int)getpid());
+			} else {
+				LOG_WRN("lota_protect_self: %s",
+					lota_strerror(ret));
+			}
+		}
 	}
 
 	ret = lota_get_status(g_hook.client, &status);
@@ -711,6 +735,13 @@ static void hook_child_after_fork(void)
 	g_hook.running = 0;
 	g_hook.client = NULL;
 	g_hook.init_pid = 0;
+	/*
+	 * Forked child has a new PID, so the parent's protected_pids
+	 * registration does not cover it. Clear the latch so the next
+	 * refresh_once() in the child reconnects and re-issues
+	 * lota_protect_self() against the child PID.
+	 */
+	atomic_store(&g_hook.self_protected, 0);
 }
 
 __attribute__((constructor)) static void lota_wine_hook_init(void)

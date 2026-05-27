@@ -541,6 +541,44 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec)
 	return LOTA_OK;
 }
 
+int lota_protect_self(struct lota_client *client)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	struct lota_ipc_pid_request body;
+	struct lota_ipc_policy_update update;
+	size_t payload_len;
+	int ret;
+
+	if (!client)
+		return LOTA_ERR_NOT_CONNECTED;
+
+	memset(&body, 0, sizeof(body));
+	body.pid = (uint32_t)getpid();
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_PROTECT_PID;
+	req.payload_len = sizeof(body);
+
+	ret = send_request(client, &req, &body, sizeof(body));
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
+					   : LOTA_ERR_PROTOCOL;
+
+	ret =
+	    recv_response(client, &resp, &update, sizeof(update), &payload_len);
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
+					   : LOTA_ERR_PROTOCOL;
+
+	if (resp.result != LOTA_IPC_OK)
+		return ipc_result_to_error(resp.result);
+
+	return LOTA_OK;
+}
+
 int lota_get_status(struct lota_client *client, struct lota_status *status)
 {
 	struct lota_ipc_request req;
