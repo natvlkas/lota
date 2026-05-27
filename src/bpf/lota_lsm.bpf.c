@@ -465,6 +465,31 @@ static __always_inline int is_bpf_admin_task(void)
 	return has_task_auth_flag(task, LOTA_TASK_AUTH_ADMIN);
 }
 
+/*
+ * mmap_file / file_mprotect gates are scoped to opted-in processes
+ * tracked in protected_pids. Cheats that run as a separate process
+ * are out of scope for the library-load gate; the ptrace / task_kill
+ * hooks already scope to the same set and cover the cross-process
+ * threat model (see is_protected_task() usage in lota_ptrace and
+ * lota_task_kill).
+ *
+ * Side effect of the scope: hosts that boot the agent without
+ * registering any process can run strict_mmap=enforce safely with an
+ * empty trust set, because no task is enforced against. A protected
+ * process opts in via LOTA_IPC_CMD_PROTECT_PID or the --protect-pid
+ * CLI/config knob.
+ */
+static __always_inline int is_protected_current_task(void)
+{
+	struct task_struct *task;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return 0;
+
+	return is_protected_task(task);
+}
+
 static __always_inline int is_lota_agent_task(struct task_struct *task)
 {
 	if (!task)
@@ -1208,7 +1233,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 		struct lota_exec_event *event;
 
 		if (mode == LOTA_MODE_ENFORCE &&
-		    get_config(LOTA_CFG_BLOCK_ANON_EXEC)) {
+		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
+		    is_protected_current_task()) {
 			anon_blocked = 1;
 		}
 
@@ -1250,9 +1276,14 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	/*
 	 * In ENFORCE mode with strict mmap enabled, block executable mmaps
-	 * from untrusted sources.
+	 * from untrusted sources. Scoped to protected_pids: a task that
+	 * has not opted in via LOTA_IPC_CMD_PROTECT_PID (or the
+	 * --protect-pid CLI/config knob) bypasses the verdict and is
+	 * logged only. Keeps enforce-mode safe to enable host-wide
+	 * without a complete trust set.
 	 */
-	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
+	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP) &&
+	    is_protected_current_task()) {
 		if ((prot & LOTA_PROT_WRITE) || (reqprot & LOTA_PROT_WRITE)) {
 			blocked = 1;
 		} else if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
@@ -1352,7 +1383,8 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 		inc_stat(STAT_ANON_EXEC);
 
 		if (mode == LOTA_MODE_ENFORCE &&
-		    get_config(LOTA_CFG_BLOCK_ANON_EXEC))
+		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
+		    is_protected_current_task())
 			anon_blocked = 1;
 
 		emit_event = should_emit_event(mode, anon_blocked);
@@ -1391,7 +1423,14 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	inc_stat(STAT_MMAP_EXECS);
 	vm_flags = BPF_CORE_READ(vma, vm_flags);
 
-	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
+	/*
+	 * mprotect(PROT_EXEC) on a file-backed VMA closes the W^X bypass
+	 * where an attacker maps RW first and upgrades to executable later.
+	 * Same scoping as lota_mmap_file: enforce against protected_pids
+	 * only, so unscoped processes never trip the gate.
+	 */
+	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP) &&
+	    is_protected_current_task()) {
 		if (vm_flags & (VM_WRITE | VM_MAYWRITE)) {
 			blocked = 1;
 		} else if (!is_verity_allowed(file) && !is_trusted_lib(file)) {

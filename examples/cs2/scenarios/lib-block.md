@@ -6,8 +6,16 @@ into a game process. The block happens at the
 `security_mmap_file` LSM hook in
 [`src/bpf/lota_lsm.bpf.c`](../../../src/bpf/lota_lsm.bpf.c) and is
 emitted as a structured event on the agent's journal and the BPF
-ring buffer; nothing inside Counter-Strike 2 has to opt in for the
-check to fire.
+ring buffer.
+
+`security_mmap_file` and the matching `security_file_mprotect`
+gate are scoped to opted-in tasks tracked in the `protected_pids`
+BPF map. A process that has not been registered (via
+`LOTA_IPC_CMD_PROTECT_PID` or the `--protect-pid` / `protect_pid =`
+CLI/config knobs) bypasses the verdict and is only logged. The
+scope keeps `strict_mmap = enforce` host-safe even when the trust
+set is empty, while still catching every dlopen / LD_PRELOAD /
+mprotect(PROT_EXEC) attempt inside the game process.
 
 Unlike the `agent-down.md` scenario this one needs the **full
 agent**, not `--test-ipc`. `--test-ipc` is the IPC bridge for the
@@ -60,6 +68,20 @@ BPF programs attached: 11
 LSM mode: enforce
 ```
 
+The gate is now armed but has nothing to guard until at least one
+process opts in. Currently the only way in is to pass
+`--protect-pid` at agent startup.
+
+An SDK wrapper that lets the Wine/Proton hook register the game on
+its own lands in a follow-up commit. Until then the demo flow is:
+
+1. Start the long-lived victim first and note its PID.
+2. Restart the agent with `--protect-pid <pid>` added to the
+   command above.
+
+For the out-of-game reproduction below, the victim is the shell
+that will run the `LD_PRELOAD` invocation, so its PID is `$$`.
+
 ### Terminal 2: follow the kernel-side block events
 
 ```sh
@@ -105,18 +127,34 @@ Launch CS2.
 
 ### Reproducing the block without launching CS2
 
-The same gate fires for any process under LOTA's enforcement set.
-Reproduce out-of-game with a trivial wrapper that asks the dynamic
-loader to preload the evil library:
+The same gate fires for any process registered in `protected_pids`.
+Reproduce out-of-game by registering the shell that runs the
+LD_PRELOAD victim and then preloading the evil library inside it:
 
 ```sh
+# terminal B: open a fresh shell, capture its PID
+echo "victim pid: $$"
+
+# terminal A: stop the previously launched agent, restart with
+# --protect-pid pinned to the victim shell PID printed above
+sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
+    /usr/bin/lota-agent --mode enforce --block-anon-exec \
+    --protect-pid <victim-pid>
+
+# back in terminal B, try the LD_PRELOAD load
 LD_PRELOAD=/tmp/evil.so /usr/bin/cat /etc/os-release
 ```
 
 `cat` exits with `error while loading shared libraries` plus an
-EPERM trace in the journal. The kernel side of the policy did not
-distinguish "CS2" from "cat"; both hit the same
-`security_mmap_file` hook.
+EPERM trace in the journal. A second shell that never registered
+its PID can run `LD_PRELOAD=/tmp/evil.so cat` unaffected -- the
+gate is scoped to the opted-in set on purpose, so a single agent
+can guard the game without breaking the rest of the host. The
+cross-process threat surface (an external aimbot reading
+`/proc/<game>/mem`) is covered by the ptrace and task_kill hooks
+in the same BPF object, both of which already scope by
+`is_protected_task()` and reject untrusted readers regardless of
+whether the attacker is themselves registered.
 
 ## What this proves
 
