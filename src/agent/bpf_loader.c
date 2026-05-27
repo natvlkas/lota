@@ -725,7 +725,7 @@ out:
 }
 
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
-		    const char *bpf_pubkey_pem_path)
+		    const char *bpf_pubkey_pem_path, bool allow_dev_kernel)
 {
 	struct bpf_program *prog;
 	int err;
@@ -734,20 +734,31 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	if (!ctx || !bpf_obj_path)
 		return -EINVAL;
 
-	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
-		lota_err("BPF public key is required to verify %s signature",
-			 bpf_obj_path);
-		return -EINVAL;
-	}
-
 	if (ctx->loaded)
 		return -EALREADY;
 
-	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
-	if (ret < 0) {
-		lota_err("BPF object signature verification failed for %s: %s",
-			 bpf_obj_path, strerror(-ret));
-		return ret;
+	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
+		if (allow_dev_kernel) {
+			lota_warn(
+			    "INSECURE: loading %s without signature "
+			    "verification (--insecure-allow-dev-kernel); "
+			    "a tampered BPF object cannot be detected here",
+			    bpf_obj_path);
+		} else {
+			lota_err(
+			    "BPF public key is required to verify %s signature",
+			    bpf_obj_path);
+			return -EINVAL;
+		}
+	} else {
+		ret = verify_bpf_object_signature(bpf_obj_path,
+						  bpf_pubkey_pem_path);
+		if (ret < 0) {
+			lota_err("BPF object signature verification failed for "
+				 "%s: %s",
+				 bpf_obj_path, strerror(-ret));
+			return ret;
+		}
 	}
 
 	struct bpf_object_open_opts opts = {

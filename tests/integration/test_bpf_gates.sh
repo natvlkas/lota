@@ -103,22 +103,24 @@ done
 if ! grep -q "registered self into protected_pids" \
 	/tmp/bpf-gates-victim.log 2>/dev/null; then
 	bad "victim never registered (no ptrace stage)"
+elif ! kill -0 "$VICTIM_PID" 2>/dev/null; then
+	bad "victim PID $VICTIM_PID already dead before ptrace stage"
 else
-	if strace -p "$VICTIM_PID" -e trace=none -o /dev/null \
-		2>/tmp/bpf-gates-strace.err </dev/null & STRACE_PID=$!
-		sleep 0.5
-		kill -0 "$STRACE_PID" 2>/dev/null
-	then
+	# strace returns 0 only on a successful attach + detach. Under
+	# the LSM gate it returns non-zero with "Operation not permitted"
+	# in stderr; the trace=none + -o /dev/null pair keeps stdout
+	# clean and prevents strace from outliving the victim if the
+	# kernel accidentally lets the attach through.
+	if timeout 2 strace -p "$VICTIM_PID" -e trace=none \
+		-o /dev/null </dev/null \
+		2>/tmp/bpf-gates-strace.err; then
 		bad "ptrace attach succeeded against protected PID"
-		kill "$STRACE_PID" 2>/dev/null || true
+	elif grep -q "Operation not permitted\|EPERM" \
+		/tmp/bpf-gates-strace.err; then
+		ok "ptrace attach rejected with EPERM"
 	else
-		if grep -q "Operation not permitted\|EPERM" \
-			/tmp/bpf-gates-strace.err; then
-			ok "ptrace attach rejected with EPERM"
-		else
-			bad "ptrace stage inconclusive; strace err:"
-			cat /tmp/bpf-gates-strace.err >&2
-		fi
+		bad "ptrace stage inconclusive; strace err:"
+		cat /tmp/bpf-gates-strace.err >&2
 	fi
 fi
 

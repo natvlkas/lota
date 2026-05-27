@@ -114,8 +114,16 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx);
  *
  * Returns: 0 on success, negative errno on failure
  */
+/*
+ * @bpf_pubkey_pem_path: Ed25519 public key for verifying the
+ *   detached signature on @bpf_obj_path. NULL or empty is rejected
+ *   unless @allow_dev_kernel is true, in which case the signature
+ *   check is skipped with a journal warn. Production callers always
+ *   pass a non-empty path; the relaxation is reserved for the
+ *   --insecure-allow-dev-kernel diagnostic path.
+ */
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
-		    const char *bpf_pubkey_pem_path);
+		    const char *bpf_pubkey_pem_path, bool allow_dev_kernel);
 
 /*
  * bpf_loader_attach - Attach loaded BPF programs to their hooks

@@ -266,7 +266,8 @@ static int run_daemon(const struct run_daemon_params *params)
 		goto cleanup_tpm;
 	}
 
-	ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path);
+	ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path,
+			      params->allow_dev_kernel);
 	if (ret < 0) {
 		lota_err("Failed to load BPF program: %s", strerror(-ret));
 		goto cleanup_bpf;
@@ -519,12 +520,23 @@ int main(int argc, char *argv[])
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		fprintf(stderr, "ERROR: BPF object signature verification "
+		if (opts.insecure_allow_dev_kernel) {
+			lota_warn(
+			    "INSECURE: --policy-pubkey absent and "
+			    "--insecure-allow-dev-kernel was set; loading the "
+			    "BPF object without signature verification. A "
+			    "tampered /usr/lib/lota/lota_lsm.bpf.o on this "
+			    "host "
+			    "cannot be detected at agent start.");
+		} else {
+			fprintf(stderr,
+				"ERROR: BPF object signature verification "
 				"requires --policy-pubkey\n"
 				"Set policy_pubkey in config or pass "
 				"--policy-pubkey PATH.\n");
-		pidfile_remove(opts.pid_file_path, pid_fd);
-		return 1;
+			pidfile_remove(opts.pid_file_path, pid_fd);
+			return 1;
+		}
 	}
 
 	struct run_daemon_params run_params = {
