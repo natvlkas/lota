@@ -82,8 +82,10 @@ DevicePolicy=closed
 DeviceAllow=/dev/tpmrm0 rw
 DeviceAllow=/dev/tpm0 rw
 
-# TPM + BPF + raw I/O
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+# TPM + BPF + raw I/O + kernel log (SYSLOG_ACTION_READ_ALL for
+# iommu_check_dmesg; CAP_SYS_ADMIN alone covers it today but the
+# klogctl(3) dependency is declared explicitly).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG
 AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON
 
 # prevent acquiring new privileges via execve
@@ -116,9 +118,11 @@ ProtectKernelLogs=no
 # protect cgroups hierarchy
 ProtectControlGroups=yes
 
-# hide /proc except own process
+# hide other PIDs in /proc; ProcSubset=pid is intentionally not set
+# because the BPF loader reads /proc/kallsyms to pin sig_enforce and
+# lockdown addresses into the integrity_cfg map, and the IOMMU gate
+# reads /proc/cmdline to confirm intel_iommu=on / iommu=pt.
 ProtectProc=invisible
-ProcSubset=pid
 
 # protect the system clock
 ProtectClock=yes
