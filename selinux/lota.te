@@ -249,17 +249,24 @@ allow lota_agent_t pidfs_t:filesystem getattr;
 # systemd kills the unit and the daemon enters a restart loop even
 # though the agent reaches steady state (BPF attached, ring buffer
 # consuming). libsystemd 259 reaches the notify path via:
-#   - connect(2) on the AF_UNIX socket under
-#     /run/systemd/notify (init_var_run_t, sock_file class);
+#   - sendto(2) over AF_UNIX SOCK_DGRAM to /run/systemd/notify
+#     (init_t:unix_dgram_socket sendto + init_var_run_t:sock_file
+#     write). Confirmed dgram (not stream) by socat probe:
+#     "connect(...) /run/systemd/notify: Protocol wrong type for
+#     socket" with UNIX-CONNECT (SOCK_STREAM default).
 #   - read(2) on auxiliary regular files in /run/systemd/
 #     (init_var_run_t, file class) -- e.g.
 #     /run/systemd/userdb/io.systemd.NamespaceResource that
 #     sd_notify resolves while building the pidfd payload.
-# init_use_notify() covers the socket path; init_read_pid_files()
-# covers the regular file reads. Without both, sd_notify fails
-# silently and the unit shows "Failed to start ... timeout was
-# exceeded" even though the journal proves the daemon is live.
+# init_dgram_send() grants the sendto on the dgram socket;
+# init_use_notify() covers the sock_file open/read and an
+# unrelated stream connect (kept for sd_listen_fds and any future
+# stream notify path); init_read_pid_files() covers the regular
+# file reads. Without the dgram_send grant, sd_notify silently
+# returns -EACCES and the unit shows "Failed to start ... timeout
+# was exceeded" even though the journal proves the daemon is live.
 #
+init_dgram_send(lota_agent_t)
 init_use_notify(lota_agent_t)
 init_read_pid_files(lota_agent_t)
 
