@@ -220,6 +220,27 @@ static int run_daemon(const struct run_daemon_params *params)
 		lota_info("TPM initialized");
 		status_flags |= LOTA_STATUS_TPM_OK;
 
+		/*
+		 * load metadata BEFORE provisioning the AIK so a fresh
+		 * install (no /var/lib/lota/aik_meta and no persistent
+		 * AIK handle yet) takes the ENOENT branch that initialises
+		 * a fresh aik_metadata record and writes it to disk
+		 *
+		 * tpm_aik_load_metadata() returns -EKEYREVOKED when the
+		 * file is missing but an AIK is already in the TPM, on
+		 * the theory that the on-disk witness was wiped under an
+		 * agent that the operator no longer controls.
+		 * Loading first means EKEYREVOKED is reserved for its real
+		 * case: someone has wiped the agent's state under a TPM
+		 * that still holds the AIK.
+		 */
+		ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			lota_err("Failed to load AIK metadata: %s",
+				 tpm_strerror(ret));
+			goto cleanup_tpm;
+		}
+
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -231,19 +252,11 @@ static int run_daemon(const struct run_daemon_params *params)
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
 
-			ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
-			if (ret < 0) {
-				lota_err("Failed to load AIK metadata: %s",
-					 tpm_strerror(ret));
-				goto cleanup_tpm;
-			} else {
-				int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
-				lota_info(
-				    "AIK generation: %lu, age: %ld seconds",
-				    (unsigned long)
-					g_agent.tpm_ctx.aik_meta.generation,
-				    (long)age);
-			}
+			int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
+			lota_info(
+			    "AIK generation: %lu, age: %ld seconds",
+			    (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
+			    (long)age);
 		}
 
 		lota_info("Performing self-measurement");
