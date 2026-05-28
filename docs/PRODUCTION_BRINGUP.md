@@ -23,7 +23,7 @@ file:line into the current tree.
 |-----------------------------------------------|----------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
 | `lockdown=integrity` (or confidentiality)     | `src/agent/bpf_loader.c::kernel_lockdown_restrictive()`                          | Boot under Secure Boot or pass `lockdown=integrity` on the kernel cmdline.                                            |
 | `module.sig_enforce=1`                        | `src/agent/bpf_loader.c::kernel_module_sig_enforced()`                           | Fedora 44 ships this by default. On distros that do not, add `module.sig_enforce=1` to the cmdline.                   |
-| IMA appraisal policy active                   | `src/agent/bpf_loader.c::kernel_ima_appraisal_enabled()`                         | Boot with `ima=on ima_policy=appraise_tcb` OR write `configs/ima/lota-ima-policy` to `/sys/kernel/security/ima/policy` at boot. |
+| IMA appraisal in an enforcing mode            | `src/agent/bpf_loader.c::kernel_ima_appraise_enforcing()`                        | Add `ima_appraise=enforce` (or `fix`) to the kernel cmdline. `log` and the default `off` do not satisfy the gate. |
 | `/dev/tpm{rm,}0` carries `lota_tpm_device_t`  | `src/agent/bpf_loader.c::tpm_device_selinux_label_ok()`                          | Install the udev rule under `configs/udev/99-lota-tpm.rules` (handled by `make install`) and run `udevadm trigger`.   |
 | fs-verity on `/usr/bin/lota-agent`            | `src/agent/bpf_loader.c::agent_self_fsverity_enabled()`                          | Filesystem must have the verity feature enabled. Run `fsverity enable /usr/bin/lota-agent` (or let bring-up do it).   |
 | BPF object Ed25519 signature                  | `src/agent/bpf_loader.c::verify_bpf_object_signature()`                          | Sign `lota_lsm.bpf.o` against the operator key, install the `.sig` next to the `.o`, point `policy_pubkey` at the PEM.|
@@ -84,17 +84,29 @@ off. Production lays this down at install time via dracut + fs-verity-enabled ro
 
 ### 3. IMA appraisal policy
 
-The agent's startup check accepts any IMA policy that contains an
-`appraise` rule. On Fedora the simplest path is to boot with
-`ima_policy=appraise` on the cmdline:
+The agent parses `/proc/cmdline` and refuses to start unless
+`ima_appraise=enforce` (block on integrity failure) or
+`ima_appraise=fix` (block on signature failure, write missing
+xattrs) is present. `ima_appraise=log` and the default `off` are
+non-blocking and do not satisfy the kernel-floor. The check does
+not read `/sys/kernel/security/ima/policy` because that file is
+write-only on kernels built without `CONFIG_IMA_READ_POLICY`
+(Fedora 44's default).
 
 ```sh
-sudo grubby --update-kernel=ALL --args="ima=on ima_policy=appraise"
+sudo grubby --update-kernel=ALL --args="ima=on ima_appraise=enforce"
 sudo reboot
 ```
 
-For a runtime policy file (no reboot required) write the developer
-baseline to `/sys/kernel/security/ima/policy`:
+The cmdline only sets the appraisal mode; the kernel still needs a
+loaded IMA policy with `appraise` rules for any path to be checked.
+On Fedora the built-in `ima_policy=appraise_tcb` covers the TCB
+ranges, but on a rootfs without IMA xattrs it bricks the host at
+the next boot. Pre-populate xattrs with `ima_appraise=fix` for one
+boot (the kernel writes missing signatures from `evmctl ima_sign`
+output as it walks the matched paths) before switching to
+`enforce`, or ship a narrow policy that only appraises the LOTA
+binary closure (`/usr/bin/lota-agent`, `/usr/lib/lota/*.bpf.o`):
 
 ```sh
 sudo cat configs/ima/lota-ima-policy >/sys/kernel/security/ima/policy

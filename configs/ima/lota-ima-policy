@@ -2,10 +2,13 @@
 #
 # LOTA IMA appraisal policy.
 #
-# The agent's startup check (kernel_ima_appraisal_enabled) requires
-# /sys/kernel/security/ima/policy to contain at least one "appraise"
-# rule. This file is the developer-host baseline written by
-# scripts/lota-dev-bringup.sh.
+# The agent's startup check (kernel_ima_appraise_enforcing) gates
+# only on the ima_appraise= kernel boot parameter, not on the
+# contents of /sys/kernel/security/ima/policy (write-only on
+# kernels without CONFIG_IMA_READ_POLICY). This file is the
+# developer-host baseline written by scripts/lota-dev-bringup.sh
+# and supplies the appraise rules the kernel matches paths
+# against once ima_appraise=enforce|fix is on the cmdline.
 #
 # Rule semantics:
 #   - dont_appraise covers ephemeral / non-security-relevant paths
@@ -17,9 +20,9 @@
 #     before allowing the exec / mmap. The "appraise_type=imasig"
 #     selector lets imasig + xattr signatures land via packaging
 #     once they exist; on a dev host without signatures the
-#     appraise call simply records the absent signature and the
-#     LOTA agent still passes its kernel-floor gate because the
-#     "appraise" keyword is present in the policy.
+#     appraise call records the absent signature and the kernel
+#     follows whichever ima_appraise= mode was set on the cmdline
+#     (log on a dev host, enforce in production).
 #
 # Production deployments override this file with a policy that
 # enforces signed exec / mmap on /usr/bin, /usr/lib*, /usr/lib*.

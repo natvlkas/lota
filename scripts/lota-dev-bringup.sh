@@ -12,7 +12,8 @@
 #      consults the right public key when verifying the .sig.
 #   4. fs-verity enabled on /usr/bin/lota-agent so the agent's
 #      anti-tamper self-check passes.
-#   5. IMA appraisal policy active so the kernel-floor gate passes.
+#   5. IMA appraisal in an enforcing mode (ima_appraise=enforce|fix
+#      on the kernel cmdline) so the kernel-floor gate passes.
 #   6. Any stale persistent state under /var/lib/lota wiped, plus
 #      the persistent AIK handle evicted from the TPM, so PCR14
 #      starts from a known baseline after the next cold reboot.
@@ -114,22 +115,27 @@ else
 	warn "fsverity utility not installed; install fsverity-utils and re-run"
 fi
 
-# 6. IMA appraisal policy. The kernel-floor check inside the agent reads
-#    /sys/kernel/security/ima/policy and requires the file to contain at
-#    least one "appraise" rule. On hosts that ship a built-in policy this
-#    step is a no-op; otherwise an operator IMA file at
-#    configs/ima/lota-ima-policy is appended to the runtime policy.
-if grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
-	info "IMA appraisal policy already active"
-elif [[ -f "$IMA_POLICY_SRC" ]]; then
+# 6. IMA appraisal mode. The kernel-floor check inside the agent parses
+#    /proc/cmdline and requires ima_appraise=enforce|fix; log and the
+#    default off do not block on integrity failures. The cmdline only
+#    sets the appraisal mode -- a loaded policy with appraise rules is
+#    still required for any path to actually be checked.
+if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
+	info "IMA appraisal already in an enforcing mode"
+else
+	warn "kernel cmdline lacks ima_appraise=enforce|fix; the agent will"
+	warn "refuse to start. Run:"
+	warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=enforce'"
+	warn "  sudo reboot"
+fi
+
+if [[ -f "$IMA_POLICY_SRC" ]] && \
+   ! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
 	info "loading IMA appraisal policy from $IMA_POLICY_SRC"
 	if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
-		warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need ima_policy=appraise_tcb on cmdline"
+		warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
+		warn "ima_policy=appraise_tcb on cmdline or a custom policy"
 	fi
-else
-	warn "no operator IMA policy at $IMA_POLICY_SRC"
-	warn "boot the kernel with 'ima_policy=appraise_tcb' on cmdline or"
-	warn "ship a policy file at configs/ima/lota-ima-policy and re-run"
 fi
 
 # 7. Wipe stale agent state. The clock-state snapshot under

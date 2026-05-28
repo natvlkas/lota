@@ -338,18 +338,45 @@ static int kernel_lockdown_restrictive(void)
 	return -EPERM;
 }
 
-static int kernel_ima_appraisal_enabled(void)
+/*
+ * /sys/kernel/security/ima/policy is write-only on stock kernels
+ * built without CONFIG_IMA_READ_POLICY (Fedora 44's default), so a
+ * runtime read of the policy file is not a portable signal that
+ * appraisal is enforcing. The authoritative knob is the kernel
+ * boot parameter ima_appraise= on /proc/cmdline: only "enforce"
+ * (block on integrity failure) and "fix" (write missing xattrs,
+ * still blocks on signature failure) constitute the kernel-floor
+ * the agent demands. "log" and the default "off" measure or do
+ * nothing and therefore leave the integrity gate unenforced.
+ */
+static int kernel_ima_appraise_enforcing(void)
 {
-	char buf[8192];
-	int ret = read_text_file("/sys/kernel/security/ima/policy", buf,
-				 sizeof(buf), NULL);
+	char buf[4096];
+	size_t len = 0;
+	char *tok;
+	char *save = NULL;
+	int ret;
+
+	ret = read_text_file("/proc/cmdline", buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
+	if (len == 0)
+		return -EIO;
+	if (buf[len - 1] == '\n')
+		buf[len - 1] = '\0';
 
-	if (!strstr(buf, "appraise"))
+	for (tok = strtok_r(buf, " \t", &save); tok;
+	     tok = strtok_r(NULL, " \t", &save)) {
+		const char *val;
+
+		if (strncmp(tok, "ima_appraise=", 13) != 0)
+			continue;
+		val = tok + 13;
+		if (strcmp(val, "enforce") == 0 || strcmp(val, "fix") == 0)
+			return 0;
 		return -EPERM;
-
-	return 0;
+	}
+	return -EPERM;
 }
 
 /*
@@ -508,10 +535,13 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = kernel_ima_appraisal_enabled();
+	ret = kernel_ima_appraise_enforcing();
 	if (ret < 0) {
-		lota_err(
-		    "IMA appraisal policy is required for anti-tamper startup");
+		lota_err("IMA appraisal is not in an enforcing mode "
+			 "(ima_appraise=enforce or fix required on the kernel "
+			 "cmdline; "
+			 "log and the default off do not block on integrity "
+			 "failures)");
 		return ret;
 	}
 
