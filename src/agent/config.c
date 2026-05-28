@@ -199,9 +199,20 @@ void config_init(struct lota_config *cfg)
 		"/usr/lib/lota/lota_lsm.bpf.o");
 	set_str(cfg->mode, sizeof(cfg->mode), "enforce");
 	cfg->strict_mmap = true;
-	cfg->strict_exec = true;
+	/*
+	 * strict_exec and strict_modules require at least one
+	 * allow_verity entry (startup_policy.c::apply_startup_policy)
+	 * because both gates check the BPF allowlist before honouring
+	 * an exec / kernel_read_file. A fresh install has no
+	 * allow_verity entries until the operator runs the fs-verity
+	 * provisioning step, so defaulting either flag to true bricks
+	 * the agent on first start. Operators opt into strict mode by
+	 * setting strict_exec / strict_modules = true in
+	 * /etc/lota/lota.conf alongside the allow_verity list.
+	 */
+	cfg->strict_exec = false;
 	cfg->block_ptrace = true;
-	cfg->strict_modules = true;
+	cfg->strict_modules = false;
 	cfg->block_anon_exec = true;
 
 	cfg->attest_interval = 0;

@@ -105,16 +105,16 @@ static void test_config_init_defaults(void)
 		FAIL("strict_mmap != true");
 		return;
 	}
-	if (cfg.strict_exec != true) {
-		FAIL("strict_exec != true");
+	if (cfg.strict_exec != false) {
+		FAIL("strict_exec != false");
 		return;
 	}
 	if (cfg.block_ptrace != true) {
 		FAIL("block_ptrace != true");
 		return;
 	}
-	if (cfg.strict_modules != true) {
-		FAIL("strict_modules != true");
+	if (cfg.strict_modules != false) {
+		FAIL("strict_modules != false");
 		return;
 	}
 	if (cfg.block_anon_exec != true) {
