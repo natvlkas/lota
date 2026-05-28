@@ -50,6 +50,19 @@ With the agent live in enforce mode:
 examples/block-demo/run.sh
 ```
 
+For an out-of-tree build (e.g. inside a VM with the repo
+virtiofs-mounted read-only and artefacts under
+`/var/tmp/lota-build`), point the script at the alternate
+build root through the environment:
+
+```sh
+BUILD_DIR=/var/tmp/lota-build sudo -E examples/block-demo/run.sh
+```
+
+`BUILD_DIR` defaults to `$REPO_DIR/build` to match the Makefile
+default; the same override works for
+`tests/integration/test_bpf_gates.sh`.
+
 Expected output on a successful block:
 
 ```

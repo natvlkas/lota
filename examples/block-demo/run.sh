@@ -12,7 +12,7 @@
 # Stages:
 #   1. Verify the build artifacts are present and the agent IPC
 #      socket is reachable.
-#   2. Run block_victim ./build/examples/evil.so:
+#   2. Run block_victim ${BUILD_DIR}/examples/evil.so:
 #        rc=0  evil.so blocked   -> demo passed
 #        rc=1  evil.so loaded    -> demo failed
 #        rc=2  inconclusive      -> see stderr for the agent diag
@@ -20,13 +20,17 @@
 #      while the demo ran, so the operator can audit the block
 #      independently of the victim exit code.
 #
+# BUILD_DIR can be overridden in the environment to point at an
+# out-of-tree build root; defaults to $REPO_DIR/build to match the
+# Makefile default.
+#
 # The script is non-destructive: it never touches the agent
 # config, the systemd units, or any policy files.
 
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="$REPO_DIR/build"
+BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
 EXAMPLES_BUILD="$BUILD_DIR/examples"
 VICTIM_BIN="$EXAMPLES_BUILD/block_victim"
 EVIL_SO="$EXAMPLES_BUILD/evil.so"

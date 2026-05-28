@@ -7,8 +7,9 @@
 # protected_pids. Requires:
 #   - root (BPF + ptrace)
 #   - a running lota-agent in enforce mode with BPF attached
-#   - build/examples/block_victim + build/examples/evil.so
-#     (build with `make all examples`)
+#   - ${BUILD_DIR}/examples/block_victim + ${BUILD_DIR}/examples/evil.so
+#     (build with `make all examples`, or set BUILD_DIR= to point
+#     at an out-of-tree build root)
 #
 # Coverage matrix:
 #   mmap_file       -> examples/block-demo/run.sh
@@ -36,7 +37,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="$REPO_DIR/build"
+BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
 VICTIM_BIN="$BUILD_DIR/examples/block_victim"
 EVIL_SO="$BUILD_DIR/examples/evil.so"
 SOCKET="/run/lota/lota.sock"
