@@ -289,14 +289,14 @@ examples: $(EXAMPLES_BUILD_DIR)
 		echo "==> examples: $$dir"; \
 		$(MAKE) -C $$dir -f Makefile.fragment \
 			TOP_DIR=$(CURDIR) \
-			BUILD_DIR=$(CURDIR)/$(EXAMPLES_BUILD_DIR) \
+			BUILD_DIR=$(abspath $(EXAMPLES_BUILD_DIR)) \
 			INC_DIR=$(CURDIR)/$(INC_DIR) \
-			SDK_BUILD_DIR=$(CURDIR)/$(BUILD_DIR) || exit $$?; \
+			SDK_BUILD_DIR=$(abspath $(BUILD_DIR)) || exit $$?; \
 	done
 	@if command -v go >/dev/null 2>&1 && [ -f $(EXAMPLES_DIR)/demo_server/main.go ]; then \
 		echo "==> examples: $(EXAMPLES_DIR)/demo_server"; \
 		cd $(EXAMPLES_DIR)/demo_server && \
-			go build -o $(CURDIR)/$(EXAMPLES_BUILD_DIR)/demo_server . ; \
+			go build -o $(abspath $(EXAMPLES_BUILD_DIR))/demo_server . ; \
 	else \
 		echo "SKIP: demo_server (go not installed or stub absent)"; \
 	fi
@@ -306,7 +306,7 @@ examples-clean:
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
 		dir=$$(dirname $$frag); \
 		$(MAKE) -C $$dir -f Makefile.fragment clean \
-			BUILD_DIR=$(CURDIR)/$(EXAMPLES_BUILD_DIR) 2>/dev/null || true; \
+			BUILD_DIR=$(abspath $(EXAMPLES_BUILD_DIR)) 2>/dev/null || true; \
 	done
 
 #
@@ -339,7 +339,7 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/verifier && go build -o ../../$@ .
+	cd $(SRC_DIR)/verifier && go build -o $(abspath $@) .
 	@echo "Built: $@"
 
 clean:
@@ -442,7 +442,7 @@ TEST_BINS := \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
@@ -530,11 +530,11 @@ $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(CURDIR)/$(BUILD_DIR) -lcrypto
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
@@ -547,41 +547,41 @@ test: test-unit
 
 test-unit: all $(TEST_BINS)
 	@echo "=== Running unit tests ==="
-	@./build/test_hash_verify
-	@./build/test_dbus
-	@./build/test_systemd
-	@./build/test_packaging
-	@./build/test_steam_runtime
-	@./build/test_wine_hook
-	@./build/test_daemon
-	@./build/test_signal_shutdown
-	@./build/test_daemon_loop
-	@./build/test_config
-	@./build/test_subscribe
-	@./build/test_policy_sign
-	@./build/test_policy_export
-	@./build/test_aik_rotation
-	@./build/test_initramfs_lock
-	@./build/test_hardening
-	@./build/test_server_sdk
-	@./build/test_anticheat
-	@./build/test_loader_symbols
+	@$(BUILD_DIR)/test_hash_verify
+	@$(BUILD_DIR)/test_dbus
+	@$(BUILD_DIR)/test_systemd
+	@$(BUILD_DIR)/test_packaging
+	@$(BUILD_DIR)/test_steam_runtime
+	@$(BUILD_DIR)/test_wine_hook
+	@$(BUILD_DIR)/test_daemon
+	@$(BUILD_DIR)/test_signal_shutdown
+	@$(BUILD_DIR)/test_daemon_loop
+	@$(BUILD_DIR)/test_config
+	@$(BUILD_DIR)/test_subscribe
+	@$(BUILD_DIR)/test_policy_sign
+	@$(BUILD_DIR)/test_policy_export
+	@$(BUILD_DIR)/test_aik_rotation
+	@$(BUILD_DIR)/test_initramfs_lock
+	@$(BUILD_DIR)/test_hardening
+	@$(BUILD_DIR)/test_server_sdk
+	@$(BUILD_DIR)/test_anticheat
+	@$(BUILD_DIR)/test_loader_symbols
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -S /run/lota/lota.sock ]; then \
-		./build/test_sdk_ipc; \
-		./build/test_ipc_client status; \
-		./build/demo_sdk; \
+		$(BUILD_DIR)/test_sdk_ipc; \
+		$(BUILD_DIR)/test_ipc_client status; \
+		$(BUILD_DIR)/demo_sdk; \
 	else \
 		echo "SKIP: SDK/IPC tests (agent socket not found)"; \
 	fi
 	@if [ -n "$$LOTA_RUN_TLS_TESTS" ]; then \
-		./build/test_tls_verify; \
+		$(BUILD_DIR)/test_tls_verify; \
 	elif [ -f /tmp/lota-tls-test/ca.pem ]; then \
 		if command -v ss >/dev/null 2>&1; then \
-			if ss -lnt | grep -q ":9443 "; then ./build/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
+			if ss -lnt | grep -q ":9443 "; then $(BUILD_DIR)/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
 		elif command -v nc >/dev/null 2>&1; then \
-			if nc -z 127.0.0.1 9443; then ./build/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
+			if nc -z 127.0.0.1 9443; then $(BUILD_DIR)/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
 		else \
 			echo "SKIP: test_tls_verify (no ss/nc to check server)"; \
 		fi; \
@@ -590,7 +590,7 @@ test-unit: all $(TEST_BINS)
 	fi
 	@if command -v go >/dev/null 2>&1; then \
 		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang/test_gen.go && \
-		cd $(CURDIR) && ./build/test_cross_lang_verify; \
+		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
 	else \
 		echo "SKIP: test_gen.go (go not installed)"; \
 	fi
@@ -606,8 +606,8 @@ test-hardware: $(AGENT_BIN)
 
 test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "=== SDK Integration Test ==="
-	@echo "Start agent in another terminal: sudo ./build/lota-agent --test-ipc"
-	@echo "Then run: ./build/test_sdk_ipc"
+	@echo "Start agent in another terminal: sudo $(BUILD_DIR)/lota-agent --test-ipc"
+	@echo "Then run: $(BUILD_DIR)/test_sdk_ipc"
 
 # Fuzzing
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
