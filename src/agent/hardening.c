@@ -166,8 +166,19 @@ int hardening_apply_no_dumpable(void)
  *   - ptrace, process_vm_readv/writev: cross-process memory inspection.
  *   - kexec_load/file_load, init_module/finit/delete/create_module,
  *     query_module, get_kernel_syms: kernel-image and module surface.
- *   - pivot_root, mount, umount2, name_to_handle_at, open_by_handle_at,
- *     setns, unshare: namespace and filesystem-handle manipulation.
+ *   - pivot_root, mount, umount2, setns, unshare: namespace and
+ *     mount-table manipulation.
+ *
+ * Deliberately NOT in the blocklist:
+ *   - name_to_handle_at / open_by_handle_at: libsystemd 257+ calls
+ *     name_to_handle_at internally on its socket-activation path
+ *     (sd_listen_fds() chain), so a blanket KILL_PROCESS rule kills
+ *     the agent the moment it accepts the activated fd from systemd.
+ *     The threat model already pins file access at the SELinux layer
+ *     (lota_agent_t only reads lota_etc_t / lota_var_t / lota_bpf_t,
+ *     plus the udev-relabelled TPM device), so a file_handle the
+ *     agent can construct does not widen the access surface beyond
+ *     what the MAC layer already grants.
  *   - swapon/swapoff, reboot: system-wide state changes.
  *   - io_uring_setup, io_uring_enter, io_uring_register: ring-based
  *     async I/O is unused by the agent and is the entry point for
@@ -199,8 +210,6 @@ static const int hardening_denied_syscalls[] = {
     SCMP_SYS(reboot),
     SCMP_SYS(mount),
     SCMP_SYS(umount2),
-    SCMP_SYS(name_to_handle_at),
-    SCMP_SYS(open_by_handle_at),
     SCMP_SYS(setns),
     SCMP_SYS(unshare),
     SCMP_SYS(io_uring_setup),
