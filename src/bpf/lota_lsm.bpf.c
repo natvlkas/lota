@@ -154,7 +154,7 @@ struct {
 	__uint(max_entries, 1);
 	__type(key, uint32_t);
 	__type(value, struct integrity_data);
-} integrity_config SEC(".maps");
+} integrity_cfg SEC(".maps");
 
 #define STAT_TOTAL_EXECS 0
 #define STAT_EVENTS_SENT 1
@@ -197,9 +197,27 @@ struct lota_task_auth_entry {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__type(key, int);
 	__type(value, struct lota_task_auth_entry);
 } lota_task_auth SEC(".maps");
+
+/*
+ * Per-CPU scratch map for the fs-verity digest key passed to
+ * bpf_dynptr_from_mem(). The kernel BPF verifier on 6.6+ refuses
+ * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem and
+ * requires PTR_TO_MAP_VALUE / PTR_TO_BUF
+ *
+ * bpf_map_lookup_elem returns PTR_TO_MAP_VALUE which dynptr accepts,
+ * and per-CPU scoping means concurrent exec hook invocations on
+ * different CPUs do not race on the same buffer
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, u32);
+	__type(value, struct lota_verity_digest_key);
+} verity_scratch SEC(".maps");
 
 /*
  * Protected process map.
@@ -264,7 +282,7 @@ struct {
 	__uint(max_entries, 1024);
 	__type(key, struct lota_verity_digest_key);
 	__type(value, u32);
-} allow_verity_digest SEC(".maps");
+} allow_verity SEC(".maps");
 
 /* kfunc definition for bpf_get_fsverity_digest */
 extern int bpf_get_fsverity_digest(struct file *file,
@@ -433,7 +451,19 @@ auth_subject_task(struct task_struct *task)
 	if (!task)
 		return NULL;
 
-	leader = BPF_CORE_READ(task, group_leader);
+	/*
+	 * Direct field access -- not BPF_CORE_READ -- so the verifier
+	 * keeps task->group_leader as a trusted struct task_struct
+	 * pointer. bpf_task_storage_get() refuses scalar arguments
+	 * with
+	 *   "R2 type=scalar expected=ptr_, trusted_ptr_, rcu_ptr_"
+	 * which is what BPF_CORE_READ produces here because
+	 * bpf_probe_read_kernel copies the pointer value into the
+	 * register file untyped. Callers always pass a trusted
+	 * task_struct (LSM hook arg or bpf_get_current_task_btf()),
+	 * so the trusted-pointer chain is preserved by direct deref.
+	 */
+	leader = task->group_leader;
 	return leader ? leader : task;
 }
 
@@ -526,11 +556,10 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "event_budget", sizeof("event_budget")) == 0)
 		return 1;
-	if (__builtin_memcmp(name, "integrity_config",
-			     sizeof("integrity_config")) == 0)
+	if (__builtin_memcmp(name, "integrity_cfg", sizeof("integrity_cfg")) ==
+	    0)
 		return 1;
-	if (__builtin_memcmp(name, "allow_verity_digest",
-			     sizeof("allow_verity_digest")) == 0)
+	if (__builtin_memcmp(name, "allow_verity", sizeof("allow_verity")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "lota_task_auth",
 			     sizeof("lota_task_auth")) == 0)
@@ -570,29 +599,40 @@ static __always_inline int in_non_init_userns(void)
 
 static __noinline int is_verity_allowed(struct file *file)
 {
+	struct lota_verity_digest_key *key;
+	struct bpf_dynptr digest_ptr;
+	u32 zero = 0;
+	u32 *allowed;
+	int ret;
+
 	if (!bpf_get_fsverity_digest)
 		return 0;
 
 	if (!file)
 		return 0;
 
-	struct lota_verity_digest_key key = {};
+	/*
+	 * Per-CPU scratch for the digest key. See the comment on
+	 * verity_scratch above: the verifier refuses
+	 * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem
+	 * on 6.6+ kernels, so the key has to live in a map value.
+	 */
+	key = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!key)
+		return 0;
+	__builtin_memset(key, 0, sizeof(*key));
 
-	struct bpf_dynptr digest_ptr;
-	int ret;
-	u32 *allowed;
-
-	ret =
-	    bpf_dynptr_from_mem(key.digest, sizeof(key.digest), 0, &digest_ptr);
+	ret = bpf_dynptr_from_mem(key->digest, sizeof(key->digest), 0,
+				  &digest_ptr);
 	if (ret < 0)
 		return 0;
 
 	ret = bpf_get_fsverity_digest(file, &digest_ptr);
 	if (ret != LOTA_VERITY_DIGEST_SHA512_SIZE)
 		return 0;
-	key.len = (u32)ret;
+	key->len = (u32)ret;
 
-	allowed = bpf_map_lookup_elem(&allow_verity_digest, &key);
+	allowed = bpf_map_lookup_elem(&allow_verity, key);
 	return (allowed && *allowed) ? 1 : 0;
 }
 
@@ -764,7 +804,7 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	(void)data;
 
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	if (!(flags & MS_BIND))
 		return 0;
@@ -803,7 +843,7 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	int flags;
 
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	mode = get_mode();
 	if (mode != LOTA_MODE_ENFORCE)
@@ -841,7 +881,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 {
 	struct file *file;
 	struct lota_exec_event *event = NULL;
-	struct lota_verity_digest_key verity_key = {};
+	struct lota_verity_digest_key *verity_key;
+	u32 zero = 0;
 	u32 mode;
 	int blocked = 0;
 	int have_digest = 0;
@@ -850,13 +891,29 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 
 	mode = get_mode();
 
-	file = BPF_CORE_READ(bprm, file);
+	/*
+	 * Direct field access -- not BPF_CORE_READ -- so the verifier
+	 * keeps bprm->file as a PTR_TO_BTF_ID(struct file). The kfunc
+	 * bpf_get_fsverity_digest() requires its first argument to be
+	 * a trusted struct file pointer; BPF_CORE_READ copies bytes via
+	 * bpf_probe_read_kernel and the result lands in the register
+	 * file as a scalar, which the verifier then rejects with
+	 *   "arg#0 pointer type STRUCT file must point to scalar"
+	 * LSM hook arguments are themselves trusted PTR_TO_BTF_ID, so
+	 * the field chain bprm->file stays in trusted-pointer territory.
+	 */
+	file = bprm->file;
+
+	verity_key = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!verity_key)
+		return 0;
+	__builtin_memset(verity_key, 0, sizeof(*verity_key));
 
 	/* fetch fs-verity digest once (if supported) and reuse it below */
 	if (bpf_get_fsverity_digest && file) {
 		struct bpf_dynptr digest_ptr;
-		int ret = bpf_dynptr_from_mem(verity_key.digest,
-					      sizeof(verity_key.digest), 0,
+		int ret = bpf_dynptr_from_mem(verity_key->digest,
+					      sizeof(verity_key->digest), 0,
 					      &digest_ptr);
 		if (ret == 0) {
 			/*
@@ -871,7 +928,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 */
 			ret = bpf_get_fsverity_digest(file, &digest_ptr);
 			if (ret == LOTA_VERITY_DIGEST_SHA512_SIZE) {
-				verity_key.len = (u32)ret;
+				verity_key->len = (u32)ret;
 				have_digest = 1;
 			}
 		}
@@ -885,8 +942,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 		} else if (!have_digest) {
 			blocked = 1;
 		} else {
-			u8 *allowed = bpf_map_lookup_elem(&allow_verity_digest,
-							  &verity_key);
+			u8 *allowed =
+			    bpf_map_lookup_elem(&allow_verity, verity_key);
 			if (!(allowed && *allowed))
 				blocked = 1;
 		}
@@ -907,9 +964,23 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 
 			bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-			/* best-effort filename from binprm; may be relative */
+			/*
+			 * best-effort filename from binprm; may be relative.
+			 *
+			 * Direct field access -- not BPF_CORE_READ -- so the
+			 * compiler does not allocate a stack temporary for the
+			 * fetched pointer. The earlier bpf_dynptr_from_mem()
+			 * call leaves its dynptr metadata occupying a stack
+			 * slot that the verifier tracks as a live dynptr
+			 * through the rest of the program; if the compiler
+			 * reuses that slot for the BPF_CORE_READ() probe-read
+			 * target, the verifier rejects the program with
+			 *   "potential write to dynptr at off=-N disallowed".
+			 * Direct access keeps the pointer in a register, which
+			 * sidesteps the stack-slot collision.
+			 */
 			{
-				const char *fn = BPF_CORE_READ(bprm, filename);
+				const char *fn = bprm->filename;
 				if (fn)
 					bpf_probe_read_kernel_str(
 					    event->filename,
@@ -919,7 +990,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			/* if fs-verity digest is present, include first 32
 			 * bytes in event hash */
 			if (have_digest)
-				__builtin_memcpy(event->hash, verity_key.digest,
+				__builtin_memcpy(event->hash,
+						 verity_key->digest,
 						 LOTA_HASH_SIZE);
 
 			bpf_ringbuf_submit(event, 0);
@@ -987,7 +1059,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
 		/* kernel integrity config */
 		struct integrity_data *integrity;
-		integrity = bpf_map_lookup_elem(&integrity_config, &key);
+		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 
 		if (id == READING_MODULE || id == READING_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
@@ -1110,7 +1182,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 		u32 key = 0;
 		struct integrity_data *integrity;
 
-		integrity = bpf_map_lookup_elem(&integrity_config, &key);
+		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 		if (id == LOADING_MODULE || id == LOADING_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
 				blocked = 1;
@@ -1208,7 +1280,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	/* dont interfere with previous hook denial */
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	/*
 	 * only care about executable mappings.
@@ -1374,7 +1446,14 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	mode = get_mode();
 
-	file = BPF_CORE_READ(vma, vm_file);
+	/*
+	 * Direct field access -- not BPF_CORE_READ -- keeps file as a
+	 * trusted PTR_TO_BTF_ID for the bpf_get_fsverity_digest kfunc
+	 * call chained through is_verity_allowed(). See the bprm->file
+	 * comment in lota_bprm_check_security for the verifier
+	 * reasoning behind avoiding the probe-read code path here.
+	 */
+	file = vma->vm_file;
 
 	if (!file) {
 		int anon_blocked = 0;
@@ -1516,7 +1595,7 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
 	/* dont interfere with previous hook denial */
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	inc_stat(STAT_PTRACE_ATTEMPTS);
 
@@ -1577,122 +1656,25 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	return 0;
 }
 
-/* ======================================================================
- * Tracing fallback: __ptrace_may_access
- *
- * process_vm_readv(2) / process_vm_writev(2) reach the same credential
- * check that PTRACE_ATTACH does, but through mm_access() ->
- * __ptrace_may_access() rather than through ptrace_attach(). Whether
- * that call chain re-enters the ptrace_access_check LSM hook depends on
- * the kernel configuration, so this fmod_ret hook enforces the same
- * "agent task / protected pid / block_ptrace in enforce mode" predicate
- * directly on the permission return value. It is part of the policy
- * contract, not a debug aid: the user-space loader (bpf_loader.c) treats
- * a failed attach as a hard startup error so the agent never runs with
- * a known process_vm_* gap.
- *
- * Return: original ret when allowed, -EPERM to deny.
- * ====================================================================== */
-SEC("fmod_ret/__ptrace_may_access")
-int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
-	     unsigned int mode, int ret)
-{
-	struct lota_exec_event *event = NULL;
-	u32 child_pid;
-	u32 lota_mode;
-	int blocked = 0;
-	int emit_event = 0;
-
-	(void)mode;
-
-	/*
-	 * A previous hook (LSM ptrace_access_check or another fmod_ret
-	 * program in the chain) already denied this call. Preserve that
-	 * decision instead of overriding it - inverting -EPERM to 0 would
-	 * defeat both Yama and the ptrace_access_check enforcement path
-	 * above.
-	 */
-	if (ret != 0)
-		return ret;
-
-	if (!child)
-		return 0;
-
-	lota_mode = get_mode();
-	child_pid = BPF_CORE_READ(child, pid);
-
-	/*
-	 * Identical predicate to lota_ptrace_access_check above. The two
-	 * hooks form one logical gate: ptrace_access_check covers the
-	 * canonical PTRACE_ATTACH / pidfd_getfd paths, and this fmod_ret
-	 * hook covers the chain that reaches __ptrace_may_access without
-	 * always re-entering the LSM (process_vm_readv/writev,
-	 * /proc/PID/mem read/write, process_madvise, kcmp, migrate_pages,
-	 * move_pages, get_robust_list). Both hooks share the same agent /
-	 * protected-pid / block_ptrace predicate so an attacker cannot
-	 * find a credential check the verifier sees but the agent does
-	 * not.
-	 */
-	if (is_lota_agent_task(child)) {
-		blocked = 1;
-	}
-
-	if (!blocked && lota_mode != LOTA_MODE_MAINTENANCE &&
-	    is_protected_task(child)) {
-		blocked = 1;
-	}
-
-	if (!blocked && lota_mode == LOTA_MODE_ENFORCE &&
-	    get_config(LOTA_CFG_BLOCK_PTRACE)) {
-		blocked = 1;
-	}
-
-	/*
-	 * Count every attempt, not only blocked ones. Pairs with
-	 * ptrace_access_check, so per-process attempt rate visible to the
-	 * forensics path even when call reaches mm via process_vm_* or
-	 * /proc/PID/mem and never hits the LSM hook.
-	 */
-	inc_stat(STAT_PTRACE_ATTEMPTS);
-
-	emit_event = should_emit_event(lota_mode, blocked);
-	if (emit_event) {
-		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-	}
-	if (event) {
-		__builtin_memset(event, 0, sizeof(*event));
-		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type =
-		    blocked ? LOTA_EVENT_PTRACE_BLOCKED : LOTA_EVENT_PTRACE;
-		event->tgid = bpf_get_current_pid_tgid() >> 32;
-		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-		event->target_pid = child_pid;
-
-		bpf_get_current_comm(event->comm, sizeof(event->comm));
-
-		{
-			const char *child_comm = BPF_CORE_READ(child, comm);
-			if (child_comm) {
-				bpf_probe_read_kernel_str(event->filename,
-							  LOTA_MAX_COMM_LEN,
-							  child_comm);
-			}
-		}
-
-		bpf_ringbuf_submit(event, 0);
-		inc_stat(STAT_EVENTS_SENT);
-	} else if (emit_event) {
-		inc_stat(STAT_RINGBUF_DROPS);
-	}
-
-	if (blocked) {
-		inc_stat(STAT_PTRACE_BLOCKED);
-		return -EPERM;
-	}
-
-	return 0;
-}
+/*
+ * Historical note: a SEC("fmod_ret/__ptrace_may_access") fallback used
+ * to live here to cover credential checks reached via
+ * process_vm_readv(2) / process_vm_writev(2) / /proc/PID/mem on kernels
+ * where mm_access() -> __ptrace_may_access() did not re-enter the LSM
+ * call chain. Linux 5.13+ routes every __ptrace_may_access() caller
+ * through security_ptrace_access_check() at the tail of that function,
+ * so the LSM hook (lota_ptrace_access_check above) covers the full
+ * surface and the fallback is redundant. Beyond 6.4 the kernel also
+ * marks __ptrace_may_access as non-attachable for fmod_ret programs
+ * ("__ptrace_may_access() is not modifiable"), so keeping the fallback
+ * would unconditionally fail bpf_object__load on stock Fedora 44 /
+ * hosts. The agent's kernel-floor gate already refuses to load BPF
+ * programs at all on kernels without LSM (lockdown + module-sig + IMA
+ * appraisal must be live), which is the same set of hosts where the
+ * LSM hook is missing, so the
+ * "process_vm_* gap on a kernel with LSM disabled" scenario never
+ * reaches this code.
+ */
 
 /* ======================================================================
  * LSM hook: task_kill
@@ -1837,7 +1819,7 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 
 	/* dont interfere with previous hook denial */
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	old_uid = BPF_CORE_READ(old, uid.val);
 	new_uid = BPF_CORE_READ(new, uid.val);
@@ -1884,7 +1866,7 @@ SEC("lsm/bpf_map")
 int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 {
 	if (ret != 0)
-		return ret;
+		return -EPERM;
 
 	if (!map)
 		return 0;
@@ -1918,19 +1900,33 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 	(void)cmd;
 
 	(void)size;
+	(void)attr;
 
 	/*
-	 * Unlike most of other LSM programs, the in-kernel LSM hook prototype
-	 * for bpf() does not include a 'ret' argument.
+	 * Unlike most LSM programs, the in-kernel LSM hook prototype for
+	 * bpf() does not include a 'ret' argument; the 'ret' parameter
+	 * here is the BPF trampoline's current return value across chained
+	 * LSM programs.
 	 *
-	 * The 'ret' parameter here is the BPF trampoline's current return value
-	 * and exists to support chaining multiple BPF LSM programs attached to
-	 * the same hook. If a previous program already denied, do not override
-	 * it.
+	 * Returning the trampoline 'ret' verbatim (`return ret;`) is
+	 * rejected by the verifier when this hook has no other code paths:
+	 * clang collapses the body to `r0 = *(ctx + 24)` and the verifier
+	 * leaves R0 as an unconstrained scalar
+	 *   "At program exit the register R0 has smin=0 smax=4294967295,
+	 *    should have been in [-4095, 0]".
+	 * A clamp written in C
+	 *   if (r > 0) r = 0; if (r < -4095) r = -EPERM;
+	 * still goes through alu32 ops and zero-extends -1 into
+	 * 0x00000000FFFFFFFF (umax=4294967295), so the same rejection
+	 * fires.
+	 *
+	 * The hook is non-invasive: it only needs to preserve a prior
+	 * denial as a denial, not the exact errno of the upstream hook.
+	 * Map both branches to compile-time constants so the verifier
+	 * sees R0 as either 0 or -EPERM and trivially bounds it inside
+	 * [-MAX_ERRNO, 0].
 	 */
 	if (ret != 0)
-		return ret;
-
-	(void)attr;
+		return -EPERM;
 	return 0;
 }

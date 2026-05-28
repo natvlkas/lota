@@ -30,8 +30,6 @@
 #include "journal.h"
 #include "policy_sign.h"
 
-#define BPF_OBJECT_MAX_FILE_SIZE (4 * 1024 * 1024)
-
 #ifndef EAUTH
 #define EAUTH 80
 #endif
@@ -632,7 +630,7 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 		goto out;
 	}
 
-	if ((size_t)fsize > BPF_OBJECT_MAX_FILE_SIZE) {
+	if ((size_t)fsize > LOTA_MAX_SIGNED_OBJECT_SIZE) {
 		ret = -EFBIG;
 		goto out;
 	}
@@ -836,7 +834,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Integrity config map */
 	ctx->integrity_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
+	    bpf_object__find_map_fd_by_name(ctx->obj, "integrity_cfg");
 	if (ctx->integrity_fd >= 0) {
 		err = harden_fd_cloexec(ctx->integrity_fd,
 					"integrity_config map");
@@ -912,7 +910,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity_digest");
+	    bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
 	if (ctx->allow_verity_digest_fd < 0) {
 		ctx->allow_verity_digest_fd = -1; /* optional map */
 	} else {
@@ -958,36 +956,20 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	/*
 	 * Attach all supported runtime enforcement programs.
 	 *
-	 * Two program classes go live here:
+	 * BPF_PROG_TYPE_LSM hooks carry the primary policy gates
+	 * (bprm_check_security, kernel_read_file, kernel_load_data,
+	 * mmap_file, file_mprotect, ptrace_access_check, task_kill,
+	 * task_free, task_fix_setuid, bpf_map, bpf, ...). These are the
+	 * authoritative deny points for execve / module load / mprotect /
+	 * ptrace_attach / signal delivery / BPF map writes.
 	 *
-	 *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
-	 *     (bprm_check_security, kernel_read_file, kernel_load_data,
-	 *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
-	 *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are
-	 *     the authoritative deny points for execve / module load /
-	 *     mprotect / ptrace_attach / signal delivery / BPF map writes.
-	 *
-	 *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
-	 *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback).
-	 *     The LSM ptrace_access_check hook covers PTRACE_ATTACH and
-	 *     friends, but process_vm_readv/writev, /proc/PID/mem,
-	 *     process_madvise, kcmp, migrate_pages, move_pages and
-	 *     get_robust_list reach the same credential check through
-	 *     mm_access() -> __ptrace_may_access() without always
-	 *     re-entering the LSM call chain. The fmod_ret hook enforces
-	 *     the identical "agent task / protected pid / block_ptrace in
-	 *     enforce mode" predicate on the permission return value.
-	 *
-	 * The required-programs table catches a partial BPF object or a
-	 * kernel that silently refuses one of the program types (e.g.
-	 * fmod_ret on __ptrace_may_access without
-	 * CONFIG_FUNCTION_ERROR_INJECTION). A missing required program
-	 * surfaces as -ENOENT here so the daemon exits before
-	 * sd_notify(READY=1).
+	 * The required-programs table catches a partial BPF object that
+	 * silently dropped a critical LSM hook during compilation; a
+	 * missing required program surfaces as -ENOENT here so the daemon
+	 * exits before sd_notify(READY=1).
 	 */
 	static const char *const required_programs[] = {
 	    "lota_ptrace_access_check",
-	    "lota_ptrace_may_access_fallback",
 	};
 	const size_t required_count =
 	    sizeof(required_programs) / sizeof(required_programs[0]);
