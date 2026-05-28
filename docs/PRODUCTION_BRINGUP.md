@@ -156,8 +156,8 @@ The most common failures, with the gate that produced them:
 - `Kernel anti-tamper prerequisites are not satisfied`. Check
   `cat /sys/kernel/security/lockdown` (must show `[integrity]` or
   `[confidentiality]`), `cat /sys/module/module/parameters/sig_enforce`
-  (must be `Y`), and `cat /sys/kernel/security/ima/policy` (must
-  contain `appraise`).
+  (must be `Y`), and `grep -oE 'ima_appraise=\w+' /proc/cmdline`
+  (must report `enforce` or `fix`).
 - `Agent binary is not fs-verity protected`. Re-run `fsverity enable`
   on `/usr/bin/lota-agent`. The verity merkle root is bound to the
   inode, so re-installs invalidate the bit; the bring-up script
