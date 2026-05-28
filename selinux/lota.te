@@ -244,6 +244,26 @@ gen_require(`
 allow lota_agent_t pidfs_t:filesystem getattr;
 
 #
+# Type=notify in systemd/lota-agent.service requires the agent to
+# call sd_notify(READY=1) before TimeoutStartSec elapses, otherwise
+# systemd kills the unit and the daemon enters a restart loop even
+# though the agent reaches steady state (BPF attached, ring buffer
+# consuming). libsystemd 259 reaches the notify path via:
+#   - connect(2) on the AF_UNIX socket under
+#     /run/systemd/notify (init_var_run_t, sock_file class);
+#   - read(2) on auxiliary regular files in /run/systemd/
+#     (init_var_run_t, file class) -- e.g.
+#     /run/systemd/userdb/io.systemd.NamespaceResource that
+#     sd_notify resolves while building the pidfd payload.
+# init_use_notify() covers the socket path; init_read_pid_files()
+# covers the regular file reads. Without both, sd_notify fails
+# silently and the unit shows "Failed to start ... timeout was
+# exceeded" even though the journal proves the daemon is live.
+#
+init_use_notify(lota_agent_t)
+init_read_pid_files(lota_agent_t)
+
+#
 # Network
 #
 
