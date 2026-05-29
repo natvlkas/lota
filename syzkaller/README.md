@@ -82,8 +82,10 @@ make
 ### 2. Compile the kernel
 
 `BPF_LSM` is mandatory -- without it the harness cannot attach and the
-whole exercise is pointless. KASAN + KCOV give the bug detection and
-coverage feedback.
+whole exercise is pointless. `FUNCTION_TRACER`/`DYNAMIC_FTRACE` are also
+mandatory on x86 because BPF trampolines patch the function-entry NOPs;
+without them LSM attach can fail with `-EBUSY`. KASAN + KCOV give the bug
+detection and coverage feedback.
 
 ```bash
 wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.10.tar.xz
@@ -97,7 +99,8 @@ make defconfig
     -e KALLSYMS -e KALLSYMS_ALL \
     -e NAMESPACES -e UTS_NS -e IPC_NS -e PID_NS -e NET_NS -e USER_NS \
     -e CGROUPS \
-    -e BPF_SYSCALL -e BPF_LSM -e DEBUG_INFO_BTF \
+    -e BPF_SYSCALL -e BPF_JIT -e BPF_LSM -e DEBUG_INFO_BTF \
+    -e FUNCTION_TRACER -e DYNAMIC_FTRACE \
     -e MODULES -e MODULE_UNLOAD \
     -e VIRTIO_NET -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_CONSOLE
 make olddefconfig
@@ -153,9 +156,20 @@ cd syzkaller/repo
 bin/syz-manager -config ../lota.cfg
 ```
 
-Dashboard at `http://127.0.0.1:56741`. Coverage should climb into the
-LOTA hook functions (`lota_bprm_check_security`, `lota_task_kill`, ...);
-if it does not, the harness is not attaching -- check the guest journal.
+Dashboard at `http://<host-lan-ip>:56741`; `lota.cfg.example` binds
+`0.0.0.0:56741` so the UI is reachable from another machine on the
+same LAN. Coverage should climb into the LOTA hook functions
+(`lota_bprm_check_security`, `lota_task_kill`, ...); if it does not,
+the harness is not attaching -- check the guest journal.
+
+`syz-manager` sends crash mail through a `mailx` binary when
+`email_addrs` is set. On hosts that use `msmtp` directly, install the
+wrapper and start the manager with that directory in `PATH`:
+
+```bash
+install -D -m 0755 syzkaller/mailx-msmtp-wrapper.sh /var/tmp/lota-syz/bin/mailx
+PATH=/var/tmp/lota-syz/bin:$PATH bin/syz-manager -config ../lota.cfg
+```
 
 ## Leaving it running (host systemd)
 

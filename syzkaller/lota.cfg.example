@@ -1,7 +1,7 @@
 {
   "target": "linux/amd64",
   "name": "lota-fuzzer",
-  "http": "127.0.0.1:56741",
+  "http": "0.0.0.0:56741",
   "workdir": "./workdir",
   "kernel_obj": "/path/to/linux-build-dir",
   "image": "/path/to/trixie.img",
@@ -90,6 +90,6 @@
 
   "suppressions": [],
   "email_addrs": [
-    "email@example.com"
+    "swilczek.lx@gmail.com"
   ]
 }

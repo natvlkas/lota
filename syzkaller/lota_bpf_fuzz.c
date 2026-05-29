@@ -50,10 +50,38 @@ struct protected_pid_entry {
 
 static volatile sig_atomic_t g_stop;
 
+static int parse_u64_dec(const char *str, uint64_t *out)
+{
+	uint64_t val = 0;
+
+	if (!str || !*str)
+		return -EINVAL;
+
+	for (const char *p = str; *p; p++) {
+		uint64_t digit;
+
+		if (*p < '0' || *p > '9')
+			return -EINVAL;
+		digit = (uint64_t)(*p - '0');
+		if (val > (UINT64_MAX - digit) / 10)
+			return -ERANGE;
+		val = val * 10 + digit;
+	}
+
+	*out = val;
+	return 0;
+}
+
 static void on_signal(int sig)
 {
 	(void)sig;
 	g_stop = 1;
+}
+
+static void kill_victims(pid_t *victims, int nvictims)
+{
+	for (int i = 0; i < nvictims; i++)
+		kill(victims[i], SIGKILL);
 }
 
 /*
@@ -89,8 +117,9 @@ static int read_start_ticks(uint32_t pid, uint64_t *out)
 	for (char *tok = strtok_r(field, " ", &saveptr); tok;
 	     tok = strtok_r(NULL, " ", &saveptr), idx++) {
 		if (idx == 22) {
-			*out = strtoull(tok, NULL, 10);
-			return *out ? 0 : -EINVAL;
+			int ret = parse_u64_dec(tok, out);
+
+			return ret < 0 || !*out ? -EINVAL : 0;
 		}
 	}
 	return -EINVAL;
@@ -133,31 +162,15 @@ int main(int argc, char *argv[])
 	int attached = 0;
 	pid_t victims[MAX_VICTIMS];
 	int nvictims = 0;
+	int ret = 1;
 
 	signal(SIGTERM, on_signal);
 	signal(SIGINT, on_signal);
 
-	obj = bpf_object__open_file(obj_path, NULL);
-	if (libbpf_get_error(obj)) {
-		fprintf(stderr, "open %s failed\n", obj_path);
-		return 1;
-	}
-	if (bpf_object__load(obj)) {
-		fprintf(stderr, "load failed: %s\n", strerror(errno));
-		return 1;
-	}
-
-	cfg_fd = bpf_object__find_map_fd_by_name(obj, "lota_config");
-	pp_fd = bpf_object__find_map_fd_by_name(obj, "protected_pids");
-	if (cfg_fd < 0 || pp_fd < 0) {
-		fprintf(stderr, "required maps not found\n");
-		return 1;
-	}
-
 	/*
-	 * Spawn idle victims before attach so we can register them while
-	 * the bpf_map hook is still inactive. They give the fuzzer live
-	 * protected targets for the ptrace / task_kill / mprotect gates.
+	 * Spawn idle victims before opening/loading the BPF object so children
+	 * do not inherit BPF program/map FDs. Their PIDs are added to the maps
+	 * before attach below.
 	 */
 	for (int i = 0; i < MAX_VICTIMS; i++) {
 		pid_t p = fork();
@@ -169,6 +182,23 @@ int main(int argc, char *argv[])
 		}
 		if (p > 0)
 			victims[nvictims++] = p;
+	}
+
+	obj = bpf_object__open_file(obj_path, NULL);
+	if (libbpf_get_error(obj)) {
+		fprintf(stderr, "open %s failed\n", obj_path);
+		goto out_victims;
+	}
+	if (bpf_object__load(obj)) {
+		fprintf(stderr, "load failed: %s\n", strerror(errno));
+		goto out_obj;
+	}
+
+	cfg_fd = bpf_object__find_map_fd_by_name(obj, "lota_config");
+	pp_fd = bpf_object__find_map_fd_by_name(obj, "protected_pids");
+	if (cfg_fd < 0 || pp_fd < 0) {
+		fprintf(stderr, "required maps not found\n");
+		goto out_obj;
 	}
 
 	/*
@@ -190,16 +220,25 @@ int main(int argc, char *argv[])
 	protect_pid(pp_fd, (uint32_t)getpid());
 	for (int i = 0; i < nvictims; i++)
 		protect_pid(pp_fd, (uint32_t)victims[i]);
-	for (int i = 2; i < argc; i++)
-		protect_pid(pp_fd, (uint32_t)strtoul(argv[i], NULL, 10));
+	for (int i = 2; i < argc; i++) {
+		uint64_t pid;
+
+		if (parse_u64_dec(argv[i], &pid) < 0 || !pid ||
+		    pid > UINT32_MAX) {
+			fprintf(stderr, "invalid protected pid: %s\n", argv[i]);
+			goto out_obj;
+		}
+		protect_pid(pp_fd, (uint32_t)pid);
+	}
 
 	bpf_object__for_each_program(prog, obj)
 	{
 		struct bpf_link *link = bpf_program__attach(prog);
+		long err = libbpf_get_error(link);
 
-		if (libbpf_get_error(link)) {
+		if (err) {
 			fprintf(stderr, "attach %s failed: %s\n",
-				bpf_program__name(prog), strerror(errno));
+				bpf_program__name(prog), strerror((int)-err));
 			continue;
 		}
 		if (attached < MAX_LINKS)
@@ -209,7 +248,7 @@ int main(int argc, char *argv[])
 	if (!attached) {
 		fprintf(stderr,
 			"no LSM programs attached (need lsm=...,bpf)\n");
-		return 1;
+		goto out_obj;
 	}
 
 	printf("lota-bpf-fuzz: %d hooks attached, %d victims protected; "
@@ -223,6 +262,8 @@ int main(int argc, char *argv[])
 	while (!g_stop)
 		pause();
 
+	ret = 0;
+
 	/*
 	 * Detach the hooks before reaping the victims: while task_kill is
 	 * live it blocks signals to the protected victims (this loader is
@@ -230,7 +271,9 @@ int main(int argc, char *argv[])
 	 */
 	for (int i = 0; i < attached && i < MAX_LINKS; i++)
 		bpf_link__destroy(links[i]);
-	for (int i = 0; i < nvictims; i++)
-		kill(victims[i], SIGKILL);
-	return 0;
+out_obj:
+	bpf_object__close(obj);
+out_victims:
+	kill_victims(victims, nvictims);
+	return ret;
 }
