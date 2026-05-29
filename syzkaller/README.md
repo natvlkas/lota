@@ -46,7 +46,7 @@ reaches every stage of the kernel surface:
 | `bprm_check_security`               | `execve`, `execveat` |
 | `mmap_file`                         | `mmap` (PROT_EXEC of a file fd), `memfd_create`+`mmap` |
 | `file_mprotect`                     | `mprotect` (to PROT_EXEC) |
-| `kernel_read_file`                  | `finit_module`, `kexec_file_load` |
+| `kernel_read_file`                  | `finit_module` |
 | `kernel_load_data`                  | `init_module`, `kexec_load` |
 | `ptrace_access_check`               | `ptrace(PTRACE_ATTACH/SEIZE)` |
 | `task_kill`                         | `kill`, `tgkill`, `pidfd_send_signal` |
