@@ -107,9 +107,17 @@ fi
 # exits non-zero with "Operation not permitted".
 #
 note "stage 2: ptrace_access_check (external attach to protected PID)"
-"$VICTIM_BIN" --sleep \
+# Feed the victim's stdin from a FIFO we keep open. The task_kill gate
+# rejects every foreign signal to a protected PID (stage 3 asserts
+# exactly that), so kill -TERM can never tear the victim down. Closing
+# our write end sends EOF instead, which the victim treats as the
+# teardown request.
+VICTIM_FIFO=$(mktemp -u /tmp/bpf-gates-victim.fifo.XXXXXX)
+mkfifo "$VICTIM_FIFO"
+"$VICTIM_BIN" --sleep <"$VICTIM_FIFO" \
 	>/tmp/bpf-gates-victim.log 2>&1 &
 VICTIM_PID=$!
+exec {VICTIM_IN}>"$VICTIM_FIFO"
 
 # wait for the victim's self-register banner so we don't race the BPF map
 for _ in $(seq 1 50); do
@@ -162,9 +170,13 @@ else
 	fi
 fi
 
-# tear down the long-lived victim
-kill -TERM "$VICTIM_PID" 2>/dev/null || true
+# tear down the long-lived victim: close its stdin so read() returns
+# EOF and it exits on its own. A signal would be rejected by the very
+# gate stage 3 just verified, so this is the only foreign-task path
+# that can actually stop a protected PID.
+exec {VICTIM_IN}>&-
 wait "$VICTIM_PID" 2>/dev/null || true
+rm -f "$VICTIM_FIFO"
 
 echo ""
 note "summary: ${PASS} passed, ${FAIL} failed"

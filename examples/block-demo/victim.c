@@ -23,6 +23,7 @@
  */
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -72,11 +73,20 @@ int main(int argc, char *argv[])
 	/*
 	 * --sleep keeps the protected task alive for the
 	 * ptrace_access_check and task_kill integration stages.
-	 * pause() returns only on signal, which the test harness
-	 * sends with kill -TERM after the gates have been exercised.
+	 * Block on stdin, not a signal: the task_kill gate rejects
+	 * every foreign-task signal to a protected PID (that is the
+	 * property the task_kill stage asserts), so a kill -TERM from
+	 * the harness can never reach this process. The harness closes
+	 * our stdin to request teardown; read() then returns EOF and we
+	 * exit, letting lota_task_free reap the protected-PID entry.
 	 */
 	if (sleep_mode) {
-		pause();
+		char c;
+		ssize_t n;
+
+		do {
+			n = read(STDIN_FILENO, &c, 1);
+		} while (n > 0 || (n < 0 && errno == EINTR));
 		lota_disconnect(client);
 		return 0;
 	}
