@@ -30,6 +30,15 @@ static void test_result(const char *name, int passed, const char *detail)
 	}
 }
 
+/* No-op subscription callback. File scope: clang rejects the nested
+ * function definition that GCC accepts as an extension. */
+static void dummy_cb(const struct lota_status *s, uint32_t e, void *u)
+{
+	(void)s;
+	(void)e;
+	(void)u;
+}
+
 int main(void)
 {
 	struct lota_client *client;
@@ -185,14 +194,6 @@ int main(void)
 	client = lota_connect();
 	if (client) {
 		ret = lota_subscribe(client, LOTA_EVENT_STATUS, NULL, NULL);
-
-		/* dummy callback */
-		void dummy_cb(const struct lota_status *s, uint32_t e, void *u)
-		{
-			(void)s;
-			(void)e;
-			(void)u;
-		}
 
 		ret = lota_subscribe(client, LOTA_EVENT_STATUS, dummy_cb, NULL);
 		test_result("lota_subscribe()", ret == 0, lota_strerror(ret));

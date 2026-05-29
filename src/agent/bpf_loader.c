@@ -496,12 +496,19 @@ static int agent_self_fsverity_enabled(void)
 	if (fd < 0)
 		return -errno;
 
-	struct {
+	/*
+	 * fsverity_digest ends in a flexible array; back it with a buffer
+	 * sized for the largest digest. The struct is the last union member
+	 * so the flexible array sits at the end, which clang -Werror
+	 * requires (gcc tolerates the field-not-at-end GNU extension).
+	 */
+	union {
+		uint8_t buf[sizeof(struct fsverity_digest) +
+			    LOTA_VERITY_DIGEST_MAX_SIZE];
 		struct fsverity_digest hdr;
-		uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 	} d;
 	memset(&d, 0, sizeof(d));
-	d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+	d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
 
 	int ret = 0;
 	if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
@@ -1319,13 +1326,14 @@ static int measure_fsverity_digest(const char *path,
 
 	/* fsverity_digest has a flexible array; reserve max supported size */
 	{
-		struct {
+		union {
+			uint8_t buf[sizeof(struct fsverity_digest) +
+				    LOTA_VERITY_DIGEST_MAX_SIZE];
 			struct fsverity_digest hdr;
-			uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 		} d;
 
 		memset(&d, 0, sizeof(d));
-		d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+		d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
 
 		if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
 			ret = -errno;
@@ -1340,7 +1348,7 @@ static int measure_fsverity_digest(const char *path,
 
 		memset(out, 0, sizeof(*out));
 		out->len = d.hdr.digest_size;
-		memcpy(out->digest, d.digest, (size_t)out->len);
+		memcpy(out->digest, d.hdr.digest, (size_t)out->len);
 	}
 
 	close(fd);

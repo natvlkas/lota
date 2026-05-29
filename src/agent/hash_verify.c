@@ -48,16 +48,24 @@ void hash_verify_cleanup(struct hash_verify_ctx *ctx)
  */
 static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE])
 {
-	struct {
+	/*
+	 * fsverity_digest ends in a flexible array; back it with a buffer
+	 * sized for the largest digest. The struct is the last union member
+	 * so the flexible array sits at the end, which clang requires (gcc
+	 * accepts the field-not-at-end GNU extension, clang -Werror rejects
+	 * it).
+	 */
+	union {
+		uint8_t buf[sizeof(struct fsverity_digest) +
+			    LOTA_VERITY_DIGEST_MAX_SIZE];
 		struct fsverity_digest hdr;
-		uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 	} d;
 
 	if (fd < 0 || !sha256_out)
 		return -EINVAL;
 
 	memset(&d, 0, sizeof(d));
-	d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+	d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
 
 	if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
 		int err = errno;
@@ -71,7 +79,7 @@ static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE])
 	    d.hdr.digest_size > LOTA_VERITY_DIGEST_MAX_SIZE)
 		return -EPROTO;
 
-	memcpy(sha256_out, d.digest, LOTA_HASH_SIZE);
+	memcpy(sha256_out, d.hdr.digest, LOTA_HASH_SIZE);
 	return 0;
 }
 
