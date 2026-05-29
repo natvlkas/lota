@@ -61,6 +61,17 @@ CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
 
+# Optional sanitizer build for the host C side (agent, SDK, tests).
+# Set SANITIZE=address,undefined to rebuild every host object under
+# ASan/UBSan; CI uses this to surface memory and UB defects the normal
+# hardened build cannot see. BPF objects use BPF_CFLAGS and stay
+# untouched. -fno-sanitize-recover makes a finding abort the process so
+# a CI run fails loudly instead of logging and continuing.
+ifdef SANITIZE
+CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+CFLAGS += -fno-sanitize-recover=all
+endif
+
 # Version string injected into the server-side SDK at build time.
 LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
 SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
@@ -71,6 +82,10 @@ HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 # Agent link flags
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
 LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
+
+ifdef SANITIZE
+LDFLAGS += -fsanitize=$(SANITIZE)
+endif
 
 # Detect architecture from compiler if not specified
 ifndef ARCH
@@ -252,7 +267,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -609,6 +624,30 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "Start agent in another terminal: sudo $(BUILD_DIR)/lota-agent --test-ipc"
 	@echo "Then run: $(BUILD_DIR)/test_sdk_ipc"
 
+# Memcheck the standalone unit tests. test_hardening is excluded on
+# purpose: it probes seccomp (syscall 317, which valgrind cannot model)
+# and issues a mount(2) with a deliberately invalid source pointer to
+# prove the call reached the kernel rather than being filtered. Both
+# are reported as errors by valgrind by design, so AddressSanitizer
+# (make SANITIZE=address,undefined test-unit) covers that test instead.
+VALGRIND ?= valgrind
+VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
+	--errors-for-leak-kinds=definite,indirect --track-origins=yes -q
+VALGRIND_UNIT_BINS := \
+	test_hash_verify test_dbus test_systemd test_packaging \
+	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
+	test_daemon_loop test_config test_subscribe test_policy_sign \
+	test_policy_export test_aik_rotation test_initramfs_lock \
+	test_server_sdk test_anticheat test_loader_symbols
+
+valgrind-unit: $(TEST_BINS)
+	@echo "=== Running unit tests under valgrind memcheck ==="
+	@for b in $(VALGRIND_UNIT_BINS); do \
+		echo "--> $$b"; \
+		$(VALGRIND) $(VALGRIND_FLAGS) $(BUILD_DIR)/$$b || exit 1; \
+	done
+	@echo "valgrind-unit: clean"
+
 # Fuzzing
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
@@ -674,6 +713,9 @@ help:
 	@echo "  test-unit        Same as test; builds required artifacts first"
 	@echo "  test-sdk         Print SDK integration-test instructions"
 	@echo "  test-hardware    Run hardware tests against local IOMMU/TPM (root required)"
+	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
+	@echo ""
+	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""
 	@echo "Fuzz targets:"
 	@echo "  fuzz-all         Build every fuzz target"
