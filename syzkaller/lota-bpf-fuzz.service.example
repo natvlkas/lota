@@ -1,0 +1,38 @@
+# GUEST-side unit. Bake this into the syzkaller VM image (not the host).
+# It starts the LOTA BPF LSM bring-up harness at boot so that, by the
+# time syz-executor begins issuing syscalls, every LOTA LSM hook is
+# attached in enforce mode. Without it the guest runs a bare kernel and
+# the fuzzer exercises no LOTA code.
+#
+# Install inside the image:
+#   cp lota_bpf_fuzz            /usr/local/bin/
+#   cp lota_lsm.bpf.o           /usr/lib/lota/
+#   cp lota-bpf-fuzz.service.example \
+#       /etc/systemd/system/lota-bpf-fuzz.service
+#   systemctl enable lota-bpf-fuzz.service
+#
+# The kernel must carry bpf in its active LSM list (lota.cfg cmdline
+# already sets lsm=...,bpf) or program attach fails.
+
+[Unit]
+Description=LOTA BPF LSM fuzz bring-up
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lota_bpf_fuzz /usr/lib/lota/lota_lsm.bpf.o
+Restart=always
+RestartSec=2
+
+# LSM program attach needs these; map memory needs MEMLOCK unbounded.
+AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_MAC_ADMIN CAP_PERFMON
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_MAC_ADMIN CAP_PERFMON
+LimitMEMLOCK=infinity
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

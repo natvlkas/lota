@@ -62,9 +62,25 @@
     "ptrace$peek",
     "kill",
     "tgkill",
+    "pidfd_open",
+    "pidfd_send_signal",
 
     "kexec_load",
+    "kexec_file_load",
+    "init_module",
+    "finit_module",
+    "delete_module",
 
+    "setuid",
+    "setreuid",
+    "setresuid",
+
+    "mount",
+    "move_mount",
+    "fsopen",
+    "fsmount",
+
+    "memfd_create",
     "mmap",
     "mprotect",
     "execve",

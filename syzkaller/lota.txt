@@ -1,4 +1,11 @@
-# LOTA IPC Syzlang profile
+# LOTA IPC Syzlang profile -- MODE B (see syzkaller/README.md).
+#
+# This profile only does anything when the real lota-agent is running
+# in the guest and listening on /run/lota/lota.sock. The default
+# kernel-surface fuzzing (MODE A) uses the lota_bpf_fuzz bring-up
+# harness plus plain syscalls and does not need this file. Enable it
+# only after provisioning the full agent (TPM + attestation) in the
+# image; otherwise connect$lota fails and every call below is a no-op.
 #
 # Target: src/agent/ipc.c request parsing and command dispatch.
 # Socket: /run/lota/lota.sock

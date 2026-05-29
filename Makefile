@@ -267,7 +267,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -690,6 +690,17 @@ fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
 
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
 
+# syzkaller bring-up harness: loads the production BPF LSM object,
+# attaches every hook in enforce mode, and idles so syz-executor's
+# syscalls run through the LOTA kernel surface. See syzkaller/README.md.
+SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
+
+syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
+
+$(SYZ_FUZZ_LOADER): syzkaller/lota_bpf_fuzz.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -lbpf
+	@echo "Built: $@"
+
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
 	@echo ""
@@ -723,6 +734,7 @@ help:
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
 	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
+	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
