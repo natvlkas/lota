@@ -321,3 +321,40 @@ jobs:
 
       - name: Memcheck unit tests
         run: make valgrind-unit
+
+  sanitizers-fedora:
+    name: asan-ubsan-valgrind-fedora-41
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:41
+    steps:
+      - name: Install Fedora build dependencies
+        # libasan/libubsan ship the gcc sanitizer runtimes on Fedora;
+        # they are separate packages from gcc itself. valgrind covers
+        # the non-sanitized memcheck pass.
+        run: |
+          dnf -y install \
+            git make gcc clang llvm pkgconf-pkg-config \
+            libbpf-devel elfutils-libelf-devel zlib-devel \
+            tpm2-tss-devel \
+            openssl-devel systemd-devel libseccomp-devel \
+            dbus-devel \
+            golang libasan libubsan valgrind
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build and run unit tests under ASan + UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: make SANITIZE=address,undefined test-unit
+
+      - name: Memcheck unit tests
+        run: |
+          make clean
+          make all
+          make valgrind-unit
