@@ -19,6 +19,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "../../include/lota.h"
+
 /* Default config file path */
 #define LOTA_CONFIG_DEFAULT_PATH "/etc/lota/lota.conf"
 
@@ -80,8 +82,8 @@ struct lota_config {
 	char allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
 	int allow_verity_count;
 
-	/* Protected PIDs */
-	uint32_t *protect_pids;
+	/* Protected PIDs: inline, capped at LOTA_MAX_PROTECTED_PIDS */
+	uint32_t protect_pids[LOTA_MAX_PROTECTED_PIDS];
 	int protect_pid_count;
 
 	/*

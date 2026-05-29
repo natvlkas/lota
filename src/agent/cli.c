@@ -625,20 +625,15 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 		}
 	}
 
-	free(cfg->protect_pids);
-	cfg->protect_pids = NULL;
 	cfg->protect_pid_count = 0;
 	if (g_protect_pid_count > 0) {
-		cfg->protect_pids =
-		    malloc(g_protect_pid_count * sizeof(uint32_t));
-		if (!cfg->protect_pids) {
-			fprintf(stderr, "Warning: failed to allocate "
-					"protect_pid list for dump-config\n");
-		} else {
-			memcpy(cfg->protect_pids, g_protect_pids,
-			       g_protect_pid_count * sizeof(uint32_t));
-			cfg->protect_pid_count = g_protect_pid_count;
-		}
+		int n = g_protect_pid_count;
+
+		if (n > LOTA_MAX_PROTECTED_PIDS)
+			n = LOTA_MAX_PROTECTED_PIDS;
+		memcpy(cfg->protect_pids, g_protect_pids,
+		       (size_t)n * sizeof(uint32_t));
+		cfg->protect_pid_count = n;
 	}
 
 	config_dump(cfg, stdout);

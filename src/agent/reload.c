@@ -492,20 +492,15 @@ static void sync_config_snapshot(
 	/* allow_verity is applied only at startup; keep existing snapshot */
 	memcpy(cfg->log_level, new_cfg->log_level, sizeof(cfg->log_level));
 
-	free(cfg->protect_pids);
-	cfg->protect_pids = NULL;
 	cfg->protect_pid_count = 0;
 	if (protect_pid_count > 0) {
-		cfg->protect_pids =
-		    malloc((size_t)protect_pid_count * sizeof(uint32_t));
-		if (!cfg->protect_pids) {
-			lota_warn(
-			    "Failed to update config snapshot protected PIDs");
-		} else {
-			memcpy(cfg->protect_pids, protect_pids,
-			       (size_t)protect_pid_count * sizeof(uint32_t));
-			cfg->protect_pid_count = protect_pid_count;
-		}
+		int n = protect_pid_count;
+
+		if (n > LOTA_MAX_PROTECTED_PIDS)
+			n = LOTA_MAX_PROTECTED_PIDS;
+		memcpy(cfg->protect_pids, protect_pids,
+		       (size_t)n * sizeof(uint32_t));
+		cfg->protect_pid_count = n;
 	}
 }
 
@@ -551,7 +546,6 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	if (reload_ret < 0) {
 		lota_err("Failed to reload config: %s", strerror(-reload_ret));
 		close(cfg_fd);
-		free(new_cfg.protect_pids);
 		sdnotify_ready();
 		return reload_ret;
 	}
@@ -565,7 +559,6 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			lota_err("Unauthorized ENFORCE mode downgrade request "
 				 "ignored");
 			close(cfg_fd);
-			free(new_cfg.protect_pids);
 			sdnotify_ready();
 			return auth_ret;
 		}
@@ -626,8 +619,6 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			     *block_ptrace, *strict_modules, *block_anon_exec,
 			     *protect_pids, *protect_pid_count, trust_libs,
 			     *trust_lib_count);
-
-	free(new_cfg.protect_pids);
 
 	sdnotify_ready();
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(*mode));
