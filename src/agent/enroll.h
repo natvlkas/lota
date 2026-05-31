@@ -62,4 +62,12 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
 		 const char *out_cert_path);
 
+/*
+ * Top-level --enroll handler: bring up the TPM, provision the AIK, run
+ * one enrollment against the CA, and store the issued certificate at
+ * LOTA_AIK_CERT_PATH. Returns 0 on success, negative errno on failure.
+ */
+int do_enroll(const char *server, int port, const char *ca_cert,
+	      int skip_verify, const uint8_t *pin);
+
 #endif /* LOTA_AGENT_ENROLL_H */

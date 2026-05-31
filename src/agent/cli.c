@@ -216,6 +216,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"export-policy", no_argument, 0, 'E'},
 	    {"attest", no_argument, 0, 'a'},
 	    {"attest-interval", required_argument, 0, 'I'},
+	    {"enroll", no_argument, 0, 1004},
+	    {"ca-server", required_argument, 0, 1005},
+	    {"ca-port", required_argument, 0, 1006},
 	    {"server", required_argument, 0, 's'},
 	    {"port", required_argument, 0, 'p'},
 	    {"ca-cert", required_argument, 0, 'C'},
@@ -250,6 +253,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	opts->server_addr = "localhost";
 	opts->server_port = LOTA_CLI_DEFAULT_VERIFIER_PORT;
 	opts->aik_ttl = LOTA_CLI_DEFAULT_AIK_TTL;
+	opts->ca_port = LOTA_CLI_DEFAULT_CA_PORT;
 	opts->config_file_mode = -1;
 
 	/* Pre-scan for --config so config_load() runs before option defaults.
@@ -331,6 +335,22 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		case 'C':
 			opts->ca_cert_path = optarg;
 			break;
+		case 1004:
+			opts->enroll_flag = 1;
+			break;
+		case 1005:
+			opts->ca_server = optarg;
+			break;
+		case 1006: {
+			long v;
+			if (safe_parse_long(optarg, &v) < 0 || v <= 0 ||
+			    v > 65535) {
+				fprintf(stderr, "Invalid CA port: %s\n",
+					optarg);
+				return 1;
+			}
+			opts->ca_port = (int)v;
+		} break;
 		case 'K':
 			opts->no_verify_tls = 1;
 			break;

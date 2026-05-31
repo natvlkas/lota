@@ -23,6 +23,7 @@
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define LOTA_CLI_DEFAULT_VERIFIER_PORT 8443
+#define LOTA_CLI_DEFAULT_CA_PORT 8444
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 struct cli_options {
@@ -35,6 +36,7 @@ struct cli_options {
 	int dump_config_flag;
 	int export_policy_flag;
 	int attest_flag;
+	int enroll_flag;
 	const char *gen_signing_key_prefix;
 	const char *sign_policy_file;
 	const char *verify_policy_file;
@@ -63,6 +65,10 @@ struct cli_options {
 	bool server_overridden;
 	int server_port;
 	const char *ca_cert_path;
+
+	/* attestation-CA enrollment endpoint (--enroll) */
+	const char *ca_server;
+	int ca_port;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;

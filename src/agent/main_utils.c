@@ -12,6 +12,7 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+#include "cli.h"
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
@@ -74,6 +75,15 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "system\n");
 	printf("                    (verifier-ready, pipe to file)\n");
 	printf("  --attest          Perform remote attestation and exit\n");
+	printf(
+	    "  --enroll          Enroll the AIK with the attestation CA via\n");
+	printf(
+	    "                    credential activation and store the issued\n");
+	printf("                    certificate, then exit\n");
+	printf("  --ca-server HOST  Attestation CA address (required by "
+	       "--enroll)\n");
+	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
+	       LOTA_CLI_DEFAULT_CA_PORT);
 	printf("  --attest-interval SECS\n");
 	printf(
 	    "                    Continuous attestation interval in seconds\n");

@@ -127,6 +127,20 @@ int net_connect(struct net_context *ctx);
 void net_disconnect(struct net_context *ctx);
 
 /*
+ * Write exactly len bytes over the TLS connection.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int net_write_all(struct net_context *ctx, const void *buf, size_t len);
+
+/*
+ * Read exactly len bytes from the TLS connection.
+ *
+ * Returns: 0 on success, negative errno on failure (-EIO on short read)
+ */
+int net_read_full(struct net_context *ctx, void *buf, size_t len);
+
+/*
  * Receive challenge from verifier.
  * Call after connect, before sending report.
  *

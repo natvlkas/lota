@@ -616,6 +616,64 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 	return 0;
 }
 
+int net_write_all(struct net_context *ctx, const void *buf, size_t len)
+{
+	size_t total = 0;
+
+	if (!ctx || !ctx->connected || !buf)
+		return -EINVAL;
+	if (len == 0)
+		return 0;
+
+	while (total < len) {
+		int ret = SSL_write(ctx->ssl, (const uint8_t *)buf + total,
+				    (int)(len - total));
+		if (ret <= 0) {
+			int ssl_err = SSL_get_error(ctx->ssl, ret);
+			if (ssl_err == SSL_ERROR_WANT_READ ||
+			    ssl_err == SSL_ERROR_WANT_WRITE) {
+				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				if (wait_ret < 0)
+					return wait_ret;
+				continue;
+			}
+			return -EIO;
+		}
+		total += (size_t)ret;
+	}
+
+	return 0;
+}
+
+int net_read_full(struct net_context *ctx, void *buf, size_t len)
+{
+	size_t total = 0;
+
+	if (!ctx || !ctx->connected || !buf)
+		return -EINVAL;
+	if (len == 0)
+		return 0;
+
+	while (total < len) {
+		int ret = SSL_read(ctx->ssl, (uint8_t *)buf + total,
+				   (int)(len - total));
+		if (ret <= 0) {
+			int ssl_err = SSL_get_error(ctx->ssl, ret);
+			if (ssl_err == SSL_ERROR_WANT_READ ||
+			    ssl_err == SSL_ERROR_WANT_WRITE) {
+				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				if (wait_ret < 0)
+					return wait_ret;
+				continue;
+			}
+			return -EIO;
+		}
+		total += (size_t)ret;
+	}
+
+	return 0;
+}
+
 int net_attest(struct net_context *ctx, build_report_fn build_report,
 	       void *user_data, struct verifier_result *result)
 {

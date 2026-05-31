@@ -156,6 +156,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/selftest.c \
               $(AGENT_DIR)/event.c \
               $(AGENT_DIR)/hardening.c \
+              $(AGENT_DIR)/enroll.c \
+              $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))

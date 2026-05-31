@@ -17,6 +17,7 @@
 #include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
+#include "enroll.h"
 #include "io_utils.h"
 #include "main_utils.h"
 #include "selftest.h"
@@ -114,6 +115,26 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 
 	if (opts->test_signed_flag)
 		return run_signed_ipc_test_server(cfg);
+
+	if (opts->enroll_flag) {
+		if (!opts->ca_server) {
+			fprintf(stderr,
+				"ERROR: --enroll requires --ca-server HOST\n");
+			return 1;
+		}
+		if (opts->no_verify_tls &&
+		    !opts->insecure_allow_no_verify_tls) {
+			fprintf(stderr,
+				"ERROR: --no-verify-tls is INSECURE and "
+				"requires explicit confirmation.\n"
+				"Re-run with: --no-verify-tls "
+				"--insecure-allow-no-verify-tls\n");
+			return 1;
+		}
+		return do_enroll(opts->ca_server, opts->ca_port,
+				 opts->ca_cert_path, opts->no_verify_tls,
+				 opts->has_pin ? opts->pin_sha256_bin : NULL);
+	}
 
 	if (opts->attest_flag) {
 		if (opts->no_verify_tls &&
