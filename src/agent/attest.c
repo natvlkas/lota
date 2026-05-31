@@ -758,8 +758,11 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	printf("Performing self-measurement...\n");
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		fprintf(stderr, "Warning: Self-measurement failed: %s\n",
+		fprintf(stderr, "Self-measurement failed: %s\n",
 			tpm_strerror(ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		return 1;
 	}
 
 	printf("Checking AIK...\n");

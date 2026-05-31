@@ -424,14 +424,8 @@ int self_measure(struct tpm_context *ctx)
 	if (ret < 0) {
 		if (ret == -EBADMSG) {
 			lota_err(
-			    "PCR14 holds a boot commitment from a different "
-			    "agent "
-			    "binary; live agent upgrades cannot rebind PCR14 "
-			    "without "
-			    "resetCount advancing. Cold reboot the host before "
-			    "re-running the agent so PCR14 is re-extended "
-			    "against "
-			    "the current binary.");
+			    "PCR14 boot-commitment refused; see the preceding "
+			    "SECURITY log for the exact recovery path.");
 		}
 		return ret;
 	}
