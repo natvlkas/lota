@@ -41,17 +41,10 @@ const (
 	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
 
 	// FlagBootCommitmentV1 indicates the agent extended PCR14 with
-	// SHA256(magic || agent_hash || resetCount_be || restartCount_be)
-	// instead of the legacy single-extend of agent_hash. The verifier
-	// must derive the expected PCR14 from the pinned baseline agent
-	// hash plus the TPMS_ATTEST ClockInfo before comparing.
+	// SHA256(magic || agent_hash || resetCount_be || restartCount_be).
+	// The verifier derives the expected PCR14 from the pinned baseline
+	// agent hash plus the TPMS_ATTEST ClockInfo before comparing.
 	FlagBootCommitmentV1 uint32 = 1 << 8
-
-	// FlagBootCommitment is retained as a source-compatible alias for
-	// pre-negotiation code. On the wire the bit is explicitly the v1
-	// construction; a future v2 must use a new report flag and a new
-	// ChallengeFlagBootCommitmentV2 capability bit.
-	FlagBootCommitment uint32 = FlagBootCommitmentV1
 
 	// FlagInitramfsLockV1 is set when the agent observed that an
 	// initramfs-time helper (lota-pcr14-lock, shipped under the
