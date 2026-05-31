@@ -494,31 +494,13 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	}
 
 	/*
-	 * Export EK certificate (if available).
+	 * The EK certificate is intentionally not sent in attestation
+	 * reports. Under the Privacy CA model the verifier authenticates the
+	 * AIK through its CA-issued certificate alone and never sees the EK,
+	 * so attestations stay unlinkable to the hardware. The EK certificate
+	 * is presented only to the attestation CA during --enroll.
 	 */
-	{
-		size_t ek_cert_size = 0;
-		ret = tpm_get_ek_cert(&g_agent.tpm_ctx,
-				      report->tpm.ek_certificate,
-				      LOTA_MAX_EK_CERT_SIZE, &ek_cert_size);
-		if (ret == 0) {
-			report->tpm.ek_cert_size = (uint16_t)ek_cert_size;
-			lota_dbg(
-			    "EK certificate exported (%zu bytes, DER X.509)",
-			    ek_cert_size);
-		} else if (ret == -ENOENT) {
-			lota_dbg(
-			    "No EK certificate found; verifier will reject "
-			    "registration under the production "
-			    "RequireCert=true default");
-			report->tpm.ek_cert_size = 0;
-		} else {
-			fprintf(stderr,
-				"Warning: Failed to read EK certificate: %s\n",
-				tpm_strerror(ret));
-			report->tpm.ek_cert_size = 0;
-		}
-	}
+	report->tpm.ek_cert_size = 0;
 
 	/*
 	 * include the CA-issued AIK certificate from the last --enroll. The
