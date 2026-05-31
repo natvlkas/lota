@@ -34,6 +34,26 @@ import (
 // Both placements are accepted
 var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
 
+// Critical extensions a TPM EK certificate may carry that Go's x509
+// verifier does not process: the subject alternative name (TPM
+// manufacturer/model/version as a directoryName) and the subject
+// directory attributes.
+var (
+	oidSubjectAltName        = asn1.ObjectIdentifier{2, 5, 29, 17}
+	oidSubjectDirectoryAttrs = asn1.ObjectIdentifier{2, 5, 29, 9}
+)
+
+func dropTPMCriticalExtensions(oids []asn1.ObjectIdentifier) []asn1.ObjectIdentifier {
+	out := oids[:0:0]
+	for _, oid := range oids {
+		if oid.Equal(oidSubjectAltName) || oid.Equal(oidSubjectDirectoryAttrs) {
+			continue
+		}
+		out = append(out, oid)
+	}
+	return out
+}
+
 const (
 	// MinEKKeyBits rejects undersized EK moduli.
 	MinEKKeyBits = 2048
@@ -141,6 +161,17 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 	if now.After(cert.NotAfter) {
 		return nil, ErrEKExpired
 	}
+
+	// TPM EK certificates carry TCG-specific critical extensions that
+	// Go's verifier does not process -- the subject alternative name
+	// holding the TPM manufacturer/model/version as a directoryName
+	// (the subject itself is empty per the TCG profile) and the subject
+	// directory attributes. They are irrelevant to chain verification,
+	// so drop them from the unhandled-critical set; EK authenticity is
+	// still gated by the chain check and the TCG EK OID below. Without
+	// this, x509.Verify fails with "unhandled critical extension" on
+	// every genuine EK certificate.
+	cert.UnhandledCriticalExtensions = dropTPMCriticalExtensions(cert.UnhandledCriticalExtensions)
 
 	// EK certificates are leaf certificates that may omit the TLS server
 	// EKU, so verify with ExtKeyUsageAny

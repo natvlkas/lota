@@ -237,11 +237,17 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 
 	printf("=== Attestation CA Enrollment ===\n\n");
 
+	/*
+	 * --enroll is a one-shot CLI mode. Return a non-negative exit code
+	 * (0 success, 1 failure): diagnostics_dispatch() treats any negative
+	 * return as "not a diagnostic, fall through to the daemon", so a
+	 * failed enrollment must not leak a negative errno upward.
+	 */
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
 			strerror(-ret));
-		return ret;
+		return 1;
 	}
 
 	printf("Initializing TPM...\n");
@@ -250,7 +256,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
 		net_cleanup();
-		return ret;
+		return 1;
 	}
 
 	printf("Checking AIK...\n");
@@ -260,7 +266,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return ret;
+		return 1;
 	}
 
 	ret = enroll_to_ca(&g_agent.tpm_ctx, server, port, ca_cert, skip_verify,
@@ -270,5 +276,5 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
-	return ret;
+	return ret == 0 ? 0 : 1;
 }

@@ -244,3 +244,19 @@ func TestNewIssuerRequiresEKRoots(t *testing.T) {
 		t.Fatal("accepted issuer with no EK roots")
 	}
 }
+
+func TestVerifyEKCertificateIgnoresTPMCriticalExtensions(t *testing.T) {
+	root := makeRoot(t, "tpm-vendor-root")
+	is := newTestIssuer(t, root)
+
+	// Genuine EK certificates mark TCG extensions critical; Go cannot
+	// process them. The verifier must still accept the certificate.
+	ekDER, _ := makeEKCert(t, root, func(c *x509.Certificate) {
+		c.ExtraExtensions = []pkix.Extension{
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 9}, Critical: true, Value: []byte{0x30, 0x00}},
+		}
+	})
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+		t.Fatalf("rejected EK cert with a critical TPM extension: %v", err)
+	}
+}
