@@ -32,6 +32,7 @@ INC_DIR := include
 BUILD_DIR := build
 VERSION_FILE := VERSION
 PROJECT_VERSION := $(strip $(shell sed -n '1p' $(VERSION_FILE) 2>/dev/null))
+GOCACHE ?= $(abspath $(BUILD_DIR)/.gocache)
 
 ifeq ($(PROJECT_VERSION),)
 $(error VERSION file is missing or empty)
@@ -359,12 +360,12 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/verifier && go build -o $(abspath $@) .
+	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
 	@echo "Built: $@"
 
 # Go attestation CA
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/attestca && go build -o $(abspath $@) .
+	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
 	@echo "Built: $@"
 
 clean:
