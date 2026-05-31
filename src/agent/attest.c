@@ -26,8 +26,10 @@
 #include "attest.h"
 #include "bpf_loader.h"
 #include "dbus.h"
+#include "enroll.h"
 #include "hardening.h"
 #include "iommu.h"
+#include "io_utils.h"
 #include "ipc.h"
 #include "journal.h"
 #include "net.h"
@@ -515,6 +517,34 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 				"Warning: Failed to read EK certificate: %s\n",
 				tpm_strerror(ret));
 			report->tpm.ek_cert_size = 0;
+		}
+	}
+
+	/*
+	 * include the CA-issued AIK certificate from the last --enroll. The
+	 * verifier chains it to the attestation CA root to authenticate the
+	 * AIK; an unenrolled host carries no certificate and is rejected
+	 * under the production require-cert default
+	 */
+	{
+		size_t aik_cert_size = 0;
+		int aret = lota_read_file_bounded(
+		    LOTA_AIK_CERT_PATH, report->tpm.aik_certificate,
+		    LOTA_MAX_AIK_CERT_SIZE, &aik_cert_size);
+		if (aret < 0) {
+			fprintf(stderr,
+				"Warning: Failed to read AIK certificate: %s\n",
+				strerror(-aret));
+			report->tpm.aik_cert_size = 0;
+		} else if (aik_cert_size > 0) {
+			report->tpm.aik_cert_size = (uint16_t)aik_cert_size;
+			lota_dbg(
+			    "AIK certificate included (%zu bytes, DER X.509)",
+			    aik_cert_size);
+		} else {
+			report->tpm.aik_cert_size = 0;
+			lota_dbg("No AIK certificate on disk; run --enroll for "
+				 "cert-backed attestation");
 		}
 	}
 
