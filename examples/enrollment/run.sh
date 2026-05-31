@@ -25,6 +25,7 @@ EK_ROOT="${EK_ROOT:?set EK_ROOT to the TPM manufacturer / swtpm root certificate
 RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"
 AIK_STORE="${AIK_STORE:-$RUN_DIR/aiks}"
 NONCE_DB="${NONCE_DB:-$AIK_STORE/nonces.sqlite}"
+POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 
 CA_ADDR="127.0.0.1:8444"
 VERIFIER_ADDR="127.0.0.1:9443"
@@ -37,6 +38,7 @@ for b in "$agent" "$ca" "$verifier"; do
 done
 
 [ -f "$CA_DIR/ca.crt" ] || { echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2; exit 1; }
+[ -f "$POLICY" ] || { echo "missing verifier policy: $POLICY" >&2; exit 1; }
 mkdir -p "$RUN_DIR" "$AIK_STORE"
 
 cleanup() { kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true; }
@@ -64,6 +66,7 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
 		-aik-ca-cert "$CA_DIR/ca.crt" \
 		-aik-store "$AIK_STORE" \
 		-nonce-db "$NONCE_DB" \
+		-policy "$POLICY" \
 		-generate-cert -allow-permissive-policy \
 		-allow-tofu-boot-baseline -allow-no-initramfs-lock
 ) &
@@ -73,7 +76,7 @@ sleep 1
 echo "== 4/4 attest =="
 sudo "$agent" --attest \
 	--server "${VERIFIER_ADDR%%:*}" --port "${VERIFIER_ADDR##*:}" \
-	--no-verify-tls --insecure-allow-no-verify-tls
+	--ca-cert "$RUN_DIR/lota-verifier.crt"
 
 echo
 echo "Done. A VERIFY_OK above means the AIK was activation-bound to the EK"

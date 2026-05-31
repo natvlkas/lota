@@ -310,7 +310,7 @@ static int read_text_file(const char *path, char *buf, size_t buf_size,
 	return 0;
 }
 
-static int kernel_lockdown_restrictive(void)
+int bpf_loader_kernel_lockdown_restrictive(void)
 {
 	char buf[256];
 	size_t len = 0;
@@ -389,7 +389,7 @@ static int kernel_ima_appraise_enforcing(void)
  * during the boot -> agent window and survive every later
  * enforcement gate the agent installs.
  */
-static int kernel_module_sig_enforced(void)
+int bpf_loader_kernel_module_sig_enforced(void)
 {
 	char buf[16];
 	size_t len = 0;
@@ -400,6 +400,39 @@ static int kernel_module_sig_enforced(void)
 	if (len == 0)
 		return -EIO;
 	if (buf[0] == 'Y' || buf[0] == '1')
+		return 0;
+	return -EPERM;
+}
+
+/*
+ * UEFI variables exposed through efivarfs start with a 4-byte attributes
+ * field followed by the variable payload. SecureBoot is a one-byte payload:
+ * 1 means enabled, 0 means disabled.
+ */
+int bpf_loader_secure_boot_enabled(void)
+{
+	static const char path[] =
+	    "/sys/firmware/efi/efivars/"
+	    "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+	uint8_t buf[5];
+	int fd;
+	ssize_t n;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	n = read(fd, buf, sizeof(buf));
+	if (n < 0) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
+	close(fd);
+
+	if (n < (ssize_t)sizeof(buf))
+		return -EIO;
+	if (buf[4] == 1)
 		return 0;
 	return -EPERM;
 }
@@ -526,14 +559,14 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	int ret;
 
-	ret = kernel_lockdown_restrictive();
+	ret = bpf_loader_kernel_lockdown_restrictive();
 	if (ret < 0) {
 		lota_err("Kernel lockdown is not in restrictive mode "
 			 "(integrity/confidentiality required)");
 		return ret;
 	}
 
-	ret = kernel_module_sig_enforced();
+	ret = bpf_loader_kernel_module_sig_enforced();
 	if (ret < 0) {
 		lota_err(
 		    "Kernel module signature enforcement is not active "

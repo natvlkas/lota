@@ -56,13 +56,16 @@ The script starts `lota-verifier` from a writable runtime directory
 `--aik-store` / `--nonce-db` there. This keeps generated TLS material and
 nonce replay state out of the repository and avoids the production
 `/var/lib/lota/aiks` default when the verifier is not running as root.
+The agent verifies the verifier TLS certificate generated in `RUN_DIR`;
+the script does not use `--no-verify-tls`.
 
 ## Notes for production
 
-- The demo verifier runs with `--allow-permissive-policy`,
-  `--allow-tofu-boot-baseline` and `--allow-no-initramfs-lock` so a fresh
-  host passes without a pinned policy. A real deployment loads a signed
-  policy that pins PCR 0/1/7 and ships the 90lota dracut module; see
+- The demo verifier loads `policies/testing.yaml` and runs with
+  `--allow-permissive-policy`, `--allow-tofu-boot-baseline` and
+  `--allow-no-initramfs-lock` so a fresh host passes without a pinned
+  production policy. A real deployment loads a signed policy that pins PCR
+  0/1/7 and ships the 90lota dracut module; see
   `docs/PRODUCTION_BRINGUP.md` and `policies/`.
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should

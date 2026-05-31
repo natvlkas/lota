@@ -231,6 +231,30 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 
 /*
+ * bpf_loader_kernel_module_sig_enforced - Check module signature enforcement
+ *
+ * Returns: 0 when the running kernel enforces module signatures, negative
+ * errno otherwise.
+ */
+int bpf_loader_kernel_module_sig_enforced(void);
+
+/*
+ * bpf_loader_kernel_lockdown_restrictive - Check Linux lockdown state
+ *
+ * Returns: 0 when lockdown is in integrity/confidentiality mode, negative
+ * errno otherwise.
+ */
+int bpf_loader_kernel_lockdown_restrictive(void);
+
+/*
+ * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state
+ *
+ * Returns: 0 when the kernel exposes SecureBoot=1 through efivarfs, negative
+ * errno otherwise.
+ */
+int bpf_loader_secure_boot_enabled(void);
+
+/*
  * bpf_loader_verify_kernel_runtime_hardening - Verify kernel anti-tamper base
  *
  * Ensures runtime prerequisites expected by LOTA self-protection are active:

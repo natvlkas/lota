@@ -87,6 +87,17 @@ static uint32_t rand_u32_best_effort(void)
 	return v;
 }
 
+static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
+					     bool *lockdown)
+{
+	if (module_sig)
+		*module_sig = bpf_loader_kernel_module_sig_enforced() == 0;
+	if (secureboot)
+		*secureboot = bpf_loader_secure_boot_enabled() == 0;
+	if (lockdown)
+		*lockdown = bpf_loader_kernel_lockdown_restrictive() == 0;
+}
+
 /*
  * Export a complete YAML policy from the current system state.
  *
@@ -229,9 +240,8 @@ int export_policy(int mode)
 
 		snap.iommu_enabled = iommu_verify_full(&iommu_status);
 		snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
-		snap.module_sig = false;
-		snap.secureboot = false;
-		snap.lockdown = false;
+		collect_kernel_security_features(
+		    &snap.module_sig, &snap.secureboot, &snap.lockdown);
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -279,6 +289,25 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	 */
 	if (g_agent.bpf_ctx.loaded)
 		report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
+
+	/*
+	 * Report kernel security features before nonce binding so the TPM quote
+	 * signs the exact flags the verifier evaluates.
+	 */
+	{
+		bool module_sig = false;
+		bool secureboot = false;
+		bool lockdown = false;
+
+		collect_kernel_security_features(&module_sig, &secureboot,
+						 &lockdown);
+		if (module_sig)
+			report->header.flags |= LOTA_REPORT_FLAG_MODULE_SIG;
+		if (secureboot)
+			report->header.flags |= LOTA_REPORT_FLAG_SECUREBOOT;
+		if (lockdown)
+			report->header.flags |= LOTA_REPORT_FLAG_LOCKDOWN;
+	}
 
 	/*
 	 * Get hardware identity (SHA-256 of EK public key).
