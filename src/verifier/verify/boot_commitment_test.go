@@ -36,13 +36,10 @@ func referenceBootCommitmentPCR14(agentHash [types.HashSize]byte, reset, restart
 
 func referenceInitramfsLockPCR14(reset, restart uint32) [types.HashSize]byte {
 	const tag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
-	var counters [8]byte
-	binary.BigEndian.PutUint32(counters[0:4], reset)
-	binary.BigEndian.PutUint32(counters[4:8], restart)
+	_, _ = reset, restart
 
 	commit := sha256.New()
 	commit.Write([]byte(tag))
-	commit.Write(counters[:])
 	d := commit.Sum(nil)
 
 	var zero [types.HashSize]byte
@@ -104,6 +101,11 @@ func TestDeriveInitramfsLockPCR14_StableForSameInputs(t *testing.T) {
 	want := referenceInitramfsLockPCR14(9, 2)
 	if a != want {
 		t.Fatalf("initramfs lock derivation diverged from reference: got %x want %x", a, want)
+	}
+
+	drifted := DeriveInitramfsLockPCR14(0xFFFFFFFF, 0xAABBCCDD)
+	if drifted != a {
+		t.Fatal("initramfs lock derivation must not depend on TPM clock counters")
 	}
 }
 

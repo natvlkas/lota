@@ -33,23 +33,20 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 // DeriveInitramfsLockPCR14 reproduces the post-extend PCR14 value the
 // initramfs lock helper installs:
 //
-//	commit = SHA256(initramfsLockTag || resetCount_be || restartCount_be)
+//	commit = SHA256(initramfsLockTag)
 //	pcr14  = SHA256(0^32 || commit)
 //
-// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo
-// of the quote. The helper does NOT include agent_hash in the digest:
-// the lock runs before the agent binary is on the running system, so
-// no self_hash exists yet, and binding the lock only to the TPM
-// counters keeps the derivation reproducible regardless of which
-// agent binary later layers a boot commitment on top.
+// resetCount and restartCount are accepted for API symmetry with the
+// agent helper, but intentionally ignored. The initramfs lock runs long
+// before the quote, so binding it to restartCount would make a correct
+// boot fail when the counter moves between initramfs and attestation.
+// Freshness is bound by the later agent boot commitment, which still
+// includes the TPMS_ATTEST ClockInfo counters.
 func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]byte {
-	var counters [8]byte
-	binary.BigEndian.PutUint32(counters[0:4], resetCount)
-	binary.BigEndian.PutUint32(counters[4:8], restartCount)
+	_, _ = resetCount, restartCount
 
 	commit := sha256.New()
 	commit.Write([]byte(initramfsLockTag))
-	commit.Write(counters[:])
 	commitDigest := commit.Sum(nil)
 
 	var zero [types.HashSize]byte
@@ -66,7 +63,7 @@ func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]b
 // when both the initramfs lock and the agent's boot commitment have
 // been applied in sequence. The chain is:
 //
-//	lock_value  = DeriveInitramfsLockPCR14(R, S)
+//	lock_value  = DeriveInitramfsLockPCR14()
 //	boot_commit = SHA256(bootCommitmentTag || agentHash || R || S)
 //	pcr14_final = SHA256(lock_value || boot_commit)
 //

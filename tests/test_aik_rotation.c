@@ -1049,17 +1049,10 @@ static void reference_initramfs_lock_digest(uint32_t reset_count,
 					    uint8_t out[LOTA_HASH_SIZE])
 {
 	static const char tag[] = "LOTA-PCR14-INITRAMFS-LOCK-v1";
-	uint8_t counters[8];
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 
-	counters[0] = (uint8_t)(reset_count >> 24);
-	counters[1] = (uint8_t)(reset_count >> 16);
-	counters[2] = (uint8_t)(reset_count >> 8);
-	counters[3] = (uint8_t)reset_count;
-	counters[4] = (uint8_t)(restart_count >> 24);
-	counters[5] = (uint8_t)(restart_count >> 16);
-	counters[6] = (uint8_t)(restart_count >> 8);
-	counters[7] = (uint8_t)restart_count;
+	(void)reset_count;
+	(void)restart_count;
 
 	if (!md) {
 		memset(out, 0, LOTA_HASH_SIZE);
@@ -1067,7 +1060,6 @@ static void reference_initramfs_lock_digest(uint32_t reset_count,
 	}
 	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
 	    EVP_DigestUpdate(md, tag, sizeof(tag) - 1) != 1 ||
-	    EVP_DigestUpdate(md, counters, sizeof(counters)) != 1 ||
 	    EVP_DigestFinal_ex(md, out, NULL) != 1)
 		memset(out, 0, LOTA_HASH_SIZE);
 	EVP_MD_CTX_free(md);
@@ -1094,6 +1086,15 @@ static void test_initramfs_lock_digest_matches_reference(void)
 	reference_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, want);
 	if (memcmp(got, want, LOTA_HASH_SIZE) != 0) {
 		FAIL("digest mismatch");
+		return;
+	}
+	uint8_t drifted[LOTA_HASH_SIZE];
+	if (tpm_initramfs_lock_digest(0xFFFFFFFFU, 0x00000001U, drifted) != 0) {
+		FAIL("drifted digest helper failed");
+		return;
+	}
+	if (memcmp(got, drifted, LOTA_HASH_SIZE) != 0) {
+		FAIL("initramfs lock digest must ignore TPM clock counters");
 		return;
 	}
 	if (tpm_initramfs_lock_digest(1, 2, NULL) != -EINVAL) {

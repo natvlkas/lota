@@ -1702,16 +1702,8 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
 	if (!out_digest)
 		return -EINVAL;
 
-	uint8_t reset_be[4];
-	uint8_t restart_be[4];
-	reset_be[0] = (uint8_t)((reset_count >> 24) & 0xff);
-	reset_be[1] = (uint8_t)((reset_count >> 16) & 0xff);
-	reset_be[2] = (uint8_t)((reset_count >> 8) & 0xff);
-	reset_be[3] = (uint8_t)(reset_count & 0xff);
-	restart_be[0] = (uint8_t)((restart_count >> 24) & 0xff);
-	restart_be[1] = (uint8_t)((restart_count >> 16) & 0xff);
-	restart_be[2] = (uint8_t)((restart_count >> 8) & 0xff);
-	restart_be[3] = (uint8_t)(restart_count & 0xff);
+	(void)reset_count;
+	(void)restart_count;
 
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
@@ -1720,8 +1712,6 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
 	int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
 		 EVP_DigestUpdate(md, TPM_INITRAMFS_LOCK_TAG,
 				  sizeof(TPM_INITRAMFS_LOCK_TAG) - 1) == 1 &&
-		 EVP_DigestUpdate(md, reset_be, sizeof(reset_be)) == 1 &&
-		 EVP_DigestUpdate(md, restart_be, sizeof(restart_be)) == 1 &&
 		 EVP_DigestFinal_ex(md, out_digest, NULL) == 1;
 	EVP_MD_CTX_free(md);
 	return ok ? 0 : -EIO;

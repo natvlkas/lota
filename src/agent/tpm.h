@@ -455,12 +455,12 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
  * tpm_initramfs_lock_digest - reproduce the digest the initramfs lock
  *                             helper (src/initramfs/lota-pcr14-lock.c)
  *                             extends PCR14 with before the agent runs
- * @reset_count, @restart_count: clockInfo at the time the helper ran
+ * @reset_count, @restart_count: accepted for API symmetry; intentionally
+ *                               ignored by the lock digest
  * @out_digest: LOTA_HASH_SIZE bytes, receives the SHA-256 digest
  *
  * The helper extends with
- *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
- *             restartCount_be)
+ *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
  * and PCR14 ends up at SHA256(0^32 || that_digest). The agent calls
  * this function so it can recognise when PCR14 already carries the
  * lock value and chain its own boot commitment on top deterministically.

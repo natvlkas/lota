@@ -41,18 +41,11 @@ static int reference_commit(uint32_t reset_count, uint32_t restart_count,
 			    uint8_t out[HASH_SIZE])
 {
 	static const char tag[] = "LOTA-PCR14-INITRAMFS-LOCK-v1";
-	uint8_t counters[8];
 	EVP_MD_CTX *md;
 	int ok;
 
-	counters[0] = (uint8_t)(reset_count >> 24);
-	counters[1] = (uint8_t)(reset_count >> 16);
-	counters[2] = (uint8_t)(reset_count >> 8);
-	counters[3] = (uint8_t)reset_count;
-	counters[4] = (uint8_t)(restart_count >> 24);
-	counters[5] = (uint8_t)(restart_count >> 16);
-	counters[6] = (uint8_t)(restart_count >> 8);
-	counters[7] = (uint8_t)restart_count;
+	(void)reset_count;
+	(void)restart_count;
 
 	md = EVP_MD_CTX_new();
 	if (!md)
@@ -60,7 +53,6 @@ static int reference_commit(uint32_t reset_count, uint32_t restart_count,
 
 	ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
 	     EVP_DigestUpdate(md, tag, sizeof(tag) - 1) == 1 &&
-	     EVP_DigestUpdate(md, counters, sizeof(counters)) == 1 &&
 	     EVP_DigestFinal_ex(md, out, NULL) == 1;
 	EVP_MD_CTX_free(md);
 	return ok ? 0 : -EIO;
@@ -91,6 +83,28 @@ static void test_commit_matches_reference(void)
 	PASS();
 }
 
+static void test_commit_ignores_clock_counters(void)
+{
+	uint8_t first[HASH_SIZE];
+	uint8_t second[HASH_SIZE];
+
+	TEST("initramfs lock commit ignores TPM clock counters");
+	memset(first, 0, sizeof(first));
+	memset(second, 0, sizeof(second));
+
+	if (lota_initramfs_lock_commit(0, 0, first) != 0 ||
+	    lota_initramfs_lock_commit(0xAABBCCDDU, 0x01020304U, second) != 0) {
+		FAIL("helper derivation failed");
+		return;
+	}
+	if (memcmp(first, second, HASH_SIZE) != 0) {
+		FAIL("clock counters changed initramfs lock digest");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_commit_rejects_null_output(void)
 {
 	TEST("initramfs lock commit rejects NULL output");
@@ -105,6 +119,7 @@ int main(void)
 {
 	printf("=== initramfs lock tests ===\n");
 	test_commit_matches_reference();
+	test_commit_ignores_clock_counters();
 	test_commit_rejects_null_output();
 
 	printf("\nResult: %d/%d tests passed\n", tests_passed, tests_run);

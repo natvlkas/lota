@@ -18,14 +18,15 @@
  *   /dev/tpmrm0 yet. The helper extends PCR14 with the
  *   domain-separated digest
  *
- *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
- *             restartCount_be)
+ *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
  *
- *   The TPM2_Quote that lota-agent ships later reflects the
- *   resulting "locked" PCR14 value, and the verifier rederives the
- *   same chain. Once locked, any further extension by an untrusted
- *   userspace process produces a value the verifier cannot match,
- *   so the attestation fails closed.
+ *   The lock deliberately does not bind resetCount/restartCount. Those
+ *   counters are included by the later lota-agent boot commitment, after
+ *   userspace is up and close to the quote. Keeping the initramfs step
+ *   counter-stable avoids false failures when restartCount moves between
+ *   initramfs and attestation. Once locked, any further extension by an
+ *   untrusted userspace process produces a value the verifier cannot
+ *   match, so the attestation fails closed.
  *
  * Idempotency
  *   The helper is safe to run multiple times within a single boot
@@ -87,9 +88,10 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
  *
  * Exposed with normal C linkage so unit tests can call into the same
  * byte-for-byte derivation used by the standalone helper without
- * re-marshalling the inputs. resetCount and restartCount are encoded
- * big-endian to match the boot-commitment derivation in
- * src/agent/tpm.c::tpm_boot_commitment_digest().
+ * re-marshalling the inputs. resetCount and restartCount are accepted for
+ * API compatibility with the agent helper, but they are intentionally not
+ * part of the initramfs lock digest. Freshness is bound later by the agent
+ * boot-commitment derivation in src/agent/tpm.c.
  *
  * Returns: 0 on success, negative errno on failure.
  */
@@ -99,16 +101,8 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 	if (!out_digest)
 		return -EINVAL;
 
-	uint8_t reset_be[4];
-	uint8_t restart_be[4];
-	reset_be[0] = (uint8_t)((reset_count >> 24) & 0xff);
-	reset_be[1] = (uint8_t)((reset_count >> 16) & 0xff);
-	reset_be[2] = (uint8_t)((reset_count >> 8) & 0xff);
-	reset_be[3] = (uint8_t)(reset_count & 0xff);
-	restart_be[0] = (uint8_t)((restart_count >> 24) & 0xff);
-	restart_be[1] = (uint8_t)((restart_count >> 16) & 0xff);
-	restart_be[2] = (uint8_t)((restart_count >> 8) & 0xff);
-	restart_be[3] = (uint8_t)(restart_count & 0xff);
+	(void)reset_count;
+	(void)restart_count;
 
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
@@ -117,8 +111,6 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 	int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
 		 EVP_DigestUpdate(md, INITRAMFS_LOCK_TAG,
 				  sizeof(INITRAMFS_LOCK_TAG) - 1) == 1 &&
-		 EVP_DigestUpdate(md, reset_be, sizeof(reset_be)) == 1 &&
-		 EVP_DigestUpdate(md, restart_be, sizeof(restart_be)) == 1 &&
 		 EVP_DigestFinal_ex(md, out_digest, NULL) == 1;
 	EVP_MD_CTX_free(md);
 
@@ -311,8 +303,8 @@ int main(int argc, char **argv)
 			exit_code = 10;
 		} else {
 			fprintf(stderr,
-				"lota-pcr14-lock: PCR14 locked (resetCount=%u "
-				"restartCount=%u)\n",
+				"lota-pcr14-lock: PCR14 locked "
+				"(observed resetCount=%u restartCount=%u)\n",
 				(unsigned)reset_count, (unsigned)restart_count);
 		}
 	} else if (memcmp(current, expected, HASH_SIZE) == 0) {

@@ -50,8 +50,7 @@ const (
 	// initramfs-time helper (lota-pcr14-lock, shipped under the
 	// 90lota dracut module) extended PCR14 with the domain-separated
 	// digest
-	//     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
-	//             restartCount_be)
+	//     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
 	// before the agent ran. The agent then extends with the
 	// boot-commitment value on top, so the final PCR14 reflects a
 	// two-hop chain:

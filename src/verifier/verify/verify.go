@@ -727,14 +727,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitmentV1")
 	}
 	// The initramfs PCR14 lock pins PCR14 to a fixed
-	// SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount || restartCount)
-	// before pivot_root. Without it, any code path that runs in
-	// userspace before the agent's first PCR14 extend can poison the
-	// boot-commitment baseline. The default production profile
-	// rejects reports that do not advertise FlagInitramfsLockV1; a
-	// fleet that explicitly opts out (see RequireInitramfsLock) keeps
-	// attesting on the bare FlagBootCommitmentV1 derivation but
-	// surfaces the gap to the operator.
+	// SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1") value before pivot_root.
+	// Without it, any code path that runs in userspace before the
+	// agent's first PCR14 extend can poison the boot-commitment
+	// baseline. The default production profile rejects reports that do
+	// not advertise FlagInitramfsLockV1; a fleet that explicitly opts
+	// out (see RequireInitramfsLock) keeps attesting on the bare
+	// FlagBootCommitmentV1 derivation but surfaces the gap to the
+	// operator.
 	if v.requireInitramfsLock && !useInitramfsLock {
 		logging.Security(clog, "report omits FlagInitramfsLockV1; initramfs PCR14 lock required",
 			"flags", fmt.Sprintf("0x%08x", report.Header.Flags))
@@ -819,13 +819,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				pcr14, v.maxRestartCountSkew)
 		}
 		if !matched {
+			hint := "verify that the quoted agent binary is the one that extended PCR14"
+			if useInitramfsLock {
+				hint = "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14"
+			}
 			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 				"actual_pcr14", pcr14Hex,
 				"expected_pcr14", FormatPCR14(expected),
 				"reset_count", parsedAttest.ClockInfo.ResetCount,
 				"restart_count", parsedAttest.ClockInfo.RestartCount,
 				"max_restart_skew", v.maxRestartCountSkew,
-				"initramfs_lock", useInitramfsLock)
+				"initramfs_lock", useInitramfsLock,
+				"hint", hint)
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
 			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
