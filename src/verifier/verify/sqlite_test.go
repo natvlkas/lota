@@ -596,7 +596,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 	defer db.Close()
 
-	aikStore := store.NewSQLiteAIKStore(db)
+	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
@@ -660,7 +660,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	pcr14 := [32]byte{0x14}
 
 	// first verifier instance
-	aikStore1 := store.NewSQLiteAIKStore(db)
+	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
 	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
@@ -686,7 +686,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	t.Log("✓ First attestation succeeded")
 
 	// new verifier with same DB
-	aikStore2 := store.NewSQLiteAIKStore(db)
+	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
 	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
@@ -728,7 +728,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	tamperedPCR14 := [32]byte{0xFF, 0xFF}
 
 	// establish baseline
-	aikStore1 := store.NewSQLiteAIKStore(db)
+	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
 	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
@@ -753,7 +753,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	t.Log("✓ Baseline established")
 
 	// new verifier with same DB
-	aikStore2 := store.NewSQLiteAIKStore(db)
+	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
 	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
@@ -800,7 +800,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	aikStore := store.NewSQLiteAIKStore(db)
+	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
@@ -864,52 +864,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	}
 
 	t.Logf("✓ %d concurrent SQLite-backed attestations completed", expected)
-}
-
-func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
-	t.Log("TEST: AIK persists across verifier instances")
-
-	db, err := store.OpenDB(":memory:")
-	if err != nil {
-		t.Fatalf("OpenDB failed: %v", err)
-	}
-	defer db.Close()
-
-	pcr14 := [32]byte{0x42}
-
-	// TOFU registers AIK
-	aikStore1 := store.NewSQLiteAIKStore(db)
-	cfg := DefaultConfig()
-	cfg.RequireCert = false
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
-	cfg.BaselineStore = NewSQLiteBaselineStore(db)
-	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
-
-	v1 := NewVerifier(cfg, aikStore1)
-	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := v1.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
-
-	ch, _ := v1.GenerateChallenge("aik-persist-client")
-	rep := createSQLiteTestReport(t, "aik-persist-client", ch.Nonce, pcr14)
-	r, err := v1.VerifyReport("aik-persist-client", rep)
-	if err != nil || r.Result != types.VerifyOK {
-		t.Fatalf("TOFU attestation failed: %v", err)
-	}
-
-	// second verifier: check AIK exists
-	aikStore2 := store.NewSQLiteAIKStore(db)
-	hwID := sha256.Sum256([]byte("aik-persist-client"))
-	_, err = aikStore2.GetAIK(fmt.Sprintf("%x", hwID[:]))
-	if err != nil {
-		t.Fatalf("AIK not persisted after restart: %v", err)
-	}
-
-	t.Log("✓ AIK persists in SQLite across verifier instances")
 }
 
 // shared key for SQLite integration tests
@@ -1001,9 +955,11 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikDER)))
 	offset += 2
 
-	// AIK certificate (empty)
+	// AIK certificate: CA-issued, subject carries the device pseudonym
+	aikCertDER := issueAIKCertOrPanic(testPseudonym(clientID), &key.PublicKey)
+	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
 	// EK certificate (empty)

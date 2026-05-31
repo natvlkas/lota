@@ -13,7 +13,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -122,7 +121,7 @@ func TestSessionValidateEndpoint_BadToken(t *testing.T) {
 }
 
 func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
@@ -216,8 +215,7 @@ func TestListClients_RejectsExcessiveOffset(t *testing.T) {
 }
 
 func persistentClientID(challengeID string) string {
-	hwID := sha256.Sum256([]byte(challengeID))
-	return hex.EncodeToString(hwID[:])
+	return testPseudonym(challengeID)
 }
 
 func getClientTestAIK(clientID string) *rsa.PrivateKey {
@@ -255,7 +253,7 @@ func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify
 func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
@@ -298,7 +296,7 @@ func setupTestAPIListeningWithKey(t *testing.T, adminKey string) (*http.ServeMux
 func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
@@ -436,9 +434,11 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikDER)))
 	offset += 2
 
-	// AIK certificate (empty)
+	// AIK certificate: CA-issued, subject carries the device pseudonym
+	aikCertDER := issueAIKCertOrPanic(testPseudonym(clientID), &key.PublicKey)
+	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
 	// EK certificate (empty)
@@ -1098,9 +1098,6 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if resp.ClientID != persistentID {
 		t.Errorf("client_id: got '%s', want '%s'", resp.ClientID, persistentID)
 	}
-	if !resp.HasAIK {
-		t.Error("Expected has_aik=true after TOFU registration")
-	}
 	if resp.AttestCount != 1 {
 		t.Errorf("attestation_count: got %d, want 1", resp.AttestCount)
 	}
@@ -1112,9 +1109,6 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	}
 	if resp.FirstSeen == "" {
 		t.Error("Expected non-empty first_seen after attestation")
-	}
-	if resp.HardwareID == "" {
-		t.Error("Expected non-empty hardware_id after TOFU")
 	}
 
 	prefix := resp.PCR14Baseline
@@ -1224,21 +1218,18 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 	clientID := "wrong-sig-client"
 	pcr14 := [32]byte{0x14}
 
-	// register AIK with a different key than what LOTA will sign with
-	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("Key generation failed: %v", err)
+	// first a clean successful attestation
+	if code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14); code != types.VerifyOK {
+		t.Fatalf("initial attestation failed: %d", code)
 	}
 
-	// first attest with correct key to register AIK via TOFU
-	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
-	if code != types.VerifyOK {
-		t.Fatalf("Initial TOFU attestation failed: %d", code)
-	}
-
-	// second attest with WRONG key - should fail signature check
+	// report whose quote signature does not verify against the
+	// certificate-authenticated AIK must be rejected
 	challenge, _ := v.GenerateChallenge(clientID)
-	badReport := buildSignedReport(t, clientID, challenge.Nonce, pcr14, wrongKey)
+	badReport := buildSignedReport(t, clientID, challenge.Nonce, pcr14, getClientTestAIK(clientID))
+	sigOffset := 16 + types.PCRCount*types.HashSize + 4
+	badReport[sigOffset] ^= 0xFF
+	badReport[sigOffset+1] ^= 0xFF
 	result, _ := v.VerifyReport(clientID, badReport)
 
 	if result.Result != types.VerifySigFail {

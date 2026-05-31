@@ -304,7 +304,12 @@ func (ns *NonceStore) generateUniqueNonceLocked() ([types.NonceSize]byte, error)
 // SECURITY: This verifies TWO things:
 // - report.TPM.Nonce matches stored challenge
 // - Nonce inside TPMS_ATTEST (signed by TPM) matches stored challenge
-func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID string) error {
+// identityID is the durable, authenticated client identity (the
+// CA-issued device pseudonym) used for per-identity rate limiting and
+// monotonic counters. It is supplied by the caller after the AIK
+// certificate has been verified, so the limit cannot be evaded by
+// rotating an agent-asserted hardware_id.
+func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID string, identityID string) error {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 
@@ -340,7 +345,6 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 		return err
 	}
 
-	identityID := hex.EncodeToString(report.TPM.HardwareID[:])
 	if err := ns.checkIdentityRateLimit(identityID); err != nil {
 		delete(ns.pending, key)
 		if recordErr := ns.usedBackend.Record(key, time.Now()); recordErr != nil {

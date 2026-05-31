@@ -636,15 +636,9 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	var info clientInfoResponse
-	json.NewDecoder(rec.Body).Decode(&info)
-
-	if info.HardwareID == "" {
-		t.Fatal("No hardware ID registered after attestation")
-	}
-
-	// ban that hardware ID
-	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"game-server"}`, info.HardwareID)
+	// The authenticated identity is the AIK certificate device pseudonym;
+	// ban that hardware identity.
+	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"game-server"}`, persistentID)
 	req = adminRequest("POST", "/api/v1/bans", body)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

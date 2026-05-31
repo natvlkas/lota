@@ -15,7 +15,6 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,18 +23,6 @@ import (
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
-
-type registeredAtErrorStore struct {
-	*store.MemoryStore
-}
-
-func (s *registeredAtErrorStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	return time.Time{}, errors.New("simulated GetRegisteredAt failure")
-}
-
-func (s *registeredAtErrorStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
-	return nil
-}
 
 // simulates TPMs Attestation Identity Key
 var integrationTestKey *rsa.PrivateKey
@@ -126,9 +113,11 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikPub)))
 	offset += 2
 
-	// AIK certificate (optional, leave empty)
+	// AIK certificate: CA-issued, subject carries the device pseudonym
+	aikCertDER := issueAIKCertOrPanic(testPseudonym(clientID), &integrationTestKey.PublicKey)
+	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // no AIK cert
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
 	// EK certificate (optional, leave empty)
@@ -303,7 +292,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	t.Log("INTEGRATION TEST: Full attestation flow with TOFU")
 	t.Log("Simulates first-time client attestation")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "test-client-001"
@@ -334,20 +323,13 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 		t.Error("session token must not be all zeros")
 	}
 
-	registeredAIK, err := aikStore.GetAIK(persistentClientID(clientID))
-	if err != nil {
-		t.Fatalf("AIK not registered after TOFU: %v", err)
-	}
-	t.Logf("✓ TOFU: AIK registered with fingerprint: %s", AIKFingerprint(registeredAIK))
-
 	t.Log("✓ Full attestation flow completed successfully")
 }
 
 func TestIntegration_SubsequentAttestation(t *testing.T) {
 	t.Log("INTEGRATION TEST: Subsequent attestation with registered AIK")
 
-	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK(persistentClientID("test-client"), &integrationTestKey.PublicKey)
+	aikStore := newCertStore(t)
 
 	verifier := createTestVerifier(t, aikStore)
 
@@ -382,7 +364,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 func TestIntegration_SessionTokenValidation(t *testing.T) {
 	t.Log("INTEGRATION TEST: Session token can be validated via verifier API")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "session-validate-client"
@@ -415,7 +397,7 @@ func TestIntegration_SessionTokenValidation(t *testing.T) {
 	if st.ResultCode != types.VerifyOK {
 		t.Fatalf("unexpected token result code: %d", st.ResultCode)
 	}
-	if st.ClientID != persistentClientID(clientID) {
+	if st.ClientID != testPseudonym(clientID) {
 		t.Fatalf("unexpected client id binding: %s", st.ClientID)
 	}
 }
@@ -423,7 +405,7 @@ func TestIntegration_SessionTokenValidation(t *testing.T) {
 func TestIntegration_SessionTokenConsume(t *testing.T) {
 	t.Log("INTEGRATION TEST: Session token can be consumed once")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "session-consume-client"
@@ -458,8 +440,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	t.Log("INTEGRATION TEST: PCR14 baseline violation detection")
 	t.Log("CRITICAL SECURITY TEST: Detects agent tampering")
 
-	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK(persistentClientID("compromised-client"), &integrationTestKey.PublicKey)
+	aikStore := newCertStore(t)
 
 	verifier := createTestVerifier(t, aikStore)
 
@@ -509,8 +490,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	t.Log("INTEGRATION TEST: Nonce replay attack detection")
 	t.Log("CRITICAL SECURITY TEST: Prevents attestation replay")
 
-	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK(persistentClientID("replay-victim"), &integrationTestKey.PublicKey)
+	aikStore := newCertStore(t)
 
 	verifier := createTestVerifier(t, aikStore)
 	clientID := "replay-victim"
@@ -544,10 +524,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 func TestIntegration_InvalidSignature(t *testing.T) {
 	t.Log("INTEGRATION TEST: Invalid signature rejection")
 
-	aikStore := store.NewMemoryStore()
-	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	aikStore.RegisterAIK(persistentClientID("wrong-key-client"), &otherKey.PublicKey)
-
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "wrong-key-client"
@@ -555,6 +532,12 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 	challenge, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := [32]byte{}
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	// Corrupt the quote signature so it no longer verifies against the
+	// certificate-authenticated AIK.
+	sigOffset := 16 + types.PCRCount*types.HashSize + 4
+	reportData[sigOffset] ^= 0xFF
+	reportData[sigOffset+1] ^= 0xFF
 
 	result, err := verifier.VerifyReport(clientID, reportData)
 
@@ -571,7 +554,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 func TestIntegration_ConcurrentClients(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent client attestations")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	// generate keys for multiple clients
@@ -639,7 +622,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent first attestation (same hardware)")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	// both goroutines represent the same hardware identity
@@ -690,53 +673,6 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 
 	if success != num {
 		t.Fatalf("only %d/%d succeeded", success, num)
-	}
-}
-
-func TestIntegration_AIKExpiry_GetRegisteredAtErrorForcesRotation(t *testing.T) {
-	t.Log("SECURITY TEST: GetRegisteredAt error forces AIK rotation required")
-
-	aikStore := &registeredAtErrorStore{MemoryStore: store.NewMemoryStore()}
-	verifier := createTestVerifier(t, aikStore)
-
-	hardwareLabel := "regtime-error-client"
-	clientID := persistentClientID(hardwareLabel)
-
-	registeredKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if err := aikStore.RegisterAIK(clientID, &registeredKey.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK: %v", err)
-	}
-
-	challengeID := "conn-regtime-err"
-	challenge, err := verifier.GenerateChallenge(challengeID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge: %v", err)
-	}
-
-	attackerKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x5A ^ i)
-	}
-
-	reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, attackerKey)
-
-	// remove AIKPublic from the report to make rotation fail with a deterministic error
-	aikPublicSizeOff := 16 + types.PCRCount*types.HashSize + 4 + types.MaxSigSize + 2 + types.MaxAttestSize + 2 + types.MaxAIKPubSize
-	if len(reportData) < aikPublicSizeOff+2 {
-		t.Fatalf("unexpected report size: %d", len(reportData))
-	}
-	binary.LittleEndian.PutUint16(reportData[aikPublicSizeOff:aikPublicSizeOff+2], 0)
-
-	res, verr := verifier.VerifyReport(challengeID, reportData)
-	if verr == nil {
-		t.Fatal("expected verification to fail")
-	}
-	if res == nil || res.Result != types.VerifySigFail {
-		t.Fatalf("expected VerifySigFail, got %+v (err=%v)", res, verr)
-	}
-	if !strings.Contains(verr.Error(), "rotation attempt missing new AIK public key") {
-		t.Fatalf("expected rotation-required error, got: %v", verr)
 	}
 }
 
@@ -807,9 +743,11 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikDER)))
 	offset += 2
 
-	// AIK certificate (optional, leave empty)
+	// AIK certificate: CA-issued, subject carries the device pseudonym
+	aikCertDER := issueAIKCertOrPanic(testPseudonym(clientID), &key.PublicKey)
+	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // no AIK cert
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
 	// EK certificate (optional, leave empty)
@@ -882,7 +820,7 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 func TestIntegration_ChallengePCRMask(t *testing.T) {
 	t.Log("TEST: Challenge contains correct PCR mask")
 
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 	verifier := createTestVerifier(t, aikStore)
 
 	challenge, err := verifier.GenerateChallenge("pcr-test-client")
@@ -907,7 +845,7 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 // rejected with VerifyPCRFail before the BootBaselineStorer pin is
 // consulted.
 func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
@@ -949,7 +887,7 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 // the same fixture must continue through the verifier so operators can
 // roll over a pre-PCR0/1/7 fleet without dropping it offline.
 func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
@@ -993,7 +931,7 @@ func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
 // the kernel-handoff -> lota-agent PCR14 window with VerifyPCRFail
 // before any downstream baseline write.
 func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
@@ -1038,7 +976,7 @@ func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
 // keep a legacy fleet (no 90lota dracut module) attestable while the
 // operator works through the rollout.
 func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
-	aikStore := store.NewMemoryStore()
+	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
