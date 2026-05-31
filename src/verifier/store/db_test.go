@@ -73,6 +73,30 @@ func TestOpenDB_FileSystem(t *testing.T) {
 	t.Log("✓ File-based database created and reopened successfully")
 }
 
+func TestOpenDB_CreatesParentDirectory(t *testing.T) {
+	t.Log("TEST: Opening SQLite database creates missing parent directory")
+
+	tmpDir, err := os.MkdirTemp("", "lota-db-parent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "nested", "state", "lota.db")
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB(%s) failed: %v", dbPath, err)
+	}
+	db.Close()
+
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("Database file was not created: %v", err)
+	}
+
+	t.Log("✓ Missing database parent directory created")
+}
+
 func TestMigrations_Idempotent(t *testing.T) {
 	t.Log("TEST: Migration idempotency")
 	t.Log("Running migrations twice should not fail")

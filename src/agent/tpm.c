@@ -954,7 +954,48 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 {
 	TSS2_RC rc;
+	TPMS_CAPABILITY_DATA *capability_data = NULL;
+	TPMI_YES_NO more_data = TPM2_NO;
 	ESYS_TR key_handle = ESYS_TR_NONE;
+	int found = 0;
+	int ret;
+
+	{
+		struct esys_get_capability_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .capability = TPM2_CAP_HANDLES,
+		    .property = ctx->aik_handle,
+		    .property_count = 1,
+		    .more_data_out = &more_data,
+		    .capability_data_out = &capability_data,
+		};
+		ret =
+		    tpm_call_with_backoff(ctx, esys_get_capability_thunk, &args,
+					  &rc, 1, (void **)&capability_data);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!capability_data ||
+	    capability_data->capability != TPM2_CAP_HANDLES) {
+		Esys_Free(capability_data);
+		return -EIO;
+	}
+
+	for (uint32_t i = 0; i < capability_data->data.handles.count; i++) {
+		if (capability_data->data.handles.handle[i] ==
+		    ctx->aik_handle) {
+			found = 1;
+			break;
+		}
+	}
+	Esys_Free(capability_data);
+
+	if (!found)
+		return 0;
+
+	if (!handle_out)
+		return 1;
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle,

@@ -18,6 +18,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	sqlite "modernc.org/sqlite"
@@ -155,6 +157,15 @@ func OpenDB(path string) (*sql.DB, error) {
 		"PRAGMA synchronous=NORMAL", // safe with WAL mode
 		"PRAGMA cache_size=-64000",  // 64MB page cache
 		"PRAGMA temp_store=MEMORY",  // temp tables in memory
+	}
+
+	if path != "" && path != ":memory:" {
+		dir := filepath.Dir(path)
+		if dir != "." {
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				return nil, fmt.Errorf("failed to create database directory %q: %w", dir, err)
+			}
+		}
 	}
 
 	sqliteDriver := &sqlite.Driver{}
