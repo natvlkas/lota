@@ -190,10 +190,6 @@ type VerifierConfig struct {
 	// how long issued tokens are valid
 	SessionTokenLife time.Duration
 
-	// maximum age of a registered AIK before key rotation is required
-	// zero disables AIK expiry (not recommended)
-	AIKMaxAge time.Duration
-
 	// optional: persistent baseline store (nil = in-memory)
 	BaselineStore BaselineStorer
 
@@ -286,7 +282,6 @@ func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
-		AIKMaxAge:             30 * 24 * time.Hour, // 30 days
 		RequireEventLog:       true,
 		RequireCert:           true,
 		RequireBootPCRs:       true,

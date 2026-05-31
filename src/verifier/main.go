@@ -17,7 +17,6 @@
 // Environment variables:
 //   LOTA_ADMIN_API_KEY  API key for admin endpoints (revoke, ban); required for mutation
 //   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, public
-//   --aik-max-age DUR  Maximum AIK registration age before forced rotation (default: 720h)
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -76,7 +75,6 @@ var (
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 
 	generateCert         = flag.Bool("generate-cert", false, "Generate self-signed certificate")
-	aikMaxAge            = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
 	logFormat            = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel             = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog      = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
@@ -137,7 +135,6 @@ func main() {
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
-	verifierCfg.AIKMaxAge = *aikMaxAge
 	if !*requireEventLog {
 		logger.Error("event log verification is mandatory and cannot be disabled",
 			"hint", "remove --require-event-log=false and provide event logs from agents")
@@ -168,12 +165,6 @@ func main() {
 		logger.Info("rejecting legacy baseline agent_hash backfills")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
-
-	if *aikMaxAge == 0 {
-		logger.Warn("AIK expiry disabled (--aik-max-age=0): registered keys will never expire")
-	} else {
-		logger.Info("AIK key rotation enabled", "max_age", *aikMaxAge)
-	}
 
 	if *dbPath != "" {
 		if *requireCert {
