@@ -769,6 +769,75 @@ func TestFileStore_RotatePreservesHardwareID(t *testing.T) {
 	}
 }
 
+// issues an AIK leaf certificate with the given subject CN, signed by ca.
+func issueAIKCert(t *testing.T, cn string, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
+	t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(77),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("issue AIK cert: %v", err)
+	}
+	return der
+}
+
+func TestCertificateStore_VerifyAIKCertificate(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+	storePath := filepath.Join(tempDir, "store")
+	if err := os.Mkdir(storePath, 0700); err != nil {
+		t.Fatalf("store dir: %v", err)
+	}
+
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+	caCertPath := filepath.Join(tempDir, "ca.pem")
+	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	store, err := NewCertificateStore(storePath, []string{caCertPath}, true)
+	if err != nil {
+		t.Fatalf("NewCertificateStore: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	const pseudonym = "device-pseudonym-abc123"
+	aikDER := issueAIKCert(t, pseudonym, aikKey, caCert, caKey)
+
+	cert, err := store.VerifyAIKCertificate(&aikKey.PublicKey, aikDER)
+	if err != nil {
+		t.Fatalf("VerifyAIKCertificate rejected a CA-issued cert: %v", err)
+	}
+	if cert.Subject.CommonName != pseudonym {
+		t.Fatalf("subject CN %q, want %q", cert.Subject.CommonName, pseudonym)
+	}
+
+	otherKey := generateTestKey(t)
+	if _, err := store.VerifyAIKCertificate(&otherKey.PublicKey, aikDER); err == nil {
+		t.Fatal("accepted AIK cert that does not certify the reported key")
+	}
+
+	rogueCAKey := generateTestKey(t)
+	rogueCA := generateTestCertificate(t, rogueCAKey, true)
+	rogueDER := issueAIKCert(t, pseudonym, aikKey, rogueCA, rogueCAKey)
+	if _, err := store.VerifyAIKCertificate(&aikKey.PublicKey, rogueDER); err == nil {
+		t.Fatal("accepted AIK cert from an untrusted CA")
+	}
+
+	if _, err := store.VerifyAIKCertificate(&aikKey.PublicKey, nil); err == nil {
+		t.Fatal("accepted an empty AIK certificate")
+	}
+}
+
 // generates an EK certificate signed by a CA with the TCG EK OID in EKU
 func generateEKCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
 	t.Helper()

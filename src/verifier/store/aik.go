@@ -81,6 +81,15 @@ type AIKCertificateVerifier interface {
 	VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error
 }
 
+// AIKCertVerifier verifies an AIK certificate on its own (no EK) and
+// returns the parsed certificate. The Privacy CA model uses this: the CA
+// has already bound the AIK to the EK through credential activation, so
+// the verifier trusts the AIK certificate chain alone and reads the
+// device pseudonym from the subject.
+type AIKCertVerifier interface {
+	VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error)
+}
+
 // optional interface for database-backed stores to avoid loading all clients
 // into memory for API list endpoints.
 type PaginatedClientLister interface {
@@ -941,6 +950,29 @@ func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Pub
 	}
 
 	return cs.fileStore.RegisterAIK(clientID, pubKey)
+}
+
+// VerifyAIKCertificate verifies that aikCertDER chains to a trusted root,
+// is time-valid, not revoked, and certifies pubKey, then returns the
+// parsed certificate. Under the Privacy CA model this is the verifier's
+// sole AIK trust anchor: the certificate's subject carries the CA-issued
+// device pseudonym used as the durable client identity, and the EK is
+// never seen by the verifier.
+func (cs *CertificateStore) VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error) {
+	if pubKey == nil {
+		return nil, errors.New("nil AIK public key")
+	}
+	if len(aikCertDER) == 0 {
+		return nil, ErrNoCertificate
+	}
+	if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
+		return nil, err
+	}
+	cert, err := x509.ParseCertificate(aikCertDER)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
+	}
+	return cert, nil
 }
 
 func (cs *CertificateStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
