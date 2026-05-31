@@ -457,6 +457,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
 	$(TEST_BIN_DIR)/test_aik_rotation \
+	$(TEST_BIN_DIR)/test_signed_clockinfo \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_io_read_file \
@@ -539,6 +540,10 @@ $(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $
 	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
@@ -603,6 +608,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_policy_sign
 	@$(BUILD_DIR)/test_policy_export
 	@$(BUILD_DIR)/test_aik_rotation
+	@$(BUILD_DIR)/test_signed_clockinfo
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_io_read_file

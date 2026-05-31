@@ -1911,6 +1911,45 @@ static int derive_expected_locked_pcr14(const uint8_t self_hash[],
 #define TPM_CLOCK_PROBE_TAG "LOTA-PCR14-CLOCK-PROBE-v1"
 
 /*
+ * Extract clockInfo.resetCount/restartCount from a marshalled
+ * TPMS_ATTEST blob (as produced by Esys_Quote). Factored out so the
+ * unit tests can exercise the parsing path without a live TPM.
+ */
+static int parse_signed_clockinfo(const uint8_t *attest_buf, size_t attest_len,
+				  uint32_t *reset_count_out,
+				  uint32_t *restart_count_out)
+{
+	TPMS_ATTEST attest;
+	size_t offset = 0;
+	TSS2_RC rc;
+
+	if (!attest_buf || attest_len == 0 || !reset_count_out ||
+	    !restart_count_out)
+		return -EINVAL;
+
+	memset(&attest, 0, sizeof(attest));
+	rc = Tss2_MU_TPMS_ATTEST_Unmarshal(attest_buf, attest_len, &offset,
+					   &attest);
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	*reset_count_out = attest.clockInfo.resetCount;
+	*restart_count_out = attest.clockInfo.restartCount;
+	return 0;
+}
+
+#ifdef LOTA_TPM_TESTING
+int tpm_test_parse_signed_clockinfo(const uint8_t *attest_buf,
+				    size_t attest_len,
+				    uint32_t *reset_count_out,
+				    uint32_t *restart_count_out)
+{
+	return parse_signed_clockinfo(attest_buf, attest_len, reset_count_out,
+				      restart_count_out);
+}
+#endif
+
+/*
  * Issue a TPM2_Quote with an empty PCR selection so the TPM signs a
  * TPMS_ATTEST whose clockInfo is captured under the AIK signing path.
  * The agent uses these counters for the boot-commitment derivation so
@@ -1936,8 +1975,6 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 	TPML_PCR_SELECTION pcr_selection;
 	TPM2B_ATTEST *quoted = NULL;
 	TPMT_SIGNATURE *signature = NULL;
-	TPMS_ATTEST attest;
-	size_t offset = 0;
 
 	if (!ctx || !ctx->initialized || !reset_count_out ||
 	    !restart_count_out)
@@ -1997,20 +2034,14 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 			return call_ret;
 	}
 
-	memset(&attest, 0, sizeof(attest));
-	rc = Tss2_MU_TPMS_ATTEST_Unmarshal(quoted->attestationData,
-					   quoted->size, &offset, &attest);
+	ret = parse_signed_clockinfo(quoted->attestationData, quoted->size,
+				     reset_count_out, restart_count_out);
 	secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
 	secure_bzero(signature, sizeof(*signature));
 	Esys_Free(quoted);
 	Esys_Free(signature);
 
-	if (rc != TSS2_RC_SUCCESS)
-		return tss2_rc_to_errno(rc);
-
-	*reset_count_out = attest.clockInfo.resetCount;
-	*restart_count_out = attest.clockInfo.restartCount;
-	return 0;
+	return ret;
 }
 
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
@@ -2023,8 +2054,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
 	uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
 	uint8_t zero_pcr14[LOTA_HASH_SIZE] = {0};
-	uint32_t reset_count;
-	uint32_t restart_count;
+	uint32_t reset_count = 0;
+	uint32_t restart_count = 0;
 	int ret;
 
 	if (!ctx || !ctx->initialized || !self_hash)
