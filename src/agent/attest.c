@@ -784,20 +784,28 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 
-	printf("Performing self-measurement...\n");
-	ret = self_measure(&g_agent.tpm_ctx);
+	printf("Checking AIK...\n");
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		fprintf(stderr, "Self-measurement failed: %s\n",
+		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return 1;
 	}
 
-	printf("Checking AIK...\n");
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	/*
+	 * Self-measurement extends PCR14 with clockInfo captured through
+	 * the AIK signing path (see tpm_read_signed_clockinfo). AIK must
+	 * therefore be provisioned before this call or the agent will fall
+	 * back to Esys_ReadClock and produce a PCR14 value the verifier
+	 * cannot rederive on simulators that diverge between ReadClock and
+	 * Quote.clockInfo.
+	 */
+	printf("Performing self-measurement...\n");
+	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to provision AIK: %s\n",
+		fprintf(stderr, "Self-measurement failed: %s\n",
 			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
@@ -929,6 +937,25 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
 
+	lota_info("Checking AIK");
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		dbus_cleanup(g_agent.dbus_ctx);
+		ipc_cleanup(&g_agent.ipc_ctx);
+		return 1;
+	}
+
+	/*
+	 * Self-measurement extends PCR14 using clockInfo captured through
+	 * the AIK signing path (tpm_read_signed_clockinfo). Provision AIK
+	 * first so the signed-clock path is available; without it the
+	 * fallback to Esys_ReadClock can produce a PCR14 value the
+	 * verifier cannot rederive on simulators whose ReadClock and
+	 * Quote.clockInfo disagree.
+	 */
 	lota_info("Performing self-measurement");
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -943,17 +970,6 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		 * traffic resumes.
 		 */
 		lota_err("Self-measurement failed: %s", tpm_strerror(ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		net_cleanup();
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
-		return 1;
-	}
-
-	lota_info("Checking AIK");
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		dbus_cleanup(g_agent.dbus_ctx);

@@ -478,8 +478,16 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
  * @ctx:       Initialized TPM context
  * @self_hash: SHA-256 of the running agent binary
  *
- * Reads clockInfo via Esys_ReadClock and extends PCR14 with the
- * boot-commitment digest defined by tpm_boot_commitment_digest().
+ * Captures clockInfo through an AIK-signed TPM2_Quote so the counters
+ * folded into the boot-commitment digest match the clockInfo the
+ * later attestation quote carries. Esys_ReadClock returns counters
+ * through a separate unauthenticated path and may diverge on TPM 2.0
+ * simulators; the signed path keeps the verifier-side derivation
+ * deterministic. Falls back to Esys_ReadClock with a security warning
+ * only when no AIK has been provisioned yet (pre-enrollment boots);
+ * callers that quote afterwards MUST ensure tpm_provision_aik() ran
+ * first. Extends PCR14 with the boot-commitment digest defined by
+ * tpm_boot_commitment_digest().
  * Re-entrancy across agent restarts without TPM reset is handled by
  * inspecting PCR14: zeros mean a fresh unlocked boot (extend), the
  * initramfs-lock value means a fresh locked boot (extend on top), an

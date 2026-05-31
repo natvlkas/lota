@@ -1903,17 +1903,128 @@ static int derive_expected_locked_pcr14(const uint8_t self_hash[],
 	return sha256_two_block(lock_value, boot_commit, out);
 }
 
+/*
+ * Domain-separation marker used as qualifyingData for the empty-PCR
+ * probe quote that captures TPM-signed clockInfo. The value is never
+ * shipped to a verifier, so a constant string is sufficient.
+ */
+#define TPM_CLOCK_PROBE_TAG "LOTA-PCR14-CLOCK-PROBE-v1"
+
+/*
+ * Issue a TPM2_Quote with an empty PCR selection so the TPM signs a
+ * TPMS_ATTEST whose clockInfo is captured under the AIK signing path.
+ * The agent uses these counters for the boot-commitment derivation so
+ * the value extended into PCR14 matches the clockInfo the later
+ * attestation quote will carry. Esys_ReadClock returns counters from a
+ * separate, unauthenticated firmware path; on TPM 2.0 simulators
+ * (swtpm) those values may diverge from TPM2_Quote.clockInfo even
+ * within a single boot, which made verifier-side derivation fail.
+ *
+ * Requires a provisioned AIK with auth loaded; callers that may run
+ * before enrollment must handle -ENOKEY by falling back to the
+ * unauthenticated path or by deferring the extend.
+ */
+static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
+				     uint32_t *reset_count_out,
+				     uint32_t *restart_count_out)
+{
+	TSS2_RC rc;
+	int ret;
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	TPM2B_DATA qualifying_data;
+	TPMT_SIG_SCHEME in_scheme;
+	TPML_PCR_SELECTION pcr_selection;
+	TPM2B_ATTEST *quoted = NULL;
+	TPMT_SIGNATURE *signature = NULL;
+	TPMS_ATTEST attest;
+	size_t offset = 0;
+
+	if (!ctx || !ctx->initialized || !reset_count_out ||
+	    !restart_count_out)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOKEY;
+
+	if (!ctx->aik_auth_loaded) {
+		ret = tpm_aik_load_auth(ctx);
+		if (ret < 0)
+			return ret;
+	}
+
+	{
+		TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
+		memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
+		TPM_CALL_RETRY(
+		    ctx, rc,
+		    Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value));
+		secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
+		if (rc != TSS2_RC_SUCCESS)
+			return tss2_rc_to_errno(rc);
+	}
+
+	qualifying_data.size =
+	    (uint16_t)(sizeof(TPM_CLOCK_PROBE_TAG) - 1);
+	memset(qualifying_data.buffer, 0, sizeof(qualifying_data.buffer));
+	memcpy(qualifying_data.buffer, TPM_CLOCK_PROBE_TAG,
+	       qualifying_data.size);
+
+	in_scheme.scheme = TPM2_ALG_NULL;
+
+	memset(&pcr_selection, 0, sizeof(pcr_selection));
+	pcr_selection.count = 0;
+
+	{
+		struct esys_quote_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .sign_handle = key_handle,
+		    .shandle1 = ESYS_TR_PASSWORD,
+		    .qualifying_data = &qualifying_data,
+		    .in_scheme = &in_scheme,
+		    .pcr_selection = &pcr_selection,
+		    .quoted_out = &quoted,
+		    .signature_out = &signature,
+		};
+		int call_ret = tpm_call_with_backoff(
+		    ctx, esys_quote_thunk, &args, &rc, 2, (void **)&quoted,
+		    (void **)&signature);
+		secure_bzero(qualifying_data.buffer,
+			     sizeof(qualifying_data.buffer));
+		if (call_ret < 0)
+			return call_ret;
+	}
+
+	memset(&attest, 0, sizeof(attest));
+	rc = Tss2_MU_TPMS_ATTEST_Unmarshal(quoted->attestationData,
+					   quoted->size, &offset, &attest);
+	secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+	secure_bzero(signature, sizeof(*signature));
+	Esys_Free(quoted);
+	Esys_Free(signature);
+
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	*reset_count_out = attest.clockInfo.resetCount;
+	*restart_count_out = attest.clockInfo.restartCount;
+	return 0;
+}
+
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			       const uint8_t self_hash[])
 {
 	TSS2_RC rc;
-	TPMS_TIME_INFO *time_info = NULL;
 	uint8_t commit[LOTA_HASH_SIZE];
 	uint8_t current_pcr14[LOTA_HASH_SIZE];
 	uint8_t expected_pcr14[LOTA_HASH_SIZE];
 	uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
 	uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
 	uint8_t zero_pcr14[LOTA_HASH_SIZE] = {0};
+	uint32_t reset_count;
+	uint32_t restart_count;
 	int ret;
 
 	if (!ctx || !ctx->initialized || !self_hash)
@@ -1927,7 +2038,16 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 */
 	ctx->boot_commitment_locked = false;
 
-	{
+	ret = tpm_read_signed_clockinfo(ctx, &reset_count, &restart_count);
+	if (ret == -ENOKEY) {
+		/*
+		 * AIK not provisioned yet. Fall back to Esys_ReadClock so a
+		 * pre-enrollment boot can still pin PCR14. After enrollment
+		 * the next agent run will rebind PCR14 via the authenticated
+		 * path; this fallback must therefore not be used by an
+		 * attesting agent.
+		 */
+		TPMS_TIME_INFO *time_info = NULL;
 		struct esys_read_clock_args args = {
 		    .esys_ctx = ctx->esys_ctx,
 		    .time_info_out = &time_info,
@@ -1937,11 +2057,18 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 					  &rc, 1, (void **)&time_info);
 		if (call_ret < 0)
 			return call_ret;
+		reset_count = time_info->clockInfo.resetCount;
+		restart_count = time_info->clockInfo.restartCount;
+		Esys_Free(time_info);
+		fprintf(stderr,
+			"PCR14 boot-commitment: AIK absent, falling back to "
+			"unauthenticated clockInfo (resetCount=%u "
+			"restartCount=%u); rerun after --enroll so the "
+			"signed-clock path takes over\n",
+			(unsigned)reset_count, (unsigned)restart_count);
+	} else if (ret < 0) {
+		return ret;
 	}
-
-	uint32_t reset_count = time_info->clockInfo.resetCount;
-	uint32_t restart_count = time_info->clockInfo.restartCount;
-	Esys_Free(time_info);
 
 	ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
 					 commit);
