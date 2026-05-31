@@ -204,6 +204,18 @@ func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
 // point instead of VerifyPCRDigest so the heavy attest parser runs
 // once per attestation and a malformed attestData cannot pay for two
 // allocation passes.
+//
+// The TPM computes the PCR digest using the hash algorithm declared on
+// the TPMS_PCR_SELECTION it quoted (SHA-256, SHA-384, SHA-512 or, on
+// legacy stacks, SHA-1). The agent wire format pins PCR values at
+// types.HashSize bytes (32 bytes = SHA-256), so a quote signed over a
+// PCR bank other than SHA-256 cannot be reproduced byte-for-byte from
+// the report content. Accepting such a quote would let a malicious
+// (or buggy) agent ship truncated PCR values that happen to satisfy a
+// SHA-256 recomputation while the TPM-signed digest is something else
+// entirely; reject the quote with an explicit error so an operator
+// upgrading the PCR bank notices the wire-format gap instead of
+// silently passing or silently failing.
 func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
 	if attest == nil {
 		return errors.New("nil TPMS_ATTEST")
@@ -216,6 +228,10 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.
 	}
 	if len(attest.QuoteInfo.PCRDigest) == 0 {
 		return errors.New("PCR digest is empty (corrupted quote?)")
+	}
+	if attest.QuoteInfo.PCRHashAlg != types.TPMAlgSHA256 {
+		return fmt.Errorf("unsupported PCR bank hash 0x%04X: the LOTA wire format pins PCR values at SHA-256 (%d bytes); rebuild the agent or the quote with a SHA-256 PCR selection",
+			attest.QuoteInfo.PCRHashAlg, types.HashSize)
 	}
 
 	h := sha256.New()

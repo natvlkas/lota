@@ -11,6 +11,7 @@ package verify
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 
@@ -484,6 +485,124 @@ func TestVerifyPCRDigestParsed_MatchesByteForm(t *testing.T) {
 	}
 	if err := VerifyPCRDigest(blob, pcrValues, pcrMask); err == nil {
 		t.Fatal("byte-form: tampered PCR must reject")
+	}
+}
+
+// buildAttestBlobWithHashAlg mirrors buildTestAttestBlob but lets the
+// caller pick the TPM hash algorithm declared on the PCR selection.
+// Used by the negative tests below to feed VerifyPCRDigestParsed a
+// quote signed over a PCR bank the LOTA wire format does not support.
+func buildAttestBlobWithHashAlg(t *testing.T, hashAlg uint16, pcrDigest []byte) []byte {
+	t.Helper()
+	const headerHex = "ff544347" + // magic: TPM_GENERATED_VALUE
+		"8018" + // type: TPM_ST_ATTEST_QUOTE
+		"0002" + // qualifiedSigner size: 2
+		"0000" + // minimal signer
+		"0020" + // extraData size: 32 (nonce)
+		"0102030405060708090a0b0c0d0e0f10" +
+		"1112131415161718191a1b1c1d1e1f20" +
+		"0000000000000000" + // clock
+		"00000000" + // resetCount
+		"00000000" + // restartCount
+		"00" + // safe
+		"0000000000000000" + // firmwareVersion
+		"00000001" // PCR selection count: 1
+	blob := mustDecodeHex(headerHex)
+	var algBytes [2]byte
+	binary.BigEndian.PutUint16(algBytes[:], hashAlg)
+	blob = append(blob, algBytes[:]...)
+	blob = append(blob, mustDecodeHex(
+		"03"+ // sizeofSelect: 3
+			"034000", // PCR bitmap (PCR 0,1,14)
+	)...)
+	var digestSize [2]byte
+	binary.BigEndian.PutUint16(digestSize[:], uint16(len(pcrDigest)))
+	blob = append(blob, digestSize[:]...)
+	blob = append(blob, pcrDigest...)
+	return blob
+}
+
+// TestVerifyPCRDigestParsed_RejectsSHA384PCRBank pins the C-HIGH-2
+// contract: VerifyPCRDigestParsed must refuse a quote whose PCR
+// selection declares SHA-384 because the LOTA wire format ships PCR
+// values at SHA-256 size. Silently recomputing with SHA-256 against
+// truncated PCR bytes would let a malicious agent ship a PCR digest
+// that satisfies the recompute while the TPM signed something else
+// entirely.
+func TestVerifyPCRDigestParsed_RejectsSHA384PCRBank(t *testing.T) {
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+	var pcrValues [types.PCRCount][types.HashSize]byte
+
+	// Digest content is irrelevant; rejection happens on hash alg.
+	digest := make([]byte, 48)
+	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA384, digest)
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("SHA-384 PCR bank must be rejected by VerifyPCRDigestParsed")
+	}
+	if !contains(err.Error(), "unsupported PCR bank hash") {
+		t.Fatalf("error must mention unsupported PCR bank hash; got %q",
+			err.Error())
+	}
+	if !contains(err.Error(), "0x000C") {
+		t.Fatalf("error must echo the offending alg code 0x000C; got %q",
+			err.Error())
+	}
+}
+
+func TestVerifyPCRDigestParsed_RejectsSHA512PCRBank(t *testing.T) {
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+	var pcrValues [types.PCRCount][types.HashSize]byte
+
+	digest := make([]byte, 64)
+	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA512, digest)
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("SHA-512 PCR bank must be rejected by VerifyPCRDigestParsed")
+	}
+	if !contains(err.Error(), "unsupported PCR bank hash") {
+		t.Fatalf("error must mention unsupported PCR bank hash; got %q",
+			err.Error())
+	}
+}
+
+func TestVerifyPCRDigestParsed_RejectsSHA1PCRBank(t *testing.T) {
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+	var pcrValues [types.PCRCount][types.HashSize]byte
+
+	digest := make([]byte, 20)
+	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA1, digest)
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("SHA-1 PCR bank must be rejected by VerifyPCRDigestParsed")
+	}
+	if !contains(err.Error(), "unsupported PCR bank hash") {
+		t.Fatalf("error must mention unsupported PCR bank hash; got %q",
+			err.Error())
+	}
+}
+
+// TestVerifyPCRDigestParsed_RejectsUnknownPCRBank covers the catch-all:
+// any TPM_ALG_ID the verifier does not know must hit the same reject
+// branch as SHA-384/512 so a fabricated quote carrying alg 0x0042
+// cannot bypass the SHA-256 digest check.
+func TestVerifyPCRDigestParsed_RejectsUnknownPCRBank(t *testing.T) {
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+	var pcrValues [types.PCRCount][types.HashSize]byte
+
+	digest := make([]byte, 32)
+	blob := buildAttestBlobWithHashAlg(t, 0x0042, digest)
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("unknown PCR bank hash must be rejected")
+	}
+	if !contains(err.Error(), "0x0042") {
+		t.Fatalf("error must echo the offending alg code; got %q",
+			err.Error())
 	}
 }
 
