@@ -558,6 +558,46 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 		       size_t *out_size);
 
 /*
+ * tpm_get_aik_tpmt_public - Marshal the AIK public area as TPMT_PUBLIC
+ * @ctx: Initialized TPM context
+ * @buf: Output buffer for the marshaled TPMT_PUBLIC blob
+ * @buf_size: Size of output buffer
+ * @out_size: Actual marshaled size
+ *
+ * The attestation CA recomputes the AIK name from these exact bytes when
+ * wrapping the activation credential, so this is the canonical TPM
+ * encoding rather than the SPKI form used for signature verification.
+ *
+ * Returns: 0 on success, -ENOKEY if AIK not provisioned, negative errno
+ * on failure
+ */
+int tpm_get_aik_tpmt_public(struct tpm_context *ctx, uint8_t *buf,
+			    size_t buf_size, size_t *out_size);
+
+/*
+ * tpm_activate_credential - Recover an attestation-CA credential
+ * @ctx: Initialized TPM context
+ * @cred_blob: TPM2B_ID_OBJECT from the CA (MakeCredential output)
+ * @cred_blob_len: Length of cred_blob
+ * @enc_secret: TPM2B_ENCRYPTED_SECRET from the CA
+ * @enc_secret_len: Length of enc_secret
+ * @out_secret: Output buffer for the recovered activation secret
+ * @out_secret_max: Capacity of out_secret
+ * @out_secret_len: Recovered secret length
+ *
+ * Runs TPM2_ActivateCredential against the AIK and the certified EK. It
+ * succeeds only when both keys reside in the same TPM, which is the
+ * binding the EK certificate alone does not prove.
+ *
+ * Returns: 0 on success, -ENOKEY if AIK not provisioned, -EINVAL on
+ * malformed input, negative errno on TPM failure
+ */
+int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
+			    size_t cred_blob_len, const uint8_t *enc_secret,
+			    size_t enc_secret_len, uint8_t *out_secret,
+			    size_t out_secret_max, size_t *out_secret_len);
+
+/*
  * tpm_get_ek_cert - Read Endorsement Key certificate from NVRAM
  * @ctx: Initialized TPM context
  * @buf: Output buffer for DER-encoded certificate

@@ -81,7 +81,7 @@ HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
 # Agent link flags
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
-LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
+LDFLAGS += -lbpf -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
 
 ifdef SANITIZE
 LDFLAGS += -fsanitize=$(SANITIZE)
@@ -200,7 +200,7 @@ $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 # same protections as the daemon.
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
-		-ltss2-esys -ltss2-tcti-device -lcrypto
+		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
 
 # auto-generated header dependencies. -MMD writes a sibling
@@ -445,6 +445,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
 	$(TEST_BIN_DIR)/test_aik_rotation \
+	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
@@ -517,11 +518,15 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto
+	$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
@@ -576,6 +581,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_policy_sign
 	@$(BUILD_DIR)/test_policy_export
 	@$(BUILD_DIR)/test_aik_rotation
+	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk

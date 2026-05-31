@@ -2433,6 +2433,324 @@ cleanup:
 	return ret;
 }
 
+/*
+ * Marshal the AIK public area as a TPMT_PUBLIC blob. The attestation CA
+ * recomputes the AIK name from these exact bytes when wrapping the
+ * activation credential, so the agent must hand over the canonical TPM
+ * encoding rather than the SPKI form used for signature verification.
+ */
+int tpm_get_aik_tpmt_public(struct tpm_context *ctx, uint8_t *buf,
+			    size_t buf_size, size_t *out_size)
+{
+	TSS2_RC rc;
+	int ret;
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_NAME *name = NULL;
+	TPM2B_NAME *qualified_name = NULL;
+	size_t off = 0;
+
+	if (!ctx || !ctx->initialized || !buf || !out_size)
+		return -EINVAL;
+
+	*out_size = 0;
+
+	ret = aik_exists(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOKEY;
+
+	{
+		struct esys_read_public_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .object_handle = key_handle,
+		    .out_public_out = &out_public,
+		    .name_out = &name,
+		    .qualified_name_out = &qualified_name,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args,
+					    &rc, 3, (void **)&out_public,
+					    (void **)&name,
+					    (void **)&qualified_name);
+		if (ret < 0)
+			goto cleanup;
+	}
+
+	rc = Tss2_MU_TPMT_PUBLIC_Marshal(&out_public->publicArea, buf, buf_size,
+					 &off);
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto cleanup;
+	}
+	*out_size = off;
+	ret = 0;
+
+cleanup:
+	if (out_public)
+		Esys_Free(out_public);
+	if (name)
+		Esys_Free(name);
+	if (qualified_name)
+		Esys_Free(qualified_name);
+	return ret;
+}
+
+/*
+ * Well-known PolicySecret(TPM_RH_ENDORSEMENT) authPolicy digest for the SHA-256
+ * RSA EK template. The EK is authorized with the endorsement hierarchy secret
+ * through this policy, so ActivateCredential needs a matching policy session.
+ */
+static const uint8_t ek_rsa_auth_policy[32] = {
+    0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
+    0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
+    0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa};
+
+/*
+ * Populate the standard TCG RSA 2048 EK template. Reproducing it exactly
+ * is what makes a recreated EK match the public key certified in the
+ * manufacturer EK certificate the CA verified.
+ */
+static void ek_rsa_template(TPM2B_PUBLIC *tmpl)
+{
+	TPMS_RSA_PARMS *rsa;
+
+	memset(tmpl, 0, sizeof(*tmpl));
+	tmpl->publicArea.type = TPM2_ALG_RSA;
+	tmpl->publicArea.nameAlg = TPM2_ALG_SHA256;
+	tmpl->publicArea.objectAttributes =
+	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+	    TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_ADMINWITHPOLICY |
+	    TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
+	tmpl->publicArea.authPolicy.size = sizeof(ek_rsa_auth_policy);
+	memcpy(tmpl->publicArea.authPolicy.buffer, ek_rsa_auth_policy,
+	       sizeof(ek_rsa_auth_policy));
+
+	rsa = &tmpl->publicArea.parameters.rsaDetail;
+	rsa->symmetric.algorithm = TPM2_ALG_AES;
+	rsa->symmetric.keyBits.aes = 128;
+	rsa->symmetric.mode.aes = TPM2_ALG_CFB;
+	rsa->scheme.scheme = TPM2_ALG_NULL;
+	rsa->keyBits = 2048;
+	rsa->exponent = 0;
+	tmpl->publicArea.unique.rsa.size = 256;
+}
+
+/*
+ * Resolve an EK handle. Prefer the persistent EK at the standard handle;
+ * otherwise recreate the transient EK from the fixed template so its
+ * public key still matches the certified EK.
+ * Sets *out_transient when the caller must flush the handle.
+ */
+static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
+		       bool *out_transient)
+{
+	TSS2_RC rc;
+	ESYS_TR ek_handle = ESYS_TR_NONE;
+	int ret;
+
+	*out_handle = ESYS_TR_NONE;
+	*out_transient = false;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, &ek_handle));
+	if (rc == TSS2_RC_SUCCESS) {
+		*out_handle = ek_handle;
+		return 0;
+	}
+
+	{
+		TPM2B_PUBLIC ek_template;
+		TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
+		TPM2B_DATA outside = {.size = 0};
+		TPML_PCR_SELECTION pcr = {.count = 0};
+		TPM2B_PUBLIC *out_public = NULL;
+		TPM2B_CREATION_DATA *creation_data = NULL;
+		TPM2B_DIGEST *creation_hash = NULL;
+		TPMT_TK_CREATION *creation_ticket = NULL;
+
+		ek_rsa_template(&ek_template);
+
+		struct esys_create_primary_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .primary_handle = ESYS_TR_RH_ENDORSEMENT,
+		    .shandle1 = ESYS_TR_PASSWORD,
+		    .in_sensitive = &in_sensitive,
+		    .in_public = &ek_template,
+		    .outside_info = &outside,
+		    .creation_pcr = &pcr,
+		    .object_handle_out = &ek_handle,
+		    .out_public_out = &out_public,
+		    .creation_data_out = &creation_data,
+		    .creation_hash_out = &creation_hash,
+		    .creation_ticket_out = &creation_ticket,
+		};
+		ret = tpm_call_with_backoff(
+		    ctx, esys_create_primary_thunk, &args, &rc, 4,
+		    (void **)&out_public, (void **)&creation_data,
+		    (void **)&creation_hash, (void **)&creation_ticket);
+		Esys_Free(out_public);
+		Esys_Free(creation_data);
+		Esys_Free(creation_hash);
+		Esys_Free(creation_ticket);
+		if (ret < 0)
+			return ret;
+	}
+
+	*out_handle = ek_handle;
+	*out_transient = true;
+	return 0;
+}
+
+struct esys_activate_args {
+	ESYS_CONTEXT *esys_ctx;
+	ESYS_TR activate_handle;
+	ESYS_TR key_handle;
+	ESYS_TR shandle1;
+	ESYS_TR shandle2;
+	const TPM2B_ID_OBJECT *credential_blob;
+	const TPM2B_ENCRYPTED_SECRET *secret;
+	TPM2B_DIGEST **cert_info_out;
+};
+
+static TSS2_RC esys_activate_thunk(void *u)
+{
+	struct esys_activate_args *a = u;
+	return Esys_ActivateCredential(a->esys_ctx, a->activate_handle,
+				       a->key_handle, a->shandle1, a->shandle2,
+				       ESYS_TR_NONE, a->credential_blob,
+				       a->secret, a->cert_info_out);
+}
+
+/*
+ * Recover an attestation-CA credential. ActivateCredential succeeds only
+ * when the AIK and the certified EK live in the same TPM, which is the
+ * binding the EK certificate alone does not prove.
+ * Recovered secret is returned to the CA as evidence of that binding.
+ */
+int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
+			    size_t cred_blob_len, const uint8_t *enc_secret,
+			    size_t enc_secret_len, uint8_t *out_secret,
+			    size_t out_secret_max, size_t *out_secret_len)
+{
+	TSS2_RC rc;
+	int ret;
+	ESYS_TR aik_handle = ESYS_TR_NONE;
+	ESYS_TR ek_handle = ESYS_TR_NONE;
+	ESYS_TR policy_session = ESYS_TR_NONE;
+	bool ek_transient = false;
+	TPM2B_ID_OBJECT id_object;
+	TPM2B_ENCRYPTED_SECRET secret_2b;
+	TPM2B_DIGEST *cert_info = NULL;
+	TPMT_SYM_DEF sym = {.algorithm = TPM2_ALG_NULL};
+	size_t off;
+
+	if (!ctx || !ctx->initialized || !cred_blob || !enc_secret ||
+	    !out_secret || !out_secret_len)
+		return -EINVAL;
+
+	*out_secret_len = 0;
+	memset(&id_object, 0, sizeof(id_object));
+	memset(&secret_2b, 0, sizeof(secret_2b));
+
+	off = 0;
+	rc = Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(cred_blob, cred_blob_len, &off,
+					       &id_object);
+	if (rc != TSS2_RC_SUCCESS)
+		return -EINVAL;
+
+	off = 0;
+	rc = Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(
+	    enc_secret, enc_secret_len, &off, &secret_2b);
+	if (rc != TSS2_RC_SUCCESS)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, &aik_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOKEY;
+
+	if (!ctx->aik_auth_loaded) {
+		ret = tpm_aik_load_auth(ctx);
+		if (ret < 0)
+			return ret;
+	}
+	{
+		TPM2B_AUTH auth = {.size = TPM_AIK_AUTH_SIZE};
+		memcpy(auth.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
+		TPM_CALL_RETRY(
+		    ctx, rc, Esys_TR_SetAuth(ctx->esys_ctx, aik_handle, &auth));
+		secure_bzero(auth.buffer, sizeof(auth.buffer));
+		if (rc != TSS2_RC_SUCCESS)
+			return tss2_rc_to_errno(rc);
+	}
+
+	ret = tpm_load_ek(ctx, &ek_handle, &ek_transient);
+	if (ret < 0)
+		return ret;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_StartAuthSession(ctx->esys_ctx, ESYS_TR_NONE,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+					     TPM2_SE_POLICY, &sym,
+					     TPM2_ALG_SHA256, &policy_session));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto cleanup;
+	}
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_PolicySecret(ctx->esys_ctx, ESYS_TR_RH_ENDORSEMENT,
+					 policy_session, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE, NULL, NULL,
+					 NULL, 0, NULL, NULL));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto cleanup;
+	}
+
+	{
+		struct esys_activate_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .activate_handle = aik_handle,
+		    .key_handle = ek_handle,
+		    .shandle1 = ESYS_TR_PASSWORD,
+		    .shandle2 = policy_session,
+		    .credential_blob = &id_object,
+		    .secret = &secret_2b,
+		    .cert_info_out = &cert_info,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_activate_thunk, &args,
+					    &rc, 1, (void **)&cert_info);
+		if (ret < 0)
+			goto cleanup;
+	}
+
+	if (cert_info->size > out_secret_max) {
+		ret = -ENOSPC;
+		goto cleanup;
+	}
+	memcpy(out_secret, cert_info->buffer, cert_info->size);
+	*out_secret_len = cert_info->size;
+	ret = 0;
+
+cleanup:
+	if (cert_info) {
+		secure_bzero(cert_info->buffer, sizeof(cert_info->buffer));
+		Esys_Free(cert_info);
+	}
+	if (policy_session != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, policy_session);
+	if (ek_transient && ek_handle != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, ek_handle);
+	secure_bzero(&secret_2b, sizeof(secret_2b));
+	return ret;
+}
+
 static int mkdirs(const char *path, mode_t mode)
 {
 	char tmp[PATH_MAX];
