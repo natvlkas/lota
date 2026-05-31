@@ -49,6 +49,7 @@ static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					 int had_existing_aik);
 static int mkdirs(const char *path, mode_t mode);
+static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx);
 
 static void secure_bzero(void *ptr, size_t len)
 {
@@ -1153,6 +1154,41 @@ void tpm_test_reset_prop_reader(void)
 }
 #endif
 
+static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx)
+{
+	time_t now;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	now = time(NULL);
+
+	if (!ctx->aik_meta_loaded) {
+		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
+		ctx->aik_meta.version = TPM_AIK_META_VERSION;
+		ctx->aik_meta.generation = 1;
+		ctx->aik_meta.last_rotated_at = 0;
+	} else if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
+		   ctx->aik_meta.version != TPM_AIK_META_VERSION) {
+		return -EINVAL;
+	} else if (ctx->aik_meta.generation == 0) {
+		ctx->aik_meta.generation = 1;
+	}
+
+	ctx->aik_meta.provisioned_at = (int64_t)now;
+	ctx->aik_meta_loaded = true;
+
+	return tpm_aik_save_metadata(ctx);
+}
+
+#ifdef LOTA_TPM_TESTING
+int tpm_test_save_new_key_metadata(struct tpm_context *ctx)
+{
+	return tpm_aik_save_new_key_metadata(ctx);
+}
+#endif
+
 int tpm_provision_aik(struct tpm_context *ctx)
 {
 	int ret;
@@ -1176,10 +1212,18 @@ int tpm_provision_aik(struct tpm_context *ctx)
 			return 0;
 
 		/* missing/corrupt auth means the key is not safely usable */
-		return tpm_aik_reprovision_with_auth(ctx, 1);
+		ret = tpm_aik_reprovision_with_auth(ctx, 1);
+		if (ret < 0)
+			return ret;
+
+		return tpm_aik_save_new_key_metadata(ctx);
 	}
 
-	return tpm_aik_reprovision_with_auth(ctx, 0);
+	ret = tpm_aik_reprovision_with_auth(ctx, 0);
+	if (ret < 0)
+		return ret;
+
+	return tpm_aik_save_new_key_metadata(ctx);
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,

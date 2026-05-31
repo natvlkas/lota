@@ -203,6 +203,55 @@ static void test_metadata_default_creation(void)
 	PASS();
 }
 
+static void test_new_key_metadata_persisted(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+	int ret;
+	time_t before, after;
+
+	TEST("new AIK metadata is persisted");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+	unlink(ctx.aik_meta_path);
+
+	before = time(NULL);
+	ret = tpm_test_save_new_key_metadata(&ctx);
+	after = time(NULL);
+
+	if (ret != 0) {
+		FAIL("save new-key metadata returned error");
+		return;
+	}
+
+	if (access(ctx.aik_meta_path, F_OK) != 0) {
+		FAIL("metadata file not created");
+		return;
+	}
+
+	ret = tpm_aik_load_metadata(&ctx2);
+	if (ret != 0) {
+		FAIL("reload returned error");
+		return;
+	}
+
+	if (ctx2.aik_meta.magic != TPM_AIK_META_MAGIC ||
+	    ctx2.aik_meta.version != TPM_AIK_META_VERSION ||
+	    ctx2.aik_meta.generation != 1 ||
+	    ctx2.aik_meta.last_rotated_at != 0) {
+		FAIL("metadata defaults mismatch");
+		return;
+	}
+
+	if (ctx2.aik_meta.provisioned_at < (int64_t)before ||
+	    ctx2.aik_meta.provisioned_at > (int64_t)after) {
+		FAIL("provisioned_at out of range");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_metadata_bad_magic(void)
 {
 	struct tpm_context ctx;
@@ -1392,6 +1441,7 @@ int main(void)
 
 	test_metadata_save_load();
 	test_metadata_default_creation();
+	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
 	test_metadata_bad_version();
 	test_aik_age();

@@ -765,6 +765,7 @@ void tpm_test_reset_prop_reader(void);
 int tpm_test_rc_to_errno(uint32_t rc);
 int tpm_test_rc_is_transient(uint32_t rc);
 int tpm_test_rc_is_lockout(uint32_t rc);
+int tpm_test_save_new_key_metadata(struct tpm_context *ctx);
 
 /*
  * Callback type for tpm_call_with_backoff(). Production callers do

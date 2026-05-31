@@ -736,14 +736,14 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	if (ret < 0) {
 		fprintf(stderr, "Failed to apply daemon hardening: %s\n",
 			strerror(-ret));
-		return ret;
+		return 1;
 	}
 
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
 			strerror(-ret));
-		return ret;
+		return 1;
 	}
 
 	printf("Initializing TPM...\n");
@@ -752,7 +752,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
 		net_cleanup();
-		return ret;
+		return 1;
 	}
 
 	printf("Performing self-measurement...\n");
@@ -769,7 +769,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return ret;
+		return 1;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
@@ -778,7 +778,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return ret;
+		return 1;
 	}
 
 	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 1);
@@ -788,7 +788,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
-	return ret;
+	return ret == 0 ? 0 : 1;
 }
 
 /*
@@ -863,7 +863,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	if (ret < 0) {
 		lota_err("Failed to apply daemon hardening: %s",
 			 strerror(-ret));
-		return ret;
+		return 1;
 	}
 
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
@@ -883,7 +883,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		lota_err("Failed to initialize network: %s", strerror(-ret));
 		dbus_cleanup(g_agent.dbus_ctx);
 		ipc_cleanup(&g_agent.ipc_ctx);
-		return ret;
+		return 1;
 	}
 
 	lota_info("Initializing TPM");
@@ -893,7 +893,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		dbus_cleanup(g_agent.dbus_ctx);
 		ipc_cleanup(&g_agent.ipc_ctx);
-		return ret;
+		return 1;
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
 
@@ -915,7 +915,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		dbus_cleanup(g_agent.dbus_ctx);
 		ipc_cleanup(&g_agent.ipc_ctx);
-		return ret;
+		return 1;
 	}
 
 	lota_info("Checking AIK");
@@ -926,7 +926,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		dbus_cleanup(g_agent.dbus_ctx);
 		ipc_cleanup(&g_agent.ipc_ctx);
-		return ret;
+		return 1;
 	}
 
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
@@ -939,7 +939,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		dbus_cleanup(g_agent.dbus_ctx);
 		ipc_cleanup(&g_agent.ipc_ctx);
-		return ret;
+		return 1;
 	} else {
 		int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
 		lota_info("AIK generation: %lu, age: %ld seconds",

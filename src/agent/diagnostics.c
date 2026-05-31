@@ -73,6 +73,13 @@ static int ipc_request_shutdown(void)
 	return 0;
 }
 
+static int diagnostic_exit_code(int ret)
+{
+	if (ret < 0)
+		return 1;
+	return ret;
+}
+
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 {
 	if (opts->shutdown_flag) {
@@ -86,7 +93,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	}
 
 	if (opts->dump_config_flag)
-		return cli_dump_config(opts, cfg);
+		return diagnostic_exit_code(cli_dump_config(opts, cfg));
 
 	{
 		struct policy_ops_args policy_ops = {
@@ -98,23 +105,23 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		};
 		int ret = handle_policy_ops(&policy_ops);
 		if (ret != -1)
-			return ret;
+			return diagnostic_exit_code(ret);
 	}
 
 	if (opts->test_tpm_flag)
-		return test_tpm();
+		return diagnostic_exit_code(test_tpm());
 
 	if (opts->test_iommu_flag)
-		return test_iommu();
+		return diagnostic_exit_code(test_iommu());
 
 	if (opts->export_policy_flag)
-		return export_policy(g_agent.mode);
+		return diagnostic_exit_code(export_policy(g_agent.mode));
 
 	if (opts->test_ipc_flag)
-		return run_ipc_test_server(cfg);
+		return diagnostic_exit_code(run_ipc_test_server(cfg));
 
 	if (opts->test_signed_flag)
-		return run_signed_ipc_test_server(cfg);
+		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {
@@ -131,9 +138,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				"--insecure-allow-no-verify-tls\n");
 			return 1;
 		}
-		return do_enroll(opts->ca_server, opts->ca_port,
-				 opts->ca_cert_path, opts->no_verify_tls,
-				 opts->has_pin ? opts->pin_sha256_bin : NULL);
+		return diagnostic_exit_code(
+		    do_enroll(opts->ca_server, opts->ca_port,
+			      opts->ca_cert_path, opts->no_verify_tls,
+			      opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
 	if (opts->attest_flag) {
@@ -151,14 +159,15 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 					"--no-verify-tls is set\n");
 		}
 		if (opts->attest_interval > 0)
-			return do_continuous_attest(
+			return diagnostic_exit_code(do_continuous_attest(
 			    opts->server_addr, opts->server_port,
 			    opts->ca_cert_path, opts->no_verify_tls,
 			    opts->has_pin ? opts->pin_sha256_bin : NULL,
-			    opts->attest_interval, opts->aik_ttl);
-		return do_attest(opts->server_addr, opts->server_port,
-				 opts->ca_cert_path, opts->no_verify_tls,
-				 opts->has_pin ? opts->pin_sha256_bin : NULL);
+			    opts->attest_interval, opts->aik_ttl));
+		return diagnostic_exit_code(
+		    do_attest(opts->server_addr, opts->server_port,
+			      opts->ca_cert_path, opts->no_verify_tls,
+			      opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
 	return -1;
