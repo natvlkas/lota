@@ -78,7 +78,7 @@ var (
 	logFormat            = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel             = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog      = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
-	requireCert          = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
+	requireCert          = flag.Bool("require-cert", true, "Require a Privacy CA-issued AIK certificate; reject reports without one (production default)")
 	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
 	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline. With the default (false), a first-attestation client must either be covered by a signed policy that pins PCR0/PCR1/PCR7 or be pre-enrolled in the baseline store; otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
@@ -92,8 +92,8 @@ var (
 )
 
 func main() {
-	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted CA certificate (PEM) for AIK/EK certificate chain verification; may be repeated")
-	flag.Var(&ekCRLs, "ek-crl", "CRL file (PEM or DER) used to revoke compromised AIK/EK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
+	flag.Var(&ekCRLs, "ek-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Parse()
 
 	// initialize structured logger
@@ -225,8 +225,8 @@ func main() {
 
 		// file-based AIK store (optionally certificate-backed)
 		if *requireCert && len(aikCACerts) == 0 {
-			logger.Error("--require-cert requires trusted CA roots for AIK/EK verification",
-				"hint", "provide one or more --aik-ca-cert PEM paths (TPM manufacturer / Privacy CA), or disable --require-cert (INSECURE)")
+			logger.Error("--require-cert requires a trusted attestation-CA root for AIK verification",
+				"hint", "provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)")
 			os.Exit(1)
 		}
 

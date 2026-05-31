@@ -41,13 +41,21 @@ TPM 2.0 (Hardware: PCRs) -> eBPF LSM Kernel (Binary Monitoring) -> LOTA Agent Us
 
 ## Security Model
 
-| Attack Vector            | Protection                 |
-| ------------------------ | -------------------------- |
-| Binary tampering         | eBPF monitors all execve() |
-| Kernel rootkits          | Measured Boot (PCR 0-7)    |
-| DMA attacks              | IOMMU verification         |
-| Replay attacks           | Nonce in TPM Quote         |
-| Boot parameter tampering | PCR 8/9 measurement        |
+| Attack Vector             | Protection                                     |
+| ------------------------- | ---------------------------------------------- |
+| AIK not in a genuine TPM  | Credential activation via the Privacy CA       |
+| Hardware identity spoofing| Identity is the CA-issued device pseudonym     |
+| Binary / library tampering| eBPF LSM gates on exec / mmap / mprotect       |
+| Kernel rootkits           | Measured Boot (PCR 0/1/7) + PCR14 self-measure |
+| DMA attacks               | IOMMU verification                             |
+| Replay attacks            | One-time nonce bound into the TPM quote        |
+
+The AIK that signs attestation quotes is proven to live in a genuine,
+manufacturer-certified TPM through TPM 2.0 credential activation performed
+by the self-hosted attestation CA (`lota-attest-ca`); verifiers trust the
+CA-issued AIK certificate and never see the Endorsement Key. Each host
+enrolls once with `lota-agent --enroll`; see
+[examples/enrollment/](examples/enrollment/README.md).
 
 ## Live demo
 

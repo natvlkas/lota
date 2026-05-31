@@ -149,6 +149,48 @@ After reboot the agent's first start provisions a fresh AIK and
 extends PCR14 cleanly. Subsequent starts that follow a clean shutdown
 reuse the witness so the gate is silent.
 
+### 6. Attestation CA enrollment
+
+The verifier authenticates an agent only through a certificate issued by
+the attestation CA (`lota-attest-ca`), so each host enrolls once before it
+can attest. Enrollment runs the TPM 2.0 credential-activation ceremony:
+the CA verifies the EK certificate chains to a trusted manufacturer root,
+proves the AIK and that EK share one TPM, and issues a short-lived AIK
+certificate whose subject is the device pseudonym. The EK is presented
+only to the CA; verifiers never see it.
+
+Stand up the CA with your CA key, the trusted manufacturer EK roots and a
+server TLS keypair (`examples/enrollment/gen-ca.sh` generates the CA
+material):
+
+```sh
+lota-attest-ca -listen :8444 \
+    -ca-cert ca.crt -ca-key ca.key \
+    -tls-cert tls.crt -tls-key tls.key \
+    -pseudonym-key pseudonym.key \
+    -ek-root /path/to/tpm-vendor-root.pem
+```
+
+Enroll the agent once per host (repeat before the certificate TTL
+expires, default 24h):
+
+```sh
+sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
+    --ca-cert tls.crt
+# stores /var/lib/lota/aik_cert.der, sent in every attestation report
+```
+
+Point every verifier at the CA root:
+
+```sh
+lota-verifier -aik-ca-cert ca.crt ...
+```
+
+A host that has not enrolled (no AIK certificate) is refused under the
+production `--require-cert` default. See
+[`examples/enrollment/README.md`](../examples/enrollment/README.md) for
+the full end-to-end walk-through.
+
 ## What still fails after bring-up
 
 The most common failures, with the gate that produced them:
