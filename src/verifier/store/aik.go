@@ -727,6 +727,30 @@ type CertificateStore struct {
 // TCG EK Credential Profile OID for TPM 2.0
 var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
 
+// hasTCGEKOID reports whether the certificate carries the TCG EK OID in
+// either an extended key usage or a certificate policy. Current Go parses
+// policies into Policies; older accessors populate PolicyIdentifiers, so
+// consult all three.
+func hasTCGEKOID(cert *x509.Certificate) bool {
+	for _, oid := range cert.UnknownExtKeyUsage {
+		if oid.Equal(oidTCGEKCertificate) {
+			return true
+		}
+	}
+	for _, oid := range cert.PolicyIdentifiers {
+		if oid.Equal(oidTCGEKCertificate) {
+			return true
+		}
+	}
+	want := oidTCGEKCertificate.String()
+	for _, oid := range cert.Policies {
+		if oid.String() == want {
+			return true
+		}
+	}
+	return false
+}
+
 // certificate verification errors
 var (
 	ErrNoCertificate       = errors.New("certificate required but not provided")
@@ -1025,16 +1049,12 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 		return ErrNoTrustedCAs
 	}
 
-	// EK certificate must contain the TCG EK Credential Profile OID
-	// (2.23.133.8.1) in Extended Key Usage to prove TPM 2.0 origin!!
-	found := false
-	for _, oid := range cert.UnknownExtKeyUsage {
-		if oid.Equal(oidTCGEKCertificate) {
-			found = true
-			break
-		}
-	}
-	if !found {
+	// EK certificate must carry the TCG EK Credential Profile OID
+	// (2.23.133.8.1) to prove TPM 2.0 origin. Genuine manufacturer EK
+	// certificates almost always place it in a certificate policy rather
+	// than an extended key usage, so accept either location; checking
+	// only the EKU rejects real hardware.
+	if !hasTCGEKOID(cert) {
 		return ErrCertificateEKOID
 	}
 

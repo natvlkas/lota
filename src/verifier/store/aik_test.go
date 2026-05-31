@@ -897,6 +897,74 @@ func TestCertificateStore_EKCertificateMissingOID(t *testing.T) {
 	}
 }
 
+// generates an EK certificate carrying the TCG OID as a certificate
+// policy, which is where genuine manufacturer EK certificates place it.
+func generateEKCertificatePolicyOID(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
+	t.Helper()
+
+	oid, err := x509.OIDFromInts([]uint64{2, 23, 133, 8, 1})
+	if err != nil {
+		t.Fatalf("EK policy OID: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(12),
+		Subject: pkix.Name{
+			Organization: []string{"LOTA Test TPM Manufacturer"},
+			CommonName:   "EK Certificate (policy OID)",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment,
+		Policies:              []x509.OID{oid},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Failed to create EK certificate with policy OID: %v", err)
+	}
+	return certDER
+}
+
+// A manufacturer EK certificate that carries the TCG OID in a certificate
+// policy (rather than an extended key usage) must be accepted. Checking
+// only the EKU rejects real hardware.
+func TestCertificateStore_EKCertificatePolicyOID(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	storePath := filepath.Join(tempDir, "store")
+	if err := os.Mkdir(storePath, 0700); err != nil {
+		t.Fatalf("Failed to create store dir: %v", err)
+	}
+
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+
+	caCertPath := filepath.Join(tempDir, "ca.pem")
+	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	store, err := NewCertificateStore(storePath, []string{caCertPath}, true)
+	if err != nil {
+		t.Fatalf("NewCertificateStore failed: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
+
+	ekKey := generateTestKey(t)
+	ekCertDER := generateEKCertificatePolicyOID(t, ekKey, caCert, caKey)
+
+	if err := store.RegisterAIKWithCert("client-ek-policy", &aikKey.PublicKey, aikCertDER, ekCertDER); err != nil {
+		t.Errorf("EK cert with TCG OID in a certificate policy should be accepted: %v", err)
+	}
+}
+
 func TestFileStore_PathTraversal(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "lota-test-*")
 	if err != nil {
