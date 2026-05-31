@@ -7,6 +7,7 @@ intentionally a single-purpose component; they are wired together by
 
 | Directory          | Role                                                         |
 | ------------------ | ------------------------------------------------------------ |
+| `enrollment/`      | Privacy CA enrollment end-to-end: stand up `lota-attest-ca`, enroll an AIK via credential activation, attest to a verifier that trusts only the CA root. |
 | `demo_server/`     | Go reference server: nonce issuance + heartbeat verification |
 | `demo_anticheat/`  | C heartbeat producer driven by the anti-cheat SDK            |
 | `demo_game/`       | SDL2 client (`trust_pong`) that mirrors the server verdict   |
