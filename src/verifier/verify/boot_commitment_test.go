@@ -482,6 +482,47 @@ func TestMatchBootCommitmentPCR14_ZeroSkewIsExactOnly(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_MaxRestartCountSkewIs64 pins the default skew at 64
+// so the brute-force surface of the PCR14 boot-commitment matcher does
+// not silently grow back to the historical 1024 value. Operators that
+// truly need a wider window can still set MaxRestartCountSkew
+// explicitly via the --max-restart-count-skew flag; reverting the
+// default is a security-relevant change that must come with a
+// matching test edit.
+func TestDefaultConfig_MaxRestartCountSkewIs64(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.MaxRestartCountSkew != 64 {
+		t.Fatalf("DefaultConfig.MaxRestartCountSkew drifted: got %d want 64",
+			cfg.MaxRestartCountSkew)
+	}
+}
+
+// TestMatchBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow walks
+// the matcher with the default skew and a quote restartCount that
+// drifts just past it; rejection is mandatory because the matcher
+// must not iterate past the default budget on production reports.
+func TestMatchBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow(t *testing.T) {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = 0x7E
+	}
+
+	const (
+		resetCount        uint32 = 4
+		bootRestartCount  uint32 = 1
+		defaultSkew              = uint32(64)
+		quoteRestartCount        = bootRestartCount + defaultSkew + 1
+	)
+	target := DeriveBootCommitmentPCR14(agentHash, resetCount,
+		bootRestartCount)
+
+	_, _, ok := MatchBootCommitmentPCR14(agentHash, resetCount,
+		quoteRestartCount, target, defaultSkew)
+	if ok {
+		t.Fatal("matcher accepted a drift past the default skew window")
+	}
+}
+
 func TestMatchLockedBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {

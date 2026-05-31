@@ -269,6 +269,16 @@ type VerifierConfig struct {
 	// suspend/resume. Without a window any laptop that suspends
 	// between attestations drops offline with integrity_mismatch.
 	// 0 = exact match only.
+	//
+	// The default of 64 covers around sixty suspend/resume cycles
+	// between two attestations - well past any realistic operator
+	// cadence on a laptop fleet (continuous attestation at a few-
+	// minute interval, or operator-driven probes after a workstation
+	// returns from sleep). Keeping the window narrow shrinks the
+	// brute-force surface the matcher exposes to a caller that
+	// controls PCR14 contents but not the agent_hash baseline: every
+	// additional unit of skew is one extra SHA-256 candidate the
+	// matcher tries before giving up.
 	MaxRestartCountSkew uint32
 
 	// if true, allow policies that define no measurement allowlists
@@ -287,7 +297,7 @@ func DefaultConfig() VerifierConfig {
 		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
-		MaxRestartCountSkew:   1024,
+		MaxRestartCountSkew:   64,
 		AllowPermissivePolicy: false,
 	}
 }
