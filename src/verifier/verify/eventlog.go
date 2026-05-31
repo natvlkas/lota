@@ -306,6 +306,9 @@ func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayRe
 		if replay.ExtendCounts[i] == 0 {
 			continue // no events for this PCR
 		}
+		if report.TPM.PCRMask&(1<<uint(i)) == 0 {
+			continue // not TPM-quoted by this challenge/report
+		}
 		if skipPCRs != nil && skipPCRs[i] {
 			continue
 		}

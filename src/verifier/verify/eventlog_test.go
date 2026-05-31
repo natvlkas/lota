@@ -347,6 +347,7 @@ func TestVerifyEventLogConsistency_Match(t *testing.T) {
 
 	report := &types.AttestationReport{}
 	report.TPM.PCRValues[0] = replay.PCRValues[0] // match
+	report.TPM.PCRMask = 1 << 0
 
 	mismatches := VerifyEventLogConsistency(report, replay, nil)
 	if len(mismatches) != 0 {
@@ -381,6 +382,7 @@ func TestVerifyEventLogConsistency_Mismatch(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		report.TPM.PCRValues[0][i] = 0xFF
 	}
+	report.TPM.PCRMask = 1 << 0
 
 	mismatches := VerifyEventLogConsistency(report, replay, nil)
 	if len(mismatches) != 1 {
@@ -412,6 +414,7 @@ func TestVerifyEventLogConsistency_SkipPCRs(t *testing.T) {
 
 	report := &types.AttestationReport{}
 	// PCR 14 intentionally differs (runtime extension)
+	report.TPM.PCRMask = 1 << 14
 
 	skip := map[int]bool{14: true}
 	mismatches := VerifyEventLogConsistency(report, replay, skip)
@@ -420,6 +423,42 @@ func TestVerifyEventLogConsistency_SkipPCRs(t *testing.T) {
 	}
 
 	t.Log("PCR 14 correctly skipped in verification")
+}
+
+func TestVerifyEventLogConsistency_SkipsUnquotedPCRs(t *testing.T) {
+	t.Log("SECURITY TEST: Event log verification only compares quoted PCRs")
+
+	d1 := sha256.Sum256([]byte("firmware"))
+	d2 := sha256.Sum256([]byte("boot-loader-detail"))
+
+	parsed := &ParsedEventLog{
+		Entries: []EventLogEntry{
+			{
+				PCRIndex:  0,
+				EventType: 0x00000001,
+				Digests:   map[uint16][]byte{AlgSHA256: d1[:]},
+			},
+			{
+				PCRIndex:  4,
+				EventType: 0x00000001,
+				Digests:   map[uint16][]byte{AlgSHA256: d2[:]},
+			},
+		},
+	}
+
+	replay, err := ReplayEventLog(parsed)
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.PCRValues[0] = replay.PCRValues[0]
+	report.TPM.PCRMask = 1 << 0
+
+	mismatches := VerifyEventLogConsistency(report, replay, nil)
+	if len(mismatches) != 0 {
+		t.Errorf("Expected unquoted PCR 4 to be ignored, got: %v", mismatches)
+	}
 }
 
 func TestVerifyEventLog_EmptyLog(t *testing.T) {
@@ -474,6 +513,7 @@ func TestVerifyEventLog_FullPipeline(t *testing.T) {
 	report := &types.AttestationReport{}
 	copy(report.TPM.PCRValues[0][:], expectedPCR0)
 	copy(report.TPM.PCRValues[1][:], expectedPCR1)
+	report.TPM.PCRMask = (1 << 0) | (1 << 1)
 	report.EventLog = logData
 
 	err := VerifyEventLog(report)
