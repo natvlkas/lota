@@ -51,6 +51,12 @@ vendor's root bundle. A `VERIFY_OK` at the end means the AIK was
 activation-bound to the EK and the verifier trusted it through the
 certificate chain alone.
 
+The script starts `lota-verifier` from a writable runtime directory
+(`RUN_DIR`, default: a fresh `/tmp/lota-enrollment.*`) and points
+`--aik-store` / `--nonce-db` there. This keeps generated TLS material and
+nonce replay state out of the repository and avoids the production
+`/var/lib/lota/aiks` default when the verifier is not running as root.
+
 ## Notes for production
 
 - The demo verifier runs with `--allow-permissive-policy`,

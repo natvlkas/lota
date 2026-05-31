@@ -22,6 +22,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN="${BIN:-$HERE/../../build}"
 CA_DIR="${CA_DIR:-$HERE/ca}"
 EK_ROOT="${EK_ROOT:?set EK_ROOT to the TPM manufacturer / swtpm root certificate}"
+RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"
+AIK_STORE="${AIK_STORE:-$RUN_DIR/aiks}"
+NONCE_DB="${NONCE_DB:-$AIK_STORE/nonces.sqlite}"
 
 CA_ADDR="127.0.0.1:8444"
 VERIFIER_ADDR="127.0.0.1:9443"
@@ -34,6 +37,7 @@ for b in "$agent" "$ca" "$verifier"; do
 done
 
 [ -f "$CA_DIR/ca.crt" ] || { echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2; exit 1; }
+mkdir -p "$RUN_DIR" "$AIK_STORE"
 
 cleanup() { kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true; }
 trap cleanup EXIT
@@ -54,10 +58,15 @@ sudo "$agent" --enroll \
 echo "AIK certificate stored at /var/lib/lota/aik_cert.der"
 
 echo "== 3/4 start the verifier (trusts only the CA root) =="
-"$verifier" -addr "$VERIFIER_ADDR" \
-	-aik-ca-cert "$CA_DIR/ca.crt" \
-	-generate-cert -allow-permissive-policy \
-	-allow-tofu-boot-baseline -allow-no-initramfs-lock &
+(
+	cd "$RUN_DIR"
+	"$verifier" -addr "$VERIFIER_ADDR" \
+		-aik-ca-cert "$CA_DIR/ca.crt" \
+		-aik-store "$AIK_STORE" \
+		-nonce-db "$NONCE_DB" \
+		-generate-cert -allow-permissive-policy \
+		-allow-tofu-boot-baseline -allow-no-initramfs-lock
+) &
 VERIFIER_PID=$!
 sleep 1
 
