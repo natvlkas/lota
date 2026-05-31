@@ -29,7 +29,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -eu
-          for mod in src/verifier src/sdk/server; do
+          for mod in src/verifier src/attestca src/sdk/server; do
             (cd "$mod" && go mod tidy)
           done
           if ! git diff --exit-code -- '**/go.mod' '**/go.sum'; then
@@ -40,11 +40,22 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+      - name: Run attestca tests
+        working-directory: src/attestca
+        run: go test ./...
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64.8
           working-directory: src/verifier
+          args: --config ../../.golangci.yml ./...
+
+      - name: Run golangci-lint (attestca)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          working-directory: src/attestca
           args: --config ../../.golangci.yml ./...
 
   go-coverage:

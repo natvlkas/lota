@@ -41,6 +41,7 @@ endif
 AGENT_BIN := $(BUILD_DIR)/lota-agent
 INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
+ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
@@ -183,7 +184,7 @@ ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -269,7 +270,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -278,6 +279,8 @@ agent: $(AGENT_BIN)
 initramfs-lock: $(INITRAMFS_LOCK_BIN)
 
 verifier: $(VERIFIER_BIN)
+
+attest-ca: $(ATTESTCA_BIN)
 
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
@@ -359,6 +362,11 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 	cd $(SRC_DIR)/verifier && go build -o $(abspath $@) .
 	@echo "Built: $@"
 
+# Go attestation CA
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
+	cd $(SRC_DIR)/attestca && go build -o $(abspath $@) .
+	@echo "Built: $@"
+
 clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
@@ -387,6 +395,7 @@ install: check-version-tag all
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
+	install -m 755 $(ATTESTCA_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
 	@# Install the detached BPF signature too when sign-bpf produced
 	@# one. Agent's bpf_loader_load() reads <obj>.sig next to the .o,
@@ -732,6 +741,7 @@ help:
 	@echo "  bpf              Build BPF LSM object only"
 	@echo "  initramfs-lock   Build PCR14 initramfs lock helper only"
 	@echo "  verifier         Build Go verifier only"
+	@echo "  attest-ca        Build Go attestation CA only"
 	@echo "  sdk              Build gaming SDK shared/static libraries"
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"

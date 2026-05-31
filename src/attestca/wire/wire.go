@@ -110,6 +110,7 @@ func (e *encoder) u32(v uint32) {
 }
 
 func (e *encoder) bytes16(b []byte) {
+	// #nosec G115 -- callers cap every field well below 65535 before encoding
 	e.u16(uint16(len(b)))
 	e.buf = append(e.buf, b...)
 }
@@ -298,6 +299,7 @@ func WriteFrame(w io.Writer, body []byte) error {
 		return ErrTooLarge
 	}
 	var hdr [4]byte
+	// #nosec G115 -- len(body) is bounded by MaxFrameSize above
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(body)))
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err

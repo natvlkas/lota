@@ -145,7 +145,9 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil {
 		status := beginStatus(err)
 		s.log.Warn("enroll begin rejected", "remote", remote, "status", status, "error", err)
-		_ = s.writeChallenge(conn, &wire.ChallengeReply{Status: status})
+		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: status}); werr != nil {
+			s.log.Debug("failed to write begin rejection", "remote", remote, "error", werr)
+		}
 		return
 	}
 
@@ -169,16 +171,20 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil {
 		status := completeStatus(err)
 		s.log.Warn("enroll complete rejected", "remote", remote, "status", status, "error", err)
-		_ = s.writeResult(conn, &wire.ResultReply{Status: status})
+		if werr := s.writeResult(conn, &wire.ResultReply{Status: status}); werr != nil {
+			s.log.Debug("failed to write complete rejection", "remote", remote, "error", werr)
+		}
 		return
 	}
 
 	s.log.Info("enroll issued AIK certificate", "remote", remote, "device_id", deviceID)
-	_ = s.writeResult(conn, &wire.ResultReply{
+	if werr := s.writeResult(conn, &wire.ResultReply{
 		Status:     wire.StatusOK,
 		AIKCertDER: certDER,
 		DeviceID:   deviceID,
-	})
+	}); werr != nil {
+		s.log.Debug("failed to write enrollment result", "remote", remote, "error", werr)
+	}
 }
 
 func (s *Server) readBegin(conn net.Conn) (*wire.BeginRequest, error) {
