@@ -392,6 +392,7 @@ start_demo_server() {
 	start_bg demo_server "$EXAMPLES_BIN/demo_server" \
 		--listen "$LISTEN_ADDR" \
 		--aik-pub "$AIK_PEM" \
+		--anticheat-binary "$EXAMPLES_BIN/demo_anticheat" \
 		--expected-games "$GAME_ID=lota-demo-CS2-clone"
 
 	if [ "$DRY_RUN" -eq 1 ]; then

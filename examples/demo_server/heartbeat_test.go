@@ -22,9 +22,23 @@ import (
 const testGameID = "trust-pong"
 const testLicense = "lota-demo-CS2-clone"
 
+// testAnticheatExeDigest is a deterministic synthetic exe digest the
+// heartbeat tests use in place of an actual demo_anticheat binary
+// hash. Production callers pass the real SHA-256 via --anticheat-binary;
+// the tests do not exercise the on-disk read path, only the derivation,
+// so a stable constant keeps the gameBinding hash deterministic across
+// machines.
+var testAnticheatExeDigest = [32]byte{
+	0xAC, 0x70, 0x07, 0xDE, 0x57, 0xDA, 0x70, 0x16,
+	0x55, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+	0xEE, 0xFF, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+	0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+}
+
 func newTestServer(t *testing.T, key *rsa.PrivateKey) *demoServer {
 	t.Helper()
-	games, err := parseExpectedGames(testGameID + "=" + testLicense)
+	games, err := parseExpectedGames(testGameID+"="+testLicense,
+		testAnticheatExeDigest)
 	if err != nil {
 		t.Fatalf("parseExpectedGames: %v", err)
 	}
@@ -51,7 +65,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 		sequence:      1,
 		lotaFlags:     0x07,
 		timestamp:     uint64(time.Now().Unix()),
-		gameIDHash:    computeGameBindingHash(testGameID),
+		gameIDHash:    computeGameBindingHash(testGameID, testAnticheatExeDigest),
 		domainVersion: domainVersionV1,
 	}
 	if mutate != nil {

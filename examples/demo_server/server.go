@@ -197,10 +197,13 @@ func logf(format string, args ...any) {
 
 // parseExpectedGames accepts a comma-separated list of game_id=license
 // entries. Returns an error if the list is empty or any entry is
-// missing a license string. The game-binding hash is derived from
-// the game_id with the same domain string the C heartbeat producer
-// stamps into the LACH header.
-func parseExpectedGames(spec string) (map[string]gameBinding, error) {
+// missing a license string. The game-binding hash is derived from the
+// game_id with the same SDK domain string the C heartbeat producer
+// stamps into the LACH header, mixed with the producer binary's
+// SHA-256 (passed as anticheatExeDigest) so the verdict map keys
+// reproduce lota_ac_compute_game_binding_hash() byte for byte.
+func parseExpectedGames(spec string,
+	anticheatExeDigest [32]byte) (map[string]gameBinding, error) {
 	out := make(map[string]gameBinding)
 	for raw := range strings.SplitSeq(spec, ",") {
 		entry := strings.TrimSpace(raw)
@@ -214,7 +217,7 @@ func parseExpectedGames(spec string) (map[string]gameBinding, error) {
 		gid := kv[0]
 		out[gid] = gameBinding{
 			gameID:     gid,
-			gameIDHash: computeGameBindingHash(gid),
+			gameIDHash: computeGameBindingHash(gid, anticheatExeDigest),
 			licenseID:  kv[1],
 		}
 	}
@@ -224,16 +227,22 @@ func parseExpectedGames(spec string) (map[string]gameBinding, error) {
 	return out, nil
 }
 
-// computeGameBindingHash reproduces the C-side game-binding domain
-// hash that is bound into the LACH header by the heartbeat producer.
-// In the production flow the producer mixes a hash over the game
-// executable bytes too; the demo binds against the game_id alone so
-// the same expected_games map works whether the operator runs the
-// SDL2 client from build/examples/ or from a packaged install.
-func computeGameBindingHash(gameID string) [32]byte {
+// computeGameBindingHash reproduces the SDK-side game-binding domain
+// hash that lota_ac_compute_game_binding_hash() (src/sdk/lota_anticheat.c)
+// stamps into the LACH header. The C helper hashes
+//
+//	SHA-256("lota-ac-game-binding:v2" || 0x00 || game_id || sha256(exe))
+//
+// using the LOTA_AC_DOMAIN_VERSION_V1 entry of lota_ac_domain_table.
+// The Go derivation must mirror it byte for byte or the server keys
+// its verdict map by a hash the producer never sends, which surfaces
+// as state=UNTRUSTED reason="unknown game_id_hash" on a clean run.
+func computeGameBindingHash(gameID string, exeDigest [32]byte) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte("lota-demo-game-binding:v1\x00"))
+	_, _ = h.Write([]byte("lota-ac-game-binding:v2"))
+	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(gameID))
+	_, _ = h.Write(exeDigest[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

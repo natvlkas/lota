@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -55,9 +56,28 @@ func main() {
 		"comma-separated list of game_id=license entries the server accepts")
 	maxAgeSec := flag.Uint("max-age", 300,
 		"maximum heartbeat age in seconds")
+	anticheatBin := flag.String("anticheat-binary", "",
+		"path to the demo_anticheat producer binary; its SHA-256 is "+
+			"mixed into the expected game-binding hash exactly like "+
+			"lota_ac_compute_game_binding_hash() does on the client. "+
+			"Required for any non-test invocation: leaving it empty "+
+			"keeps the server from being able to reproduce the hash "+
+			"the heartbeat producer stamps into the LACH header.")
 	flag.Parse()
 
-	games, err := parseExpectedGames(*gamesSpec)
+	var anticheatDigest [32]byte
+	if *anticheatBin != "" {
+		bin, err := os.ReadFile(*anticheatBin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"demo_server: read --anticheat-binary %s: %v\n",
+				*anticheatBin, err)
+			os.Exit(2)
+		}
+		anticheatDigest = sha256.Sum256(bin)
+	}
+
+	games, err := parseExpectedGames(*gamesSpec, anticheatDigest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "demo_server: bad --expected-games: %v\n", err)
 		os.Exit(2)
