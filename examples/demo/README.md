@@ -104,6 +104,13 @@ kill %1; exit
 two minutes and the cast under 200 KiB. The producer's per-tick log
 lines make the verdict transition visible without narration.
 
+The agent rate-limits `GET_TOKEN` per UID. `setup.sh` runs its agent,
+liveness check, and heartbeat producer all as root, so they share the
+uid-0 token bucket. For a long or fast recording run the recording
+producer under a separate, non-root UID (or kill `setup.sh`'s own
+`demo_anticheat --server` first) so it gets its own bucket and does not
+starve the demo's heartbeats.
+
 ## Dependencies
 
 Install the normal project dependencies plus the demo tools:
