@@ -57,8 +57,10 @@ walk-through.
    UNTRUSTED ticks, matching `trust_pong`'s
    `untrusted_streak >= 2`) the play field freezes with
    `INTEGRITY LOSS - session terminated`. Ctrl-C on `demo_tamper.sh`
-   unlinks the marker; the next tick returns `TRUSTED` and the
-   client resumes.
+   unlinks the marker and the verdict stream returns to `TRUSTED`,
+   but the freeze is a one-way latch (`trust_pong.c`: `g.frozen` is
+   never cleared) - the session stays terminated. Restart
+   `trust_pong` for a fresh session.
 
 Press Esc or close the `trust_pong` window to end the demo. The
 runner's EXIT trap stops every background process, tears down
@@ -66,18 +68,41 @@ runner's EXIT trap stops every background process, tears down
 
 ## Asciinema capture
 
-To record a walk-through, run the demo under `asciinema`:
+The `trust_pong` window is a GUI, so the recorded terminal cannot be
+the one running `setup.sh` (it blocks on the game). Record a second
+terminal that tails the producer's per-tick verdict lines while the
+tamper script flips the state; that text is what carries the
+TRUSTED -> UNTRUSTED -> TRUSTED transition in the cast.
+
+The sandbox is a `mktemp -d` owned by root, so the recorded terminal
+reads its logs and arms the marker as root.
+
+Terminal A (not recorded) brings up the chain with a fast tick and
+keeps the sandbox alive:
 
 ```sh
-asciinema rec --max-wait 2 --command "examples/demo/setup.sh --yes" \
-              examples/demo/asciinema.cast
+sudo BUILD_DIR=build examples/demo/setup.sh \
+     --no-build --keep-tmp --interval 2 --yes
 ```
 
-`--max-wait 2` collapses long ENTER pauses to two seconds so the
-playback stays under two minutes. Trigger `demo_tamper.sh` from a
-second terminal at the appropriate point in the recording; the
-producer's per-tick log lines make the verdict transition visible
-without narration.
+Terminal B (recorded) tails the verdict stream, arms the tamper for a
+fixed window, then lets it auto-disarm:
+
+```sh
+sudo -v   # refresh sudo so no password prompt lands in the cast
+sudo asciinema rec -i 2 examples/demo/asciinema.cast
+# inside the recorded root shell:
+SANDBOX=$(ls -1dt /tmp/lota-demo.* | head -n1)
+tail -n 2 -f "$SANDBOX/logs/demo_anticheat.log" &
+sleep 8
+examples/demo/demo_tamper.sh --demo-dir "$SANDBOX" --hold-sec 12
+sleep 10
+kill %1; exit
+```
+
+`-i 2` collapses idle gaps to two seconds so the playback stays under
+two minutes and the cast under 200 KiB. The producer's per-tick log
+lines make the verdict transition visible without narration.
 
 ## Dependencies
 
