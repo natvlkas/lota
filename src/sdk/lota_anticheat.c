@@ -559,9 +559,24 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	if (!session->direct)
 		return -EOPNOTSUPP;
 
-	int ret = lota_ac_tick(session);
-	if (ret < 0 && session->token_len == 0)
-		return -ENODATA;
+	/*
+	 * Refresh integrity flags for the nonce binding with GET_STATUS only. A
+	 * heartbeat needs exactly one TPM quote (the nonce-bound GET_TOKEN
+	 * below); routing through lota_ac_tick() would issue a second,
+	 * immediately overwritten GET_TOKEN and burn an extra slot of the
+	 * agent's per-UID GET_TOKEN rate limit (ipc.c), halving the sustainable
+	 * heartbeat rate.
+	 */
+	if (!session->client)
+		return -ENOTCONN;
+
+	struct lota_status status;
+	int ret = lota_get_status(session->client, &status);
+	if (ret != LOTA_OK) {
+		session->state = LOTA_AC_STATE_ERROR;
+		return -EIO;
+	}
+	session->lota_flags = status.flags;
 
 	timestamp = (uint64_t)time(NULL);
 	sequence = session->heartbeat_seq;
@@ -576,9 +591,6 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	{
 		struct lota_token token;
 		size_t tok_written = 0;
-
-		if (!session->client)
-			return -ENOTCONN;
 
 		memset(&token, 0, sizeof(token));
 		ret = lota_get_token(session->client, heartbeat_nonce, &token);
