@@ -773,6 +773,14 @@ help:
 	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
+	@echo "Benchmark targets (see benchmarks/README.md):"
+	@echo "  bench            Run L1 C + Go micro-benchmarks"
+	@echo "  bench-go         Run Go benchmarks (verifier, sdk/server, attestca)"
+	@echo "  bench-c          Build and run C SDK micro-benchmarks"
+	@echo "  bench-clean      Remove benchmark binaries and raw results"
+	@echo ""
+	@echo "  BENCH_COUNT=10 make bench-go   more samples for benchstat"
+	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
 	@echo "  clean            Remove build artifacts"
@@ -781,6 +789,48 @@ help:
 	@echo "  make all"
 	@echo "  make test-unit"
 	@echo "  sudo make install"
+
+# Benchmarks (see benchmarks/README.md).
+# L1 micro-benchmarks only
+# L2 macro suite (hyperfine over swtpm)
+# L3 kernel suite (perf over the BPF LSM)
+# are operator runbooks documented in benchmarks/README.md.
+.PHONY: bench bench-go bench-c bench-clean
+
+BENCH_DIR := benchmarks
+BENCH_RESULTS := $(BENCH_DIR)/results
+BENCH_C_BIN := $(BUILD_DIR)/bench_sdk
+GO_BENCH_MODULES := $(SRC_DIR)/verifier $(SRC_DIR)/sdk/server $(SRC_DIR)/attestca
+# -count feeds benchstat
+BENCH_COUNT ?= 6
+BENCH_TIME ?= 1s
+
+bench: bench-c bench-go
+	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
+	@echo "Render docs/PERF.md with: benchmarks/scripts/run_all.sh"
+
+bench-go:
+	@mkdir -p $(BENCH_RESULTS)
+	@for m in $(GO_BENCH_MODULES); do \
+		name=$$(echo $$m | tr '/' '-'); \
+		echo "== go bench: $$m =="; \
+		( cd $$m && go test -run '^$$' -bench=. -benchmem \
+			-count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) ./... ) \
+			| tee $(abspath $(BENCH_RESULTS))/go-$$name.txt; \
+	done
+
+bench-c: $(BENCH_C_BIN)
+	@mkdir -p $(BENCH_RESULTS)
+	@rm -f $(BENCH_RESULTS)/c-sdk.json
+	@BENCH_JSON=$(abspath $(BENCH_RESULTS))/c-sdk.json $(BENCH_C_BIN) \
+		| tee $(BENCH_RESULTS)/c-sdk.txt
+
+$(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
+		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(BENCH_DIR)/include -o $@ $^ -lcrypto -lm
+
+bench-clean:
+	rm -rf $(BENCH_RESULTS)/*.txt $(BENCH_RESULTS)/*.json $(BENCH_C_BIN)
 
 # pull in auto-generated header dependencies
 -include $(AGENT_OBJS:.o=.d)

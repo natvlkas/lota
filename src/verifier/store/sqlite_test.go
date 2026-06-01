@@ -15,7 +15,7 @@ import (
 )
 
 // helper to create an in-memory SQLite AIK store for testing
-func createTestSQLiteAIKStore(t *testing.T) (*SQLiteAIKStore, func()) {
+func createTestSQLiteAIKStore(t testing.TB) (*SQLiteAIKStore, func()) {
 	t.Helper()
 
 	db, err := OpenDB(":memory:")

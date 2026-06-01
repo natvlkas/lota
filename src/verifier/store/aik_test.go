@@ -19,7 +19,7 @@ import (
 )
 
 // creates a test RSA key pair
-func generateTestKey(t *testing.T) *rsa.PrivateKey {
+func generateTestKey(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

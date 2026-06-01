@@ -55,7 +55,7 @@ func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []b
 }
 
 // signs the attest data with RSASSA-PKCS1v15(SHA-256)
-func signAttest(t *testing.T, priv *rsa.PrivateKey, attestData []byte) []byte {
+func signAttest(t testing.TB, priv *rsa.PrivateKey, attestData []byte) []byte {
 	t.Helper()
 	hash := sha256.Sum256(attestData)
 	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, hash[:])
@@ -66,7 +66,7 @@ func signAttest(t *testing.T, priv *rsa.PrivateKey, attestData []byte) []byte {
 }
 
 // builds a complete serialized token for testing
-func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
+func buildTestToken(t testing.TB, priv *rsa.PrivateKey, validUntil uint64,
 	flags uint32, nonce [32]byte, pcrMask uint32, pcrDigest []byte,
 ) []byte {
 	t.Helper()
@@ -93,7 +93,7 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 	return tok
 }
 
-func generateTestKey(t *testing.T) *rsa.PrivateKey {
+func generateTestKey(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
