@@ -26,6 +26,12 @@ BENCH_COUNT=10 make bench-go   # more samples for benchstat
 benchmarks/scripts/run_all.sh  # both + benchstat summary + host info
 ```
 
+The `benchmarks` job in `.github/workflows/ci.yml` runs both runners on
+every push/PR as a **correctness gate** (`make bench-c` with tiny reps,
+`make bench-go BENCH_TIME=1x`): it proves every benchmark compiles and runs
+without crashing. Shared CI runners are too noisy for real timings, so
+quotable numbers come from a pinned host into `docs/PERF.md`.
+
 Raw output is archived under `benchmarks/results/`:
 - `go-src-*.txt` - `go test -bench` output, one file per module (benchstat input).
 - `c-sdk.txt` / `c-sdk.json` - C harness, human and machine-readable.

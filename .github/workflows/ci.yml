@@ -168,6 +168,46 @@ jobs:
           test -x build/examples/block_victim
           test -f build/examples/evil.so
 
+  benchmarks:
+    name: benchmarks (C + Go smoke)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        # bench_sdk links the SDK sources + libcrypto only (no TPM or BPF
+        # libraries); the Go benchmarks are pure Go. Keep the dependency
+        # set minimal so this gate stays fast.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Run C micro-benchmarks (smoke)
+        # Shared CI runners are noisy, so this is a correctness gate - it
+        # proves the cbench.h harness and every C benchmark build and run
+        # without crashing, not a performance measurement. Tiny reps and a
+        # 64 KiB image keep it fast; real numbers live in docs/PERF.md on
+        # pinned hardware (see benchmarks/README.md).
+        env:
+          BENCH_REPS: "3"
+          BENCH_TARGET_MS: "1"
+          BENCH_EXE_KIB: "64"
+        run: make bench-c
+
+      - name: Run Go benchmarks (smoke)
+        # -benchtime=1x runs each benchmark exactly once; the gate is that
+        # every Benchmark across verifier, sdk/server and attestca compiles
+        # and runs. A panic, build break or fixture regression fails CI.
+        run: make bench-go BENCH_COUNT=1 BENCH_TIME=1x
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-24.04
