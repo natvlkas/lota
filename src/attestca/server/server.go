@@ -27,6 +27,18 @@ const (
 	defaultReadTimeout  = 15 * time.Second
 	defaultWriteTimeout = 15 * time.Second
 	defaultMaxConns     = 256
+
+	// defaultBeginRateLimit/Window bound how many enrollment Begin attempts
+	// one source IP may make per window. Begin runs EK chain verification
+	// plus an RSA MakeCredential; EK certificates are public, so without
+	// this an unauthenticated client can force unbounded crypto work and
+	// exhaust the pending-session cap for legitimate hosts.
+	defaultBeginRateLimit  = 10
+	defaultBeginRateWindow = time.Minute
+
+	// maxRateEntries caps the number of distinct source IPs tracked so the
+	// limiter table itself cannot grow without bound.
+	maxRateEntries = 4096
 )
 
 // Config configures the enrollment server.
@@ -46,6 +58,11 @@ type Config struct {
 
 	// MaxConns caps concurrent connections.
 	MaxConns int
+
+	// BeginRateLimit/BeginRateWindow bound enrollment Begin attempts per
+	// source IP. Zero selects the defaults.
+	BeginRateLimit  int
+	BeginRateWindow time.Duration
 }
 
 // Server accepts enrollment connections.
@@ -57,7 +74,18 @@ type Server struct {
 	writeTimeout time.Duration
 	connSem      chan struct{}
 
+	rateLimit  int
+	rateWindow time.Duration
+	rateMu     sync.Mutex
+	rateTable  map[string]*rateWindow
+
 	wg sync.WaitGroup
+}
+
+// rateWindow is one source IP's fixed-window counter.
+type rateWindow struct {
+	count       int
+	windowStart time.Time
 }
 
 // New builds a Server from Config.
@@ -84,6 +112,14 @@ func New(cfg Config) (*Server, error) {
 	if maxConns <= 0 {
 		maxConns = defaultMaxConns
 	}
+	rateLimit := cfg.BeginRateLimit
+	if rateLimit <= 0 {
+		rateLimit = defaultBeginRateLimit
+	}
+	rateWin := cfg.BeginRateWindow
+	if rateWin <= 0 {
+		rateWin = defaultBeginRateWindow
+	}
 	return &Server{
 		svc:          cfg.Service,
 		tlsConfig:    cfg.TLSConfig,
@@ -91,6 +127,9 @@ func New(cfg Config) (*Server, error) {
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 		connSem:      make(chan struct{}, maxConns),
+		rateLimit:    rateLimit,
+		rateWindow:   rateWin,
+		rateTable:    make(map[string]*rateWindow),
 	}, nil
 }
 
@@ -141,6 +180,15 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
+	// Rate-limit before the expensive Begin (EK verify + MakeCredential).
+	if !s.allowBegin(remote) {
+		s.log.Warn("enroll begin rate-limited", "remote", remote)
+		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: wire.StatusRateLimited}); werr != nil {
+			s.log.Debug("failed to write rate-limit rejection", "remote", remote, "error", werr)
+		}
+		return
+	}
+
 	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic)
 	if err != nil {
 		status := beginStatus(err)
@@ -184,6 +232,51 @@ func (s *Server) handle(conn net.Conn) {
 		DeviceID:   deviceID,
 	}); werr != nil {
 		s.log.Debug("failed to write enrollment result", "remote", remote, "error", werr)
+	}
+}
+
+// allowBegin applies a per-source-IP fixed-window rate limit to the
+// enrollment Begin path. Connections from one IP share a counter keyed on
+// the host portion (ephemeral ports collapse together). Returns false when
+// the source has spent its window budget or the tracking table is full.
+func (s *Server) allowBegin(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	now := time.Now()
+
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	s.sweepRateLocked(now)
+
+	w, ok := s.rateTable[host]
+	if !ok {
+		if len(s.rateTable) >= maxRateEntries {
+			// Table full of live windows: refuse new sources rather than
+			// evict an active one, so IP churn cannot reset limits.
+			return false
+		}
+		s.rateTable[host] = &rateWindow{count: 1, windowStart: now}
+		return true
+	}
+	if now.Sub(w.windowStart) >= s.rateWindow {
+		w.count = 1
+		w.windowStart = now
+		return true
+	}
+	if w.count >= s.rateLimit {
+		return false
+	}
+	w.count++
+	return true
+}
+
+func (s *Server) sweepRateLocked(now time.Time) {
+	for ip, w := range s.rateTable {
+		if now.Sub(w.windowStart) >= s.rateWindow {
+			delete(s.rateTable, ip)
+		}
 	}
 }
 

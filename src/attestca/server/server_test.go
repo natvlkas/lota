@@ -202,3 +202,102 @@ func TestServerRejectsWrongActivation(t *testing.T) {
 		t.Fatalf("status %d, want StatusActivationFail", result.Status)
 	}
 }
+
+func newServerForRate(t *testing.T, limit int, win time.Duration) *Server {
+	t.Helper()
+	svc, _ := newSvc(t)
+	tlsCert, _ := serverTLS(t)
+	srv, err := New(Config{
+		Service:         svc,
+		TLSConfig:       &tls.Config{Certificates: []tls.Certificate{tlsCert}, MinVersion: tls.VersionTLS12},
+		BeginRateLimit:  limit,
+		BeginRateWindow: win,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return srv
+}
+
+func TestAllowBeginFixedWindow(t *testing.T) {
+	srv := newServerForRate(t, 3, time.Minute)
+	for i := range 3 {
+		if !srv.allowBegin("203.0.113.7:5000") {
+			t.Fatalf("call %d from same IP should pass within budget", i)
+		}
+	}
+
+	// same host, different ephemeral port, must share the counter
+	if srv.allowBegin("203.0.113.7:5001") {
+		t.Fatal("4th attempt from same IP must be rate-limited")
+	}
+
+	// different source IP has its own budget
+	if !srv.allowBegin("203.0.113.8:5000") {
+		t.Fatal("first attempt from a different IP must pass")
+	}
+}
+
+func TestAllowBeginWindowResets(t *testing.T) {
+	srv := newServerForRate(t, 1, 20*time.Millisecond)
+	if !srv.allowBegin("198.51.100.1:1") {
+		t.Fatal("first attempt must pass")
+	}
+	if srv.allowBegin("198.51.100.1:2") {
+		t.Fatal("second attempt within the window must be limited")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if !srv.allowBegin("198.51.100.1:3") {
+		t.Fatal("attempt after the window elapsed must pass again")
+	}
+}
+
+func startServerLimit(t *testing.T, svc *enroll.Service, limit int) (string, *x509.CertPool, func()) {
+	t.Helper()
+	tlsCert, pool := serverTLS(t)
+	srv, err := New(Config{
+		Service:        svc,
+		TLSConfig:      &tls.Config{Certificates: []tls.Certificate{tlsCert}, MinVersion: tls.VersionTLS12},
+		BeginRateLimit: limit,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = srv.Serve(ctx, ln)
+		close(done)
+	}()
+	return ln.Addr().String(), pool, func() { cancel(); <-done }
+}
+
+func TestServerRateLimitsBeginFlood(t *testing.T) {
+	svc, root := newSvc(t)
+	addr, pool, stop := startServerLimit(t, svc, 1)
+	defer stop()
+
+	ek := tpmtest.NewEKCert(t, root)
+
+	// first enrollment from this loopback source consumes the single
+	// per-IP Begin slot and succeeds end to end
+	_, result := enrollClient(t, addr, pool, ek, nil)
+	if result == nil || result.Status != wire.StatusOK {
+		t.Fatalf("first enrollment should succeed, got %+v", result)
+	}
+
+	// second enrollment from the same source is refused at Begin, before
+	// any MakeCredential work, with StatusRateLimited
+	ek2 := tpmtest.NewEKCert(t, root)
+	challenge, result := enrollClient(t, addr, pool, ek2, nil)
+	if result != nil {
+		t.Fatalf("expected rejection at challenge, got result %+v", result)
+	}
+	if challenge.Status != wire.StatusRateLimited {
+		t.Fatalf("status %d, want StatusRateLimited", challenge.Status)
+	}
+}
