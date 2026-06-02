@@ -426,6 +426,11 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	if (hdr.attest_size == 0 || hdr.sig_size == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
+	/* parse_wire_header already enforces this bound; assert it locally so
+	 * the allocation size is provably capped at the point of use */
+	if (hdr.protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+
 	if (hdr.protect_pid_count > 0) {
 		pid_list = calloc(hdr.protect_pid_count, sizeof(uint32_t));
 		if (!pid_list)
