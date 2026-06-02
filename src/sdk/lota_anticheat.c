@@ -42,11 +42,14 @@ struct lota_ac_domain_strings {
 	uint32_t version;
 	const char *game_binding;
 	const char *heartbeat_nonce;
+	int bind_runtime; /* V2+: nonce also binds the runtime measurement */
 };
 
 static const struct lota_ac_domain_strings lota_ac_domain_table[] = {
     {LOTA_AC_DOMAIN_VERSION_V1, "lota-ac-game-binding:v2",
-     "lota-ac-heartbeat:v1"},
+     "lota-ac-heartbeat:v1", 0},
+    {LOTA_AC_DOMAIN_VERSION_V2, "lota-ac-game-binding:v2",
+     "lota-ac-heartbeat:v2", 1},
 };
 
 static const struct lota_ac_domain_strings *
@@ -62,13 +65,13 @@ lota_ac_domain_lookup(uint32_t version)
 	return NULL;
 }
 
-static int
-compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
-			const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
-			uint8_t provider, uint32_t sequence,
-			uint32_t lota_flags, uint64_t timestamp,
-			const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
-			uint32_t domain_version);
+static int compute_heartbeat_nonce(
+    uint8_t out_nonce[LOTA_NONCE_SIZE],
+    const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
+    uint32_t sequence, uint32_t lota_flags, uint64_t timestamp,
+    const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    const uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
+    uint32_t domain_version);
 
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
@@ -508,7 +511,9 @@ static int compute_heartbeat_nonce(
     uint8_t out_nonce[LOTA_NONCE_SIZE],
     const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
     uint32_t sequence, uint32_t lota_flags, uint64_t timestamp,
-    const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE], uint32_t domain_version)
+    const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    const uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
+    uint32_t domain_version)
 {
 	const struct lota_ac_domain_strings *dom;
 	uint8_t le32[4];
@@ -524,6 +529,10 @@ static int compute_heartbeat_nonce(
 
 	dom = lota_ac_domain_lookup(domain_version);
 	if (!dom)
+		return -EINVAL;
+
+	/* runtime-binding domains (V2+) require the measurement */
+	if (dom->bind_runtime && !runtime_measure)
 		return -EINVAL;
 
 	ctx = EVP_MD_CTX_new();
@@ -544,8 +553,17 @@ static int compute_heartbeat_nonce(
 	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
 	     EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
-	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
-	     EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
+	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le));
+
+	/*
+	 * runtime measurement is appended only for domains that bind it,
+	 * so V1 nonces stay byte-for-byte identical to their frozen layout
+	 */
+	if (ok && dom->bind_runtime)
+		ok = EVP_DigestUpdate(ctx, runtime_measure,
+				      LOTA_AC_RUNTIME_MEASURE_SIZE);
+
+	ok = ok && EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
 
 	EVP_MD_CTX_free(ctx);
 	return ok ? 0 : -EIO;
@@ -859,6 +877,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	uint64_t timestamp;
 	uint32_t sequence;
 	uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
+	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
 
 	if (!session || !buf || !written)
 		return -EINVAL;
@@ -893,10 +912,20 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	timestamp = (uint64_t)time(NULL);
 	sequence = session->heartbeat_seq;
 
+	/*
+	 * Re-measure the live executable image for this beat.
+	 * Binding the fresh measurement into the nonce ties it to the
+	 * TPM-signed token and closes the TOCTOU window left by the
+	 * session-start on-disk hash
+	 */
+	ret = lota_ac_compute_runtime_measure(runtime_measure);
+	if (ret < 0)
+		return ret;
+
 	ret = compute_heartbeat_nonce(
 	    heartbeat_nonce, session->session_id, (uint8_t)session->provider,
 	    sequence, session->lota_flags, timestamp, session->game_id_hash,
-	    LOTA_AC_DOMAIN_VERSION_CURRENT);
+	    runtime_measure, LOTA_AC_DOMAIN_VERSION_CURRENT);
 	if (ret < 0)
 		return ret;
 
@@ -951,6 +980,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
 	lota__write_le16(buf + 72, (uint16_t)session->token_len);
 	lota__write_le32(buf + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
+	memcpy(buf + 78, runtime_measure, LOTA_AC_RUNTIME_MEASURE_SIZE);
 
 	memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf,
 	       session->token_len);
@@ -966,9 +996,11 @@ int lota_ac_verify_heartbeat(
     const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
     size_t aik_pub_len,
     const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
     struct lota_ac_info *info)
 {
-	if (!data || !expected_game_id_hash || !info)
+	if (!data || !expected_game_id_hash || !expected_runtime_measure ||
+	    !info)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
 	if (len < LOTA_AC_HEADER_SIZE)
@@ -1008,6 +1040,17 @@ int lota_ac_verify_heartbeat(
 			  LOTA_AC_GAME_HASH_SIZE) != 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
+	/*
+	 * Runtime measurement must match the value an honest producer of this
+	 * image reports.
+	 * Reject before signature work, then bind the same bytes into the
+	 * expected nonce so a TPM-signed token cannot smuggle a different
+	 * measurement past this check
+	 */
+	if (CRYPTO_memcmp(data + 78, expected_runtime_measure,
+			  LOTA_AC_RUNTIME_MEASURE_SIZE) != 0)
+		return LOTA_SERVER_ERR_BAD_TOKEN;
+
 	if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 	if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
@@ -1015,7 +1058,7 @@ int lota_ac_verify_heartbeat(
 
 	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
 				      sequence, heartbeat_lota_flags, timestamp,
-				      data + 40, domain_version);
+				      data + 40, data + 78, domain_version);
 	if (ret < 0)
 		return LOTA_SERVER_ERR_CRYPTO;
 

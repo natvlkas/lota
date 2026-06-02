@@ -28,8 +28,8 @@ extern "C" {
 #endif
 
 #define LOTA_AC_MAGIC 0x4C414348 /* "LACH" little-endian */
-#define LOTA_AC_VERSION 2
-#define LOTA_AC_HEADER_SIZE 78
+#define LOTA_AC_VERSION 3
+#define LOTA_AC_HEADER_SIZE 110
 #define LOTA_AC_MAX_TOKEN 1608
 #define LOTA_AC_MAX_HEARTBEAT (LOTA_AC_HEADER_SIZE + LOTA_AC_MAX_TOKEN)
 #define LOTA_AC_MAX_GAME_ID 64
@@ -46,9 +46,12 @@ extern "C" {
  * must allocate the next integer instead of silently replacing an existing one.
  *
  * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v1\\0"
+ * V2: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v2\\0"
+ *
  */
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
-#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
+#define LOTA_AC_DOMAIN_VERSION_V2 2u
+#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V2
 
 /* default heartbeat interval in seconds */
 #define LOTA_AC_DEFAULT_HEARTBEAT_SEC 30
@@ -119,7 +122,7 @@ struct lota_ac_config {
  *
  *   offset  size   field
  *   0       4      magic           0x4C414348
- *   4       1      version         0x02
+ *   4       1      version         0x03
  *   5       1      provider        EAC=1, BE=2
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
@@ -133,7 +136,10 @@ struct lota_ac_config {
  *   74      4      domain_version  LOTA_AC_DOMAIN_VERSION_*; selects the
  *                                  game-binding/heartbeat domain pair and
  *                                  is itself bound into the heartbeat nonce
- *   78      var    lota_token[]    full LOTA token (wire format)
+ *   78      32     runtime_measure live re-measurement of the executable
+ *                                  image; nonce-bound and checked against
+ *                                  the verifier's expected value
+ *   110     var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {
 	uint32_t magic;
@@ -147,6 +153,7 @@ struct lota_ac_heartbeat_wire {
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint16_t token_size;
 	uint32_t domain_version;
+	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
 } __attribute__((packed));
 
 struct lota_ac_info {
@@ -304,6 +311,14 @@ int lota_ac_compute_expected_runtime_measure(
  * the expected game identity binding.
  * Fills info with session/attestation details.
  *
+ * expected_runtime_measure is the runtime measurement a trustworthy
+ * producer must report for this image.
+ * See lota_ac_compute_expected_runtime_measure()
+ *
+ * It is mandatory: the heartbeat is rejected unless its runtime_measure
+ * field matches, and the value is also bound into the nonce so a fully
+ * signed token cannot carry a stale or substituted measurement.
+ *
  * SECURITY: aik_pub_der is mandatory. Parse-only operation is rejected
  * because unverified claims are attacker-controlled and must not drive
  * trust decisions.
@@ -316,6 +331,7 @@ int lota_ac_verify_heartbeat(
     const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
     size_t aik_pub_len,
     const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
     struct lota_ac_info *info);
 
 const char *lota_ac_state_str(enum lota_ac_state state);
