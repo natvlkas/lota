@@ -8,14 +8,20 @@ on:
 permissions:
   contents: read
 
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage; let pushes to main run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   codeql:
     name: codeql-${{ matrix.language }}
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
-      contents: read
-      security-events: write
+      actions: read # read workflow run metadata for the CodeQL action
+      contents: read # check out the source to analyze
+      security-events: write # upload CodeQL SARIF results to code scanning
     strategy:
       fail-fast: false
       matrix:
@@ -23,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install C build dependencies
         if: matrix.language == 'c-cpp'
@@ -94,6 +102,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -112,9 +122,9 @@ jobs:
     name: zizmor
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
-      contents: read
-      security-events: write
+      actions: read # inspect workflow definitions being audited
+      contents: read # check out the workflows to audit
+      security-events: write # upload zizmor SARIF results to code scanning
     steps:
       - name: Checkout
         uses: actions/checkout@v4
