@@ -56,8 +56,8 @@ static void cleanup_test_dir(void)
 {
 	char cmd[512];
 	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	if (system(cmd) != 0) { /* best effort */
-	}
+	int rc = system(cmd);
+	(void)rc; /* best effort cleanup */
 }
 
 static void write_test_file(const char *dir, const char *name, const void *data,
