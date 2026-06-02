@@ -437,10 +437,12 @@ func generateTestCert() error {
 	if err != nil {
 		return err
 	}
-	defer certFile.Close()
-
 	if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+		certFile.Close()
 		return err
+	}
+	if err := certFile.Close(); err != nil {
+		return fmt.Errorf("close certificate file: %w", err)
 	}
 
 	// write private key
@@ -448,15 +450,19 @@ func generateTestCert() error {
 	if err != nil {
 		return err
 	}
-	defer keyFile.Close()
 
 	keyDER, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
+		keyFile.Close()
 		return err
 	}
 
 	if err := pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+		keyFile.Close()
 		return err
+	}
+	if err := keyFile.Close(); err != nil {
+		return fmt.Errorf("close private key file: %w", err)
 	}
 
 	return nil
