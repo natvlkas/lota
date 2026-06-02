@@ -505,7 +505,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 
 	eventLog := buildMinimalEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
-	offset += 4
 	buf = append(buf, eventLog...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
