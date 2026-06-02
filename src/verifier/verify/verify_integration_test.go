@@ -190,7 +190,6 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	// append minimal valid TCG event log (Spec ID header, zero PCR_EVENT2 entries)
 	eventLog := buildTestEventLog(nil)
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
-	offset += 4
 	buf = append(buf, eventLog...)
 
 	// keep report_size consistent with wire payload
@@ -810,7 +809,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 
 	eventLog := buildTestEventLog(nil)
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
-	offset += 4
 	buf = append(buf, eventLog...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
