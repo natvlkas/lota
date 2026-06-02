@@ -28,9 +28,16 @@ CFLAGS += -Wformat -Wformat-security
 CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
+ifdef SANITIZE
+CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+CFLAGS += -fno-sanitize-recover=all
+endif
 
 VICTIM_LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
 		  -Wl,-z,separate-code
+ifdef SANITIZE
+VICTIM_LDFLAGS += -fsanitize=$(SANITIZE)
+endif
 VICTIM_LDLIBS := -L$(SDK_BUILD_DIR) -llotagaming
 VICTIM_LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR) -ldl
 
@@ -38,8 +45,15 @@ VICTIM_LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR) -ldl
 # functions are static + attribute-tagged and the loader resolves
 # them without a forward declaration
 EVIL_CFLAGS := -Wall -Wextra -Werror -O2 -g -fPIC -D_GNU_SOURCE
+ifdef SANITIZE
+EVIL_CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+EVIL_CFLAGS += -fno-sanitize-recover=all
+endif
 EVIL_LDFLAGS := -shared -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
 		-Wl,-z,separate-code
+ifdef SANITIZE
+EVIL_LDFLAGS += -fsanitize=$(SANITIZE)
+endif
 
 .PHONY: all clean
 

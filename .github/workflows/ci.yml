@@ -241,6 +241,55 @@ jobs:
             tests/integration/test_bpf_gates.sh \
             src/initramfs/90lota/module-setup.sh
 
+  clang-analyzer:
+    name: clang-analyzer
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install analysis build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang clang-tools llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Run clang static analyzer
+        run: |
+          set -eu
+          scan_build="$(command -v scan-build || command -v scan-build-18)"
+          "$scan_build" --version
+          make clean
+          "$scan_build" --status-bugs --keep-going \
+            --exclude "$(pwd)/src/bpf" \
+            --exclude "$(pwd)/include/vmlinux.h" \
+            make BUILD_DIR=build-clang-analyzer \
+            test-unit examples build-clang-analyzer/bench_sdk syzkaller-fuzz-loader
+
   fedora-build:
     name: build-fedora-41
     runs-on: ubuntu-24.04
@@ -443,3 +492,94 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1
         run: make CC=clang SANITIZE=address,undefined test-unit
+
+  sanitizers-full-build:
+    name: asan-ubsan-full-build-clang
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git make
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Build CI-safe userspace artifacts under ASan + UBSan
+        # this keeps the existing asan-ubsan-unit jobs as the runtime
+        # test gate, and adds a broader compilation gate over the agent,
+        # SDKs, examples, C benchmarks and syzkaller loader.
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: make CC=clang BUILD_DIR=build-asan-full sanitizer-build
+
+  valgrind-smoke:
+    name: valgrind-smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev \
+            valgrind
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Memcheck CLI smoke paths
+        # valgrind-unit remains the exhaustive unit-test memcheck gate
+        # this separate pass covers operator-facing --help paths and
+        # demo binaries that are safe to execute without TPM, BPF
+        # attachment or root.
+        run: make BUILD_DIR=build-valgrind-smoke valgrind-smoke

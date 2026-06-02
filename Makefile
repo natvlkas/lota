@@ -20,9 +20,9 @@
 .DEFAULT_GOAL := help
 
 # Compiler settings
-CC := gcc
-CLANG := clang
-LLC := llc
+CC ?= gcc
+CLANG ?= clang
+LLC ?= llc
 
 # Directories
 SRC_DIR := src
@@ -271,7 +271,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk valgrind-unit fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -660,6 +660,13 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "Start agent in another terminal: sudo $(BUILD_DIR)/lota-agent --test-ipc"
 	@echo "Then run: $(BUILD_DIR)/test_sdk_ipc"
 
+# Build every CI-safe userspace artifact under ASan/UBSan. This is a
+# compilation/smoke gate for broad coverage; make test-unit remains the
+# runtime sanitizer gate for the standalone unit tests.
+SANITIZER_BUILD_TARGETS = all examples $(BENCH_C_BIN) syzkaller-fuzz-loader
+sanitizer-build:
+	$(MAKE) SANITIZE=address,undefined $(SANITIZER_BUILD_TARGETS)
+
 # Memcheck the standalone unit tests. test_hardening is excluded on
 # purpose: it probes seccomp (syscall 317, which valgrind cannot model)
 # and issues a mount(2) with a deliberately invalid source pointer to
@@ -683,6 +690,33 @@ valgrind-unit: $(TEST_BINS)
 		$(VALGRIND) $(VALGRIND_FLAGS) $(BUILD_DIR)/$$b || exit 1; \
 	done
 	@echo "valgrind-unit: clean"
+
+# Keep valgrind-unit for exhaustive standalone unit binaries, and add
+# a separate smoke pass for operator-facing binaries that are safe to
+# execute without TPM/BPF/root.
+VALGRIND_SMOKE_CONFIG := $(BUILD_DIR)/valgrind-smoke.conf
+valgrind-smoke: all examples
+	@echo "=== Running CLI smoke paths under valgrind memcheck ==="
+	@: > $(VALGRIND_SMOKE_CONFIG)
+	@chmod 600 $(VALGRIND_SMOKE_CONFIG)
+	@echo "--> lota-agent --help"; \
+		$(VALGRIND) $(VALGRIND_FLAGS) $(AGENT_BIN) \
+			--config $(VALGRIND_SMOKE_CONFIG) --help >/dev/null
+	@if [ -x "$(EXAMPLES_BUILD_DIR)/demo_anticheat" ]; then \
+		echo "--> demo_anticheat --help"; \
+		$(VALGRIND) $(VALGRIND_FLAGS) \
+			$(EXAMPLES_BUILD_DIR)/demo_anticheat --help >/dev/null; \
+	else \
+		echo "SKIP: demo_anticheat (not built)"; \
+	fi
+	@if [ -x "$(EXAMPLES_BUILD_DIR)/trust_pong" ]; then \
+		echo "--> trust_pong --help"; \
+		$(VALGRIND) $(VALGRIND_FLAGS) \
+			$(EXAMPLES_BUILD_DIR)/trust_pong --help >/dev/null; \
+	else \
+		echo "SKIP: trust_pong (not built)"; \
+	fi
+	@echo "valgrind-smoke: clean"
 
 # Fuzzing
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
@@ -761,7 +795,9 @@ help:
 	@echo "  test-unit        Same as test; builds required artifacts first"
 	@echo "  test-sdk         Print SDK integration-test instructions"
 	@echo "  test-hardware    Run hardware tests against local IOMMU/TPM (root required)"
+	@echo "  sanitizer-build  Build CI-safe userspace artifacts under ASan/UBSan"
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
+	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""

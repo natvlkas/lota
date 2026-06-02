@@ -19,9 +19,16 @@ CFLAGS += -Wformat -Wformat-security
 CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
+ifdef SANITIZE
+CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+CFLAGS += -fno-sanitize-recover=all
+endif
 CFLAGS += $(shell pkg-config --cflags libcurl)
 
 LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
+ifdef SANITIZE
+LDFLAGS += -fsanitize=$(SANITIZE)
+endif
 LDLIBS := -L$(SDK_BUILD_DIR) -llota_anticheat -llotagaming -llotaserver -lcrypto
 LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR)
 LDLIBS += $(shell pkg-config --libs libcurl)
