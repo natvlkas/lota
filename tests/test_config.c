@@ -65,7 +65,12 @@ static int write_config(const char *name, const char *content)
 	FILE *f;
 
 	snprintf(path, sizeof(path), "%s/%s", tmpdir, name);
-	f = fopen(path, "w");
+	{
+		int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		f = fd >= 0 ? fdopen(fd, "w") : NULL;
+		if (fd >= 0 && !f)
+			close(fd);
+	}
 	if (!f)
 		return -1;
 	fputs(content, f);
@@ -971,7 +976,12 @@ static void test_config_dump_roundtrip(void)
 
 	/* dump to file */
 	snprintf(dump_path, sizeof(dump_path), "%s/dumped.conf", tmpdir);
-	f = fopen(dump_path, "w");
+	{
+		int fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		f = fd >= 0 ? fdopen(fd, "w") : NULL;
+		if (fd >= 0 && !f)
+			close(fd);
+	}
 	if (!f) {
 		FAIL("fopen dump");
 		return;
