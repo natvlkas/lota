@@ -9,6 +9,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,7 +71,10 @@ static void make_paths(const char *base, char *priv, char *pub, size_t len)
 
 static int write_file(const char *path, const void *data, size_t len)
 {
-	FILE *f = fopen(path, "wb");
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	FILE *f = fd >= 0 ? fdopen(fd, "wb") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
 	if (!f)
 		return -1;
 	if (fwrite(data, 1, len, f) != len) {
