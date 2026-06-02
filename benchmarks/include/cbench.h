@@ -27,12 +27,14 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include <fcntl.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 /* Sink to prevent the compiler from optimizing the measured work away. */
 static volatile uint64_t cbench_sink;
@@ -144,7 +146,14 @@ static inline void cbench_run(const char *suite, const char *name,
 
 	const char *jpath = getenv("BENCH_JSON");
 	if (jpath && *jpath) {
-		FILE *jf = fopen(jpath, "a");
+		/* results file, not group/other writable regardless of umask */
+		int jfd = open(jpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+		FILE *jf = NULL;
+		if (jfd >= 0) {
+			jf = fdopen(jfd, "a");
+			if (!jf)
+				close(jfd);
+		}
 		if (jf) {
 			fprintf(jf,
 				"{\"suite\":\"%s\",\"name\":\"%s\",\"median_ns\":%.3f,"
