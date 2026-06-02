@@ -432,38 +432,36 @@ func generateTestCert() error {
 		return fmt.Errorf("failed to create certificate: %w", err)
 	}
 
-	// write certificate
-	certFile, err := os.Create("lota-verifier.crt")
-	if err != nil {
-		return err
-	}
-	if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
-		certFile.Close()
-		return err
-	}
-	if err := certFile.Close(); err != nil {
-		return fmt.Errorf("close certificate file: %w", err)
-	}
-
-	// write private key
-	keyFile, err := os.OpenFile("lota-verifier.key", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-
 	keyDER, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
-		keyFile.Close()
-		return err
+		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	if err := pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
-		keyFile.Close()
-		return err
+	// write certificate (world-readable) and private key (owner-only)
+	if err := writePEMFile("lota-verifier.crt", 0644,
+		&pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+		return fmt.Errorf("failed to write certificate: %w", err)
 	}
-	if err := keyFile.Close(); err != nil {
-		return fmt.Errorf("close private key file: %w", err)
+	if err := writePEMFile("lota-verifier.key", 0600,
+		&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
 	return nil
+}
+
+// writePEMFile writes block to path with perm. The file's Close error is
+// reported even when the PEM encoding itself succeeds, so a flush failure
+// is not lost.
+func writePEMFile(path string, perm os.FileMode, block *pem.Block) (err error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	return pem.Encode(f, block)
 }
