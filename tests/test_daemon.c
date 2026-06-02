@@ -76,8 +76,10 @@ static void test_pidfile_create_remove(void)
 		return;
 	}
 
-	if (stat(path, &st) < 0) {
-		FAIL("stat on PID file failed");
+	/* fstat the descriptor we created, not the name, to avoid a TOCTOU
+	 * window between the permission check and the read-back below */
+	if (fstat(fd, &st) < 0) {
+		FAIL("fstat on PID file failed");
 		pidfile_remove(path, fd);
 		return;
 	}
@@ -565,25 +567,22 @@ static void test_daemonize(void)
 	/* give the grandchild a moment to write the marker */
 	usleep(200000); /* 200ms */
 
-	if (access(marker_path, F_OK) == 0) {
-		FILE *f = fopen(marker_path, "r");
-		if (f) {
-			int daemon_pid = 0;
-			if (fscanf(f, "%d", &daemon_pid) == 1) {
-				if (daemon_pid != child &&
-				    daemon_pid != getpid()) {
-					PASS();
-				} else {
-					FAIL("daemon PID should differ from "
-					     "child and parent");
-				}
+	/* open directly and rely on the result instead of access()+open,
+	 * which races on the marker path */
+	FILE *f = fopen(marker_path, "r");
+	if (f) {
+		int daemon_pid = 0;
+		if (fscanf(f, "%d", &daemon_pid) == 1) {
+			if (daemon_pid != child && daemon_pid != getpid()) {
+				PASS();
 			} else {
-				FAIL("could not read daemon PID from marker");
+				FAIL("daemon PID should differ from "
+				     "child and parent");
 			}
-			fclose(f);
 		} else {
-			FAIL("could not open marker file");
+			FAIL("could not read daemon PID from marker");
 		}
+		fclose(f);
 	} else {
 		FAIL("daemon did not write marker file");
 	}
