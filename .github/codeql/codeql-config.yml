@@ -1,16 +1,25 @@
 name: "LOTA CodeQL config"
 
 # include/vmlinux.h is a generated bpftool BTF dump of kernel type
-# definitions. Its enum initializer style and bit-field signedness are
-# artifacts of the dump format, not project source, and the file is
-# regenerated wholesale, so CodeQL findings inside it are not actionable
+# definitions. paths-ignore does not suppress alerts in it because the
+# header is #included into the compiled BPF/agent build, so CodeQL still
+# extracts and reports it. The findings it produces are the two queries
+# excluded below; they fire only inside this generated header
 paths-ignore:
   - include/vmlinux.h
 
-# cpp/poorly-documented-function is a comment-density heuristic (>= 2% of a
-# function's lines must be comments). LOTA code is written to be
-# self-documenting in the kernel style, so this metric is treated as
-# non-actionable noise for this project
+# Query exclusions:
+#  - cpp/poorly-documented-function: comment-density heuristic (>= 2% of a
+#    function's lines must be comments). LOTA C is self-documenting in the
+#    kernel style, so this metric is non-actionable noise here
+#
+#  - cpp/irregular-enum-init and cpp/ambiguously-signed-bit-field: these
+#    only trigger inside the generated include/vmlinux.h BTF dump, which
+#    paths-ignore cannot suppress for a compiled header
 query-filters:
   - exclude:
       id: cpp/poorly-documented-function
+  - exclude:
+      id: cpp/irregular-enum-init
+  - exclude:
+      id: cpp/ambiguously-signed-bit-field
