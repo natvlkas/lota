@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage; let pushes to main run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     name: build-${{ matrix.os }}
@@ -19,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -67,6 +75,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install clang-format 22 from apt.llvm.org
         run: |
@@ -99,6 +109,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         # same agent toolchain as the build job, + SDL2/libcurl
@@ -174,6 +186,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         # bench_sdk links the SDK sources + libcrypto only (no TPM or BPF
@@ -214,6 +228,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install shellcheck
         run: |
@@ -247,6 +263,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install analysis build dependencies
         run: |
@@ -313,6 +331,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Mark workspace as a safe git directory
         # container runs as root, the checkout was performed
@@ -333,6 +353,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -379,6 +401,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -441,6 +465,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -463,6 +489,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         # clang ships its own compiler-rt ASan/UBSan runtime, so no
@@ -508,6 +536,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -554,6 +584,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
