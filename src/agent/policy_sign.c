@@ -218,11 +218,21 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 	fclose(f);
 	f = NULL;
 
-	/* write public key (SPKI PEM) */
-	f = fopen(pubkey_pem_path, "w");
-	if (!f) {
-		ret = -errno;
-		goto out;
+	/* write public key (SPKI PEM); public artifact, not group/other
+	 * writable */
+	{
+		int pub_fd =
+		    open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (pub_fd < 0) {
+			ret = -errno;
+			goto out;
+		}
+		f = fdopen(pub_fd, "w");
+		if (!f) {
+			ret = -errno;
+			close(pub_fd);
+			goto out;
+		}
 	}
 
 	if (!PEM_write_PUBKEY(f, pkey)) {
@@ -343,10 +353,19 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 	if (ret != 0)
 		return ret;
 
-	/* write raw signature to .sig file */
-	f = fopen(sig_path, "wb");
-	if (!f)
-		return -errno;
+	/* write raw signature to .sig file; public artifact, not group/other
+	 * writable */
+	{
+		int sig_fd = open(sig_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (sig_fd < 0)
+			return -errno;
+		f = fdopen(sig_fd, "wb");
+		if (!f) {
+			int e = -errno;
+			close(sig_fd);
+			return e;
+		}
+	}
 
 	if (fwrite(sig, 1, POLICY_SIG_SIZE, f) != POLICY_SIG_SIZE) {
 		fclose(f);
