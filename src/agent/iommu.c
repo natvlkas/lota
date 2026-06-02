@@ -116,7 +116,7 @@ int iommu_check_cmdline(struct iommu_status *status)
 
 	buf[n] = '\0';
 
-	if (n > 0 && buf[n - 1] == '\n')
+	if (buf[n - 1] == '\n')
 		buf[n - 1] = '\0';
 
 	/*
