@@ -1587,7 +1587,6 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	     unsigned int mode, int ret)
 {
 	struct lota_exec_event *event = NULL;
-	u32 key = 0;
 	u32 lota_mode;
 	u32 child_pid;
 	int blocked = 0;
