@@ -65,6 +65,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Build C database
         if: matrix.language == 'c-cpp'

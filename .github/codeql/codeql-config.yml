@@ -1,0 +1,8 @@
+name: "LOTA CodeQL config"
+
+# include/vmlinux.h is a generated bpftool BTF dump of kernel type
+# definitions. Its enum initializer style and bit-field signedness are
+# artifacts of the dump format, not project source, and the file is
+# regenerated wholesale, so CodeQL findings inside it are not actionable
+paths-ignore:
+  - include/vmlinux.h
