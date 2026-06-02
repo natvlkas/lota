@@ -291,10 +291,14 @@ jobs:
             test-unit examples build-clang-analyzer/bench_sdk syzkaller-fuzz-loader
 
   fedora-build:
-    name: build-fedora-41
+    name: build-fedora-${{ matrix.version }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [41, 44]
     container:
-      image: fedora:41
+      image: fedora:${{ matrix.version }}
     steps:
       - name: Install Fedora build dependencies
         run: |
@@ -412,10 +416,14 @@ jobs:
         run: make valgrind-unit
 
   sanitizers-fedora:
-    name: asan-ubsan-valgrind-fedora-41
+    name: asan-ubsan-valgrind-fedora-${{ matrix.version }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [41, 44]
     container:
-      image: fedora:41
+      image: fedora:${{ matrix.version }}
     steps:
       - name: Install Fedora build dependencies
         # libasan/libubsan ship the gcc sanitizer runtimes on Fedora;
