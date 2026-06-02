@@ -1976,8 +1976,7 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 	TPM2B_ATTEST *quoted = NULL;
 	TPMT_SIGNATURE *signature = NULL;
 
-	if (!ctx || !ctx->initialized || !reset_count_out ||
-	    !restart_count_out)
+	if (!ctx || !ctx->initialized || !reset_count_out || !restart_count_out)
 		return -EINVAL;
 
 	ret = aik_exists(ctx, &key_handle);
@@ -2003,8 +2002,7 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 			return tss2_rc_to_errno(rc);
 	}
 
-	qualifying_data.size =
-	    (uint16_t)(sizeof(TPM_CLOCK_PROBE_TAG) - 1);
+	qualifying_data.size = (uint16_t)(sizeof(TPM_CLOCK_PROBE_TAG) - 1);
 	memset(qualifying_data.buffer, 0, sizeof(qualifying_data.buffer));
 	memcpy(qualifying_data.buffer, TPM_CLOCK_PROBE_TAG,
 	       qualifying_data.size);

@@ -89,8 +89,7 @@ static int marshal_attest(uint32_t reset_count, uint32_t restart_count,
 	attest.firmwareVersion = 0x0123456789ABCDEFULL;
 
 	attest.attested.quote.pcrSelect.count = 1;
-	attest.attested.quote.pcrSelect.pcrSelections[0].hash =
-	    TPM2_ALG_SHA256;
+	attest.attested.quote.pcrSelect.pcrSelections[0].hash = TPM2_ALG_SHA256;
 	attest.attested.quote.pcrSelect.pcrSelections[0].sizeofSelect = 3;
 	attest.attested.quote.pcrSelect.pcrSelections[0].pcrSelect[1] =
 	    (uint8_t)(1U << (14 % 8));
