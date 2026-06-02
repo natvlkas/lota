@@ -1,0 +1,13 @@
+# zizmor configuration
+#
+# unpinned-uses: first-party GitHub-maintained actions (actions/* and
+# github/*) are allowed to stay on readable version tags (ref-pin), which
+# is the repository policy for reviewability and Dependabot tracking. Every
+# other (third-party) action must be pinned to a full commit SHA (hash-pin).
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "actions/*": ref-pin
+        "github/*": ref-pin
+        "*": hash-pin
