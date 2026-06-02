@@ -337,18 +337,9 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	}
 
 	path := filepath.Join(fs.storePath, clientID+".pem")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
-	}
-	if err := pem.Encode(file, pemBlock); err != nil {
-		file.Close()
-		os.Remove(path)
-		return fmt.Errorf("failed to write key: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		os.Remove(path)
-		return fmt.Errorf("failed to close key file: %w", err)
+	if err := writeKeyPEM(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, pemBlock,
+		true); err != nil {
+		return fmt.Errorf("failed to write key file: %w", err)
 	}
 
 	// add to cache
@@ -453,16 +444,9 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 
 	// overwrite existing PEM file
 	path := filepath.Join(fs.storePath, clientID+".pem")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
+	if err := writeKeyPEM(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, pemBlock,
+		false); err != nil {
 		return fmt.Errorf("failed to write key file: %w", err)
-	}
-	if err := pem.Encode(file, pemBlock); err != nil {
-		file.Close()
-		return fmt.Errorf("failed to encode key: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("failed to close key file: %w", err)
 	}
 
 	// update metadata with new registration time
@@ -479,6 +463,26 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	fs.fpIndex[newFP] = clientID
 
 	return nil
+}
+
+// writeKeyPEM writes block to path opened with flag (mode 0600). The file's
+// Close error is reported even when the PEM encoding succeeds, so a flush
+// failure is not lost. When removeOnError is set, any failure unlinks path
+// so a partial key file is not left behind.
+func writeKeyPEM(path string, flag int, block *pem.Block, removeOnError bool) (err error) {
+	f, err := os.OpenFile(path, flag, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if err != nil && removeOnError {
+			os.Remove(path)
+		}
+	}()
+	return pem.Encode(f, block)
 }
 
 // FileStore has no embedded CA roots, so it cannot verify the
