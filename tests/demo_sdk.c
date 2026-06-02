@@ -24,6 +24,8 @@
 static void print_status(const struct lota_status *status)
 {
 	char flags_str[128];
+	char last_buf[26];
+	char valid_buf[26];
 	time_t last_attest = (time_t)status->last_attest_time;
 	time_t valid_until = (time_t)status->valid_until;
 
@@ -32,9 +34,9 @@ static void print_status(const struct lota_status *status)
 	printf("  Flags: 0x%08X (%s)\n", status->flags,
 	       flags_str[0] ? flags_str : "none");
 	printf("  Last attestation: %s",
-	       last_attest ? ctime(&last_attest) : "never\n");
+	       last_attest ? ctime_r(&last_attest, last_buf) : "never\n");
 	printf("  Valid until: %s",
-	       valid_until ? ctime(&valid_until) : "N/A\n");
+	       valid_until ? ctime_r(&valid_until, valid_buf) : "N/A\n");
 	printf("  Attestation count: %u (success) / %u (failed)\n",
 	       status->attest_count, status->fail_count);
 }
@@ -43,10 +45,11 @@ static void print_token(const struct lota_token *token)
 {
 	time_t valid = (time_t)token->valid_until;
 	char flags_str[128];
+	char valid_buf[26];
 
 	lota_flags_to_string(token->flags, flags_str, sizeof(flags_str));
 
-	printf("  Valid until: %s", ctime(&valid));
+	printf("  Valid until: %s", ctime_r(&valid, valid_buf));
 	printf("  Flags: 0x%08X (%s)\n", token->flags,
 	       flags_str[0] ? flags_str : "none");
 	printf("  TPM Quote:\n");
