@@ -704,8 +704,7 @@ int net_attest(struct net_context *ctx, build_report_fn build_report,
 	ret = net_recv_result(ctx, result);
 
 out:
-	if (report)
-		free(report);
+	free(report);
 	net_disconnect(ctx);
 	return ret;
 }
