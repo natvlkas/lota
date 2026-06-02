@@ -6,3 +6,11 @@ name: "LOTA CodeQL config"
 # regenerated wholesale, so CodeQL findings inside it are not actionable
 paths-ignore:
   - include/vmlinux.h
+
+# cpp/poorly-documented-function is a comment-density heuristic (>= 2% of a
+# function's lines must be comments). LOTA code is written to be
+# self-documenting in the kernel style, so this metric is treated as
+# non-actionable noise for this project
+query-filters:
+  - exclude:
+      id: cpp/poorly-documented-function
