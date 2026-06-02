@@ -587,9 +587,15 @@ static void test_config_load_container_listener_uid_overflow(void)
 	int ret, len = 0;
 
 	TEST("config_load rejects > LOTA_CONFIG_MAX_CONTAINER_LISTENERS UIDs");
-	for (int i = 0; i <= LOTA_CONFIG_MAX_CONTAINER_LISTENERS; i++)
-		len += snprintf(buf + len, sizeof(buf) - len,
-				"container_listener_uid = %d\n", 1000 + i);
+	for (int i = 0; i <= LOTA_CONFIG_MAX_CONTAINER_LISTENERS; i++) {
+		if (len < 0 || (size_t)len >= sizeof(buf))
+			break;
+		int w = snprintf(buf + len, sizeof(buf) - (size_t)len,
+				 "container_listener_uid = %d\n", 1000 + i);
+		if (w < 0 || (size_t)w >= sizeof(buf) - (size_t)len)
+			break;
+		len += w;
+	}
 	write_config("overflow_uid.conf", buf);
 	config_path("overflow_uid.conf", path, sizeof(path));
 	config_init(&cfg);
