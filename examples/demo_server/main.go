@@ -59,13 +59,17 @@ func main() {
 	anticheatBin := flag.String("anticheat-binary", "",
 		"path to the demo_anticheat producer binary; its SHA-256 is "+
 			"mixed into the expected game-binding hash exactly like "+
-			"lota_ac_compute_game_binding_hash() does on the client. "+
-			"Required for any non-test invocation: leaving it empty "+
-			"keeps the server from being able to reproduce the hash "+
-			"the heartbeat producer stamps into the LACH header.")
+			"lota_ac_compute_game_binding_hash() does on the client, "+
+			"and its executable segments are measured into the "+
+			"expected runtime measurement. Required for any "+
+			"non-test invocation: leaving it empty keeps the server "+
+			"from being able to reproduce the hash and the runtime "+
+			"measurement the heartbeat producer stamps into the LACH "+
+			"header.")
 	flag.Parse()
 
 	var anticheatDigest [32]byte
+	var runtimeMeasure [32]byte
 	if *anticheatBin != "" {
 		bin, err := os.ReadFile(*anticheatBin)
 		if err != nil {
@@ -75,9 +79,21 @@ func main() {
 			os.Exit(2)
 		}
 		anticheatDigest = sha256.Sum256(bin)
+
+		// precompute the runtime measurement of the producer's
+		// executable segments so the server can reject heartbeats whose
+		// live code pages diverge from this binary
+		runtimeMeasure, err = computeExpectedRuntimeMeasure(*anticheatBin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"demo_server: measure --anticheat-binary %s: %v\n",
+				*anticheatBin, err)
+			os.Exit(2)
+		}
 	}
 
-	games, err := parseExpectedGames(*gamesSpec, anticheatDigest)
+	games, err := parseExpectedGames(*gamesSpec, anticheatDigest,
+		runtimeMeasure)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "demo_server: bad --expected-games: %v\n", err)
 		os.Exit(2)

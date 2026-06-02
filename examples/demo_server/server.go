@@ -34,9 +34,10 @@ const (
 // same hash trust_pong's heartbeat producer stamps into LACH headers)
 // plus the license string the server returns on the TRUSTED path.
 type gameBinding struct {
-	gameID     string
-	gameIDHash [32]byte
-	licenseID  string
+	gameID         string
+	gameIDHash     [32]byte
+	runtimeMeasure [32]byte
+	licenseID      string
 }
 
 // sessionState tracks the most recent verdict the server saw for a
@@ -202,8 +203,8 @@ func logf(format string, args ...any) {
 // stamps into the LACH header, mixed with the producer binary's
 // SHA-256 (passed as anticheatExeDigest) so the verdict map keys
 // reproduce lota_ac_compute_game_binding_hash() byte for byte.
-func parseExpectedGames(spec string,
-	anticheatExeDigest [32]byte) (map[string]gameBinding, error) {
+func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
+	runtimeMeasure [32]byte) (map[string]gameBinding, error) {
 	out := make(map[string]gameBinding)
 	for raw := range strings.SplitSeq(spec, ",") {
 		entry := strings.TrimSpace(raw)
@@ -216,9 +217,10 @@ func parseExpectedGames(spec string,
 		}
 		gid := kv[0]
 		out[gid] = gameBinding{
-			gameID:     gid,
-			gameIDHash: computeGameBindingHash(gid, anticheatExeDigest),
-			licenseID:  kv[1],
+			gameID:         gid,
+			gameIDHash:     computeGameBindingHash(gid, anticheatExeDigest),
+			runtimeMeasure: runtimeMeasure,
+			licenseID:      kv[1],
 		}
 	}
 	if len(out) == 0 {

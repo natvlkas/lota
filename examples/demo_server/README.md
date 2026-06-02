@@ -53,11 +53,12 @@ Response:
 Body: raw LACH bytes (binary, `Content-Type: application/octet-stream`).
 The handler:
 
-1. parses the 78-byte header documented in `include/lota_anticheat.h`,
+1. parses the 110-byte header documented in `include/lota_anticheat.h`,
 2. rejects on bad magic / version / size / unsupported `domain_version`
    (verdict `REJECT`, HTTP 400),
-3. fails closed on an unknown `game_id_hash`, replayed / stale
-   sequence, future timestamp, or signature/nonce mismatch (verdict
+3. fails closed on an unknown `game_id_hash`, a runtime-measurement
+   mismatch against the registered binary, a replayed / stale sequence,
+   a future timestamp, or a signature/nonce mismatch (verdict
    `UNTRUSTED`, HTTP 200),
 4. returns `{"state":"TRUSTED","license":"lota-demo-CS2-clone"}` only
    when the embedded LOTA token verifies against the configured AIK
