@@ -778,11 +778,12 @@ static void test_poll_no_data(void)
 
 	/* poll with very short timeout - no notifications expected */
 	ret = lota_poll_events(client, 50);
-	if (ret < 0) {
-		/* After unsubscribe request read, server closes. Connection may
-		 * reset! */
-		/* Accept 0 or error depending on timing. */
-	}
+	/*
+	 * ret < 0 is acceptable here: after the unsubscribe read the server
+	 * closes and the connection may reset, so accept 0 or an error
+	 * depending on timing.
+	 */
+	(void)ret;
 
 	/* no crash, no hang */
 	lota_disconnect(client);
