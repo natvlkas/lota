@@ -547,7 +547,10 @@ static void test_daemonize(void)
 			_exit(1);
 
 		/* grandchild daemon now */
-		FILE *f = fopen(marker_path, "w");
+		int mfd = open(marker_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		FILE *f = mfd >= 0 ? fdopen(mfd, "w") : NULL;
+		if (mfd >= 0 && !f)
+			close(mfd);
 		if (f) {
 			fprintf(f, "%d\n", getpid());
 			fclose(f);
