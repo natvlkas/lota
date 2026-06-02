@@ -138,8 +138,9 @@ static void test_event_no_caching(void)
 	struct lota_exec_event event;
 	uint8_t hash1[LOTA_HASH_SIZE], hash2[LOTA_HASH_SIZE];
 	uint64_t resolved, errors;
-	char *path;
+	char *path = NULL;
 	int ret;
+	int ok = 0;
 
 	TEST("hash_verify_event fail-closed without fs-verity");
 
@@ -157,25 +158,49 @@ static void test_event_no_caching(void)
 
 	/* first call */
 	ret = hash_verify_event(&ctx, &event, hash1);
-	ASSERT(ret < 0,
-	       "expected first hash_verify_event failure without verity");
+	if (ret >= 0) {
+		FAIL("expected first hash_verify_event failure without verity");
+		goto out;
+	}
 
 	hash_verify_stats(&ctx, &resolved, &errors);
-	ASSERT(resolved == 0, "expected 0 resolutions");
-	ASSERT(errors == 1, "expected 1 error");
+	if (resolved != 0) {
+		FAIL("expected 0 resolutions");
+		goto out;
+	}
+	if (errors != 1) {
+		FAIL("expected 1 error");
+		goto out;
+	}
 
 	/* second call */
 	ret = hash_verify_event(&ctx, &event, hash2);
-	ASSERT(ret < 0,
-	       "expected second hash_verify_event failure without verity");
+	if (ret >= 0) {
+		FAIL(
+		    "expected second hash_verify_event failure without verity");
+		goto out;
+	}
 
 	hash_verify_stats(&ctx, &resolved, &errors);
-	ASSERT(resolved == 0, "expected 0 resolutions");
-	ASSERT(errors == 2, "expected 2 errors");
+	if (resolved != 0) {
+		FAIL("expected 0 resolutions");
+		goto out;
+	}
+	if (errors != 2) {
+		FAIL("expected 2 errors");
+		goto out;
+	}
 
+	ok = 1;
+out:
 	hash_verify_cleanup(&ctx);
-	unlink(path);
-	free(path);
+	if (path) {
+		unlink(path);
+		free(path);
+	}
+
+	if (!ok)
+		return;
 
 	PASS();
 }
@@ -224,9 +249,14 @@ static void test_hash_large_file(void)
 
 	/* 1 MB file */
 	path = strdup("/tmp/lota_test_hash_large_XXXXXX");
+	ASSERT(path != NULL, "failed to allocate temp path");
 	{
 		int fd = mkstemp(path);
-		ASSERT(fd >= 0, "failed to create temp file");
+		if (fd < 0) {
+			free(path);
+			FAIL("failed to create temp file");
+			return;
+		}
 
 		/* 1 MB of repeating pattern */
 		uint8_t buf[4096];

@@ -194,6 +194,8 @@ int main(void)
 	client = lota_connect();
 	if (client) {
 		ret = lota_subscribe(client, LOTA_EVENT_STATUS, NULL, NULL);
+		test_result("lota_subscribe rejects NULL callback",
+			    ret == LOTA_ERR_INVALID_ARG, lota_strerror(ret));
 
 		ret = lota_subscribe(client, LOTA_EVENT_STATUS, dummy_cb, NULL);
 		test_result("lota_subscribe()", ret == 0, lota_strerror(ret));

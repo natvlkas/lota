@@ -1336,7 +1336,7 @@ static int measure_fsverity_digest(const char *path,
 				   struct lota_verity_digest_key *out)
 {
 	int fd;
-	struct stat st;
+	struct stat st = {0};
 	int ret = 0;
 
 	if (!path || !out)
@@ -1668,7 +1668,7 @@ static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
 					 const char *dir_path, int add)
 {
 	struct trusted_lib_key key = {0};
-	struct stat st;
+	struct stat st = {0};
 	uint32_t refcnt = 0;
 	int ret;
 
@@ -1843,7 +1843,7 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = {0};
-	struct stat st;
+	struct stat st = {0};
 	uint32_t value = 1;
 	int ret;
 
@@ -1878,7 +1878,7 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = {0};
-	struct stat st;
+	struct stat st = {0};
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path)

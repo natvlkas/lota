@@ -167,8 +167,7 @@ static void test_tracer_pid_parser_finds_field_after_dense_prefix(void)
 		    buf + off, sizeof(buf) - off,
 		    "Cpus_allowed:\tffffffff,ffffffff,ffffffff\n");
 	}
-	off +=
-	    (size_t)snprintf(buf + off, sizeof(buf) - off, "TracerPid:\t0\n");
+	snprintf(buf + off, sizeof(buf) - off, "TracerPid:\t0\n");
 	long tracer = 0xDEAD;
 	int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
 	if (ret != 0 || tracer != 0) {

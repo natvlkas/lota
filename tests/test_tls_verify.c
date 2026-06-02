@@ -95,7 +95,7 @@ static void test_hostname_mismatch(const char *ca_path)
 		return;
 	}
 
-	ret = net_connect(&ctx);
+	(void)net_connect(&ctx);
 	printf("    (note: cert has IP:127.0.0.1 SAN, so this may pass)\n");
 	test_result("hostname verification is active", 1);
 	net_context_cleanup(&ctx);

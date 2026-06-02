@@ -295,7 +295,7 @@ static void server_interleaved_notify(int client_fd)
 static void server_unsubscribe(int client_fd)
 {
 	struct lota_ipc_request req;
-	struct lota_ipc_subscribe_request sub;
+	struct lota_ipc_subscribe_request sub = {0};
 
 	/* read SUBSCRIBE */
 	if (recv_request(client_fd, &req, &sub, sizeof(sub)) < 0)

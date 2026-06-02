@@ -122,7 +122,7 @@ static uint64_t read_le64_u(const uint8_t *p)
 
 static int read_snapshot(struct lota_ac_session *session)
 {
-	uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN];
+	uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN] = {0};
 	ssize_t n = read_file_buf(session->snapshot_path, buf, sizeof(buf));
 	if (n < 0)
 		return (int)n;

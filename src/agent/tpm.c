@@ -2140,7 +2140,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * (no prior state on this host) is non-fatal: a first-run agent has
 	 * nothing to compare against but every later run does.
 	 */
-	struct lota_clock_state prev;
+	struct lota_clock_state prev = {0};
 	int have_prev = 0;
 	ret = tpm_clock_state_load(ctx, &prev);
 	if (ret == 0)

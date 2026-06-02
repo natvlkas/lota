@@ -643,13 +643,17 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 	uint8_t nonce[32] = {0x01, 0x02, 0x03};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
-	build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
+					  sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	if (ret != LOTA_SERVER_OK) {
 		FAIL("should pass with correct nonce");
 		return;
@@ -667,14 +671,18 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t nonce[32] = {0x01, 0x02, 0x03};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
-	build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
+					  sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	uint8_t wrong_nonce[32] = {0xFF, 0xFF, 0xFF};
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, wrong_nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       wrong_nonce, &claims);
 	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
 		PASS();
 	} else {
@@ -697,14 +705,19 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t nonce[32] = {0};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
+	size_t tok_written = 0;
 	/* sign with wrong_key, but verify with original aik_der */
-	build_full_token_sha256(wrong_key, now + 3600, 0, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(wrong_key, now + 3600, 0, nonce,
+					  tokbuf, sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		EVP_PKEY_free(wrong_key);
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	EVP_PKEY_free(wrong_key);
 
 	if (ret == LOTA_SERVER_ERR_SIG_FAIL) {
@@ -725,16 +738,20 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t nonce[32] = {0};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
-	build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
+					  sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	/* tamper: change flags from 0x07 to 0xFF in wire (offset 16) */
 	tokbuf[16] = 0xFF;
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
 		PASS();
 	} else {
@@ -753,9 +770,13 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t nonce[32] = {0};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
-	build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
+					  sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	/* tamper: change pcr_mask from 0x4001 to 0x0001 in wire (offset 56 LE)
 	 */
@@ -765,8 +786,8 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 	tokbuf[59] = 0x00;
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
 		PASS();
 	} else {
@@ -879,14 +900,18 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t nonce[32] = {0};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
+	size_t tok_written = 0;
 	/* valid_until 1 hour AGO */
-	build_full_token_sha256(key, now - 3600, 0, nonce, tokbuf,
-				sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key, now - 3600, 0, nonce, tokbuf,
+					  sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	if (ret != LOTA_SERVER_ERR_EXPIRED) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected ERR_EXPIRED, got %d", ret);
@@ -910,16 +935,20 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 	uint8_t nonce[32] = {0};
 
 	uint8_t tokbuf[2048];
-	size_t tok_written;
-	build_full_token_sha256(
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(
 	    key,
 	    now + (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC +
 		24ULL * 3600ULL,
 	    0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
 
 	struct lota_server_claims claims;
-	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
-					   aik_len, nonce, &claims);
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
 	if (ret != LOTA_SERVER_ERR_FUTURE) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);

@@ -157,7 +157,6 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 		}
 	}
 	close(sig_fd);
-	sig_fd = -1;
 
 	ret = policy_verify_buffer(cfg_data, cfg_len, cfg->policy_pubkey, sig);
 	free(cfg_data);

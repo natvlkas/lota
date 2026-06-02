@@ -282,7 +282,8 @@ jobs:
         run: |
           set -eu
           scan_build="$(command -v scan-build || command -v scan-build-18)"
-          "$scan_build" --version
+          echo "Using scan-build: $scan_build"
+          clang --version
           make clean
           "$scan_build" --status-bugs --keep-going \
             --exclude "$(pwd)/src/bpf" \
