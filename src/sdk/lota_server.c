@@ -426,34 +426,36 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	if (hdr.attest_size == 0 || hdr.sig_size == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	/* parse_wire_header already enforces this bound; assert it locally so
-	 * the allocation size is provably capped at the point of use */
-	if (hdr.protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+	/*
+	 * parse_wire_header already enforces this bound. Copy the count into a
+	 * local and validate the local so the allocation size is provably
+	 * capped (<= LOTA_TOKEN_MAX_PROTECT_PIDS) at the point of use.
+	 */
+	uint32_t pid_count = hdr.protect_pid_count;
+	if (pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	if (hdr.protect_pid_count > 0) {
-		pid_list = calloc(hdr.protect_pid_count, sizeof(uint32_t));
+	if (pid_count > 0) {
+		pid_list = calloc(pid_count, sizeof(uint32_t));
 		if (!pid_list)
 			return LOTA_SERVER_ERR_CRYPTO;
 
-		for (uint32_t i = 0; i < hdr.protect_pid_count; i++)
+		for (uint32_t i = 0; i < pid_count; i++)
 			pid_list[i] = read_le32(pid_list_bytes +
 						((size_t)i * sizeof(uint32_t)));
 
-		if (lota_validate_canonical_protect_pid_list(
-			pid_list, hdr.protect_pid_count) != 0) {
-			OPENSSL_cleanse(pid_list, hdr.protect_pid_count *
-						      sizeof(uint32_t));
+		if (lota_validate_canonical_protect_pid_list(pid_list,
+							     pid_count) != 0) {
+			OPENSSL_cleanse(pid_list, pid_count * sizeof(uint32_t));
 			free(pid_list);
 			return LOTA_SERVER_ERR_BAD_TOKEN;
 		}
 	}
 
-	if (lota_compute_runtime_protect_digest(pid_list, hdr.protect_pid_count,
+	if (lota_compute_runtime_protect_digest(pid_list, pid_count,
 						runtime_protect_digest) != 0) {
 		if (pid_list) {
-			OPENSSL_cleanse(pid_list, hdr.protect_pid_count *
-						      sizeof(uint32_t));
+			OPENSSL_cleanse(pid_list, pid_count * sizeof(uint32_t));
 			free(pid_list);
 		}
 		return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -464,8 +466,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		ret = LOTA_SERVER_OK;
 
 	if (pid_list) {
-		OPENSSL_cleanse(pid_list,
-				hdr.protect_pid_count * sizeof(uint32_t));
+		OPENSSL_cleanse(pid_list, pid_count * sizeof(uint32_t));
 		free(pid_list);
 	}
 	if (ret != LOTA_SERVER_OK)
