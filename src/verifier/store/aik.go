@@ -341,11 +341,14 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	if err != nil {
 		return fmt.Errorf("failed to create key file: %w", err)
 	}
-	defer file.Close()
-
 	if err := pem.Encode(file, pemBlock); err != nil {
+		file.Close()
 		os.Remove(path)
 		return fmt.Errorf("failed to write key: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return fmt.Errorf("failed to close key file: %w", err)
 	}
 
 	// add to cache
@@ -454,10 +457,12 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	if err != nil {
 		return fmt.Errorf("failed to write key file: %w", err)
 	}
-	defer file.Close()
-
 	if err := pem.Encode(file, pemBlock); err != nil {
+		file.Close()
 		return fmt.Errorf("failed to encode key: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close key file: %w", err)
 	}
 
 	// update metadata with new registration time
