@@ -468,6 +468,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_client \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
+	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_SDK_BIN)
@@ -572,6 +573,10 @@ $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat
 	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
@@ -616,6 +621,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
+	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_loader_symbols
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="

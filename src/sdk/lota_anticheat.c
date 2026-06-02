@@ -6,9 +6,11 @@
  */
 
 #include <ctype.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <link.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,6 +192,316 @@ static int compute_game_id_hash(const char *game_id,
 {
 	return lota_ac_compute_game_binding_hash(game_id, "/proc/self/exe",
 						 out);
+}
+
+/*
+ * Runtime re-measurement.
+ *
+ * Canonical digest over the executable PT_LOAD segments, computed either
+ * from the live mapping (producer) or the ELF file (verifier).
+ *
+ * See lota_anticheat.h for the wire-level documentation of the layout.
+ */
+#define LOTA_AC_RUNTIME_MEASURE_DOMAIN "lota-ac-runtime-measure:v1"
+#define LOTA_AC_RUNTIME_MAX_SEGS 16
+
+static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
+					  uint64_t offset, uint64_t filesz)
+{
+	uint8_t le[8];
+
+	lota__write_le64(le, vaddr);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+		return -EIO;
+	lota__write_le64(le, offset);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+		return -EIO;
+	lota__write_le64(le, filesz);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+		return -EIO;
+	return 0;
+}
+
+struct runtime_measure_self_ctx {
+	EVP_MD_CTX *md;
+	int done; /* main program object is reported first; stop after it */
+	int err;
+};
+
+static int runtime_measure_self_cb(struct dl_phdr_info *info, size_t size,
+				   void *data)
+{
+	struct runtime_measure_self_ctx *st = data;
+	const ElfW(Phdr) * segs[LOTA_AC_RUNTIME_MAX_SEGS];
+	uint32_t n = 0;
+	uint8_t le[4];
+	size_t i;
+
+	(void)size;
+
+	if (st->done)
+		return 1;
+	st->done = 1;
+
+	for (i = 0; i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		if (ph->p_type != PT_LOAD)
+			continue;
+		if (!(ph->p_flags & PF_X))
+			continue;
+		if (ph->p_filesz == 0)
+			continue;
+		if (n >= LOTA_AC_RUNTIME_MAX_SEGS) {
+			st->err = -E2BIG;
+			return 1;
+		}
+		segs[n++] = ph;
+	}
+
+	if (n == 0) {
+		st->err = -ENOENT;
+		return 1;
+	}
+
+	/* ascending p_vaddr
+	 * n is tiny so insertion sort is fine */
+	for (uint32_t k = 1; k < n; k++) {
+		const ElfW(Phdr) *key = segs[k];
+		uint32_t j = k;
+		while (j > 0 && segs[j - 1]->p_vaddr > key->p_vaddr) {
+			segs[j] = segs[j - 1];
+			j--;
+		}
+		segs[j] = key;
+	}
+
+	lota__write_le32(le, n);
+	if (EVP_DigestUpdate(st->md, le, sizeof(le)) != 1) {
+		st->err = -EIO;
+		return 1;
+	}
+
+	for (uint32_t k = 0; k < n; k++) {
+		const ElfW(Phdr) *ph = segs[k];
+		const uint8_t *bytes =
+		    (const uint8_t *)(info->dlpi_addr + ph->p_vaddr);
+
+		if (runtime_measure_update_seg_hdr(
+			st->md, ph->p_vaddr, ph->p_offset, ph->p_filesz) < 0) {
+			st->err = -EIO;
+			return 1;
+		}
+		if (EVP_DigestUpdate(st->md, bytes, ph->p_filesz) != 1) {
+			st->err = -EIO;
+			return 1;
+		}
+	}
+
+	return 1;
+}
+
+int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	static const char domain[] = LOTA_AC_RUNTIME_MEASURE_DOMAIN;
+	struct runtime_measure_self_ctx st = {0};
+	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
+
+	if (!out)
+		return -EINVAL;
+
+	st.md = EVP_MD_CTX_new();
+	if (!st.md)
+		return -ENOMEM;
+
+	if (EVP_DigestInit_ex(st.md, EVP_sha256(), NULL) != 1 ||
+	    EVP_DigestUpdate(st.md, domain, sizeof(domain)) != 1) {
+		EVP_MD_CTX_free(st.md);
+		return -EIO;
+	}
+
+	dl_iterate_phdr(runtime_measure_self_cb, &st);
+	if (st.err) {
+		EVP_MD_CTX_free(st.md);
+		return st.err;
+	}
+
+	if (EVP_DigestFinal_ex(st.md, out, &out_len) != 1) {
+		EVP_MD_CTX_free(st.md);
+		return -EIO;
+	}
+
+	EVP_MD_CTX_free(st.md);
+	return 0;
+}
+
+static int pread_full(int fd, void *buf, size_t len, off_t off)
+{
+	uint8_t *p = buf;
+
+	while (len > 0) {
+		ssize_t n = pread(fd, p, len, off);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -errno;
+		}
+		if (n == 0)
+			return -EIO; /* truncated file */
+		p += n;
+		off += n;
+		len -= (size_t)n;
+	}
+	return 0;
+}
+
+static int runtime_measure_update_file_seg(EVP_MD_CTX *md, int fd,
+					   uint64_t offset, uint64_t filesz)
+{
+	uint8_t buf[4096];
+	uint64_t remaining = filesz;
+	off_t cur = (off_t)offset;
+
+	while (remaining > 0) {
+		size_t want =
+		    remaining < sizeof(buf) ? (size_t)remaining : sizeof(buf);
+		int rc = pread_full(fd, buf, want, cur);
+		if (rc < 0)
+			return rc;
+		if (EVP_DigestUpdate(md, buf, want) != 1)
+			return -EIO;
+		cur += (off_t)want;
+		remaining -= want;
+	}
+	return 0;
+}
+
+int lota_ac_compute_expected_runtime_measure(
+    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	static const char domain[] = LOTA_AC_RUNTIME_MEASURE_DOMAIN;
+	Elf64_Ehdr ehdr;
+	Elf64_Phdr *phdrs = NULL;
+	const Elf64_Phdr *segs[LOTA_AC_RUNTIME_MAX_SEGS];
+	EVP_MD_CTX *md = NULL;
+	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
+	uint8_t le[4];
+	uint32_t n = 0;
+	size_t phsz;
+	int fd = -1;
+	int ret = -EIO;
+
+	if (!exe_path || !out)
+		return -EINVAL;
+
+	fd = open(exe_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	ret = pread_full(fd, &ehdr, sizeof(ehdr), 0);
+	if (ret < 0)
+		goto out;
+
+	if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
+	    ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+		ret = -ENOTSUP;
+		goto out;
+	}
+	if (ehdr.e_phentsize != sizeof(Elf64_Phdr)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (ehdr.e_phnum == 0 || ehdr.e_phnum >= PN_XNUM) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	phsz = (size_t)ehdr.e_phnum * sizeof(Elf64_Phdr);
+	phdrs = malloc(phsz);
+	if (!phdrs) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = pread_full(fd, phdrs, phsz, (off_t)ehdr.e_phoff);
+	if (ret < 0)
+		goto out;
+
+	for (size_t i = 0; i < ehdr.e_phnum; i++) {
+		const Elf64_Phdr *ph = &phdrs[i];
+		if (ph->p_type != PT_LOAD)
+			continue;
+		if (!(ph->p_flags & PF_X))
+			continue;
+		if (ph->p_filesz == 0)
+			continue;
+		if (n >= LOTA_AC_RUNTIME_MAX_SEGS) {
+			ret = -E2BIG;
+			goto out;
+		}
+		segs[n++] = ph;
+	}
+
+	if (n == 0) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	for (uint32_t k = 1; k < n; k++) {
+		const Elf64_Phdr *key = segs[k];
+		uint32_t j = k;
+		while (j > 0 && segs[j - 1]->p_vaddr > key->p_vaddr) {
+			segs[j] = segs[j - 1];
+			j--;
+		}
+		segs[j] = key;
+	}
+
+	md = EVP_MD_CTX_new();
+	if (!md) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
+	    EVP_DigestUpdate(md, domain, sizeof(domain)) != 1) {
+		ret = -EIO;
+		goto out;
+	}
+
+	lota__write_le32(le, n);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1) {
+		ret = -EIO;
+		goto out;
+	}
+
+	for (uint32_t k = 0; k < n; k++) {
+		const Elf64_Phdr *ph = segs[k];
+		if (runtime_measure_update_seg_hdr(
+			md, ph->p_vaddr, ph->p_offset, ph->p_filesz) < 0) {
+			ret = -EIO;
+			goto out;
+		}
+		ret = runtime_measure_update_file_seg(md, fd, ph->p_offset,
+						      ph->p_filesz);
+		if (ret < 0)
+			goto out;
+	}
+
+	if (EVP_DigestFinal_ex(md, out, &out_len) != 1) {
+		ret = -EIO;
+		goto out;
+	}
+	ret = 0;
+
+out:
+	if (md)
+		EVP_MD_CTX_free(md);
+	free(phdrs);
+	if (fd >= 0)
+		close(fd);
+	return ret;
 }
 
 static int compute_heartbeat_nonce(

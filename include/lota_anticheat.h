@@ -35,15 +35,15 @@ extern "C" {
 #define LOTA_AC_MAX_GAME_ID 64
 #define LOTA_AC_SESSION_ID_SIZE 16
 #define LOTA_AC_GAME_HASH_SIZE 32
+#define LOTA_AC_RUNTIME_MEASURE_SIZE 32
 
 /*
  * Domain-version negotiation.
  *
- * Each value names a frozen pair of hash domain strings used to derive
- * the game-binding hash and the heartbeat nonce. Producer stamps the
- * value into the wire; verifier rejects anything outside its accepted
- * set. New string variants must allocate the next integer rather than
- * silently replacing an existing one.
+ * Each value names a frozen pair of hash domain strings used to derive the
+ * game-binding hash and the heartbeat nonce. Producer stamps the value into the
+ * wire; verifier rejects anything outside its accepted set. New string variants
+ * must allocate the next integer instead of silently replacing an existing one.
  *
  * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v1\\0"
  */
@@ -241,6 +241,59 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  */
 int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 				      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
+
+/*
+ * Runtime re-measurement of the live executable image.
+ *
+ * Game-binding hash above pins SHA-256 of the on-disk executable at
+ * session start. It cannot detect an attacker who patches code pages in
+ * memory without touching the file.
+ *
+ * Runtime measurement closes that TOCTOU window by hashing the executable
+ * PT_LOAD segments as they are mapped in the live address space.
+ *
+ * Canonical digest:
+ *   SHA-256("lota-ac-runtime-measure:v1\\0" || seg_count_LE32 ||
+ *           for each executable (PF_X) PT_LOAD segment, in ascending
+ *           p_vaddr order:
+ *               p_vaddr_LE64 || p_offset_LE64 || p_filesz_LE64 ||
+ *               segment_bytes[p_filesz])
+ *
+ * For position-independent x86-64 code the executable segments carry no
+ * load-time relocations, so the live mapping is byte-identical to the
+ * on-disk segment content.
+ *
+ * Producer measures its own running image.
+ * Verifier precomputes the expected digest from the same ELF file.
+ *
+ * Divergence means the live code pages no longer match the registered
+ * binary.
+ */
+
+/*
+ * Measure the live, mapped executable image of the calling process.
+ *
+ * Hashes the in-memory PF_X PT_LOAD segments of the main program object
+ * (as reported by dl_iterate_phdr). Returns 0 on success, -EINVAL on a
+ * NULL argument, -ENOMEM on allocation failure, -E2BIG if the image has
+ * more executable segments than the implementation supports, -EIO on a
+ * digest failure, -ENOENT if no executable segment is found.
+ */
+int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+
+/*
+ * Precompute the expected runtime measurement from an ELF file on disk.
+ *
+ * Parses the ELF program headers and hashes the file-backed bytes of the
+ * PF_X PT_LOAD segments using the same canonical layout as
+ * lota_ac_compute_runtime_measure(). Use this to derive the value a
+ * trustworthy producer must report for exe_path.
+ *
+ * Returns 0 on success, EINVAL on a NULL argument, negative errno
+ * on an I/O or parse failure.
+ */
+int lota_ac_compute_expected_runtime_measure(
+    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /*
  * Verify a heartbeat packet.
