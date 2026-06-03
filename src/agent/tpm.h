@@ -762,9 +762,53 @@ bool tpm_is_locked_out(const struct tpm_context *ctx);
  */
 void tpm_reset_lockout_state(struct tpm_context *ctx);
 
+/*
+ * tpm_seal_secret - Seal a secret to the current PCR state.
+ * @ctx:        initialised TPM context
+ * @secret:     plaintext to seal (1..LOTA_SEAL_MAX_SECRET bytes)
+ * @secret_len: length of @secret
+ * @pcr_mask:   PCR selection to bind to; 0 selects LOTA_SEAL_DEFAULT_PCR_MASK
+ * @out:        buffer receiving the sealed blob (see include/lota_seal.h)
+ * @out_cap:    capacity of @out
+ * @out_len:    set to the sealed blob length on success
+ *
+ * Wraps the secret under a deterministic restricted storage primary in the
+ * owner hierarchy with a PolicyPCR authPolicy. The blob only loads on this
+ * TPM and only unseals when the selected PCRs reproduce their seal-time
+ * values. Returns 0 on success, -EINVAL on bad arguments, -ENOSPC if @out
+ * is too small, negative errno / LOTA_ERR_TPM_* on TPM failure.
+ */
+int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
+		    size_t secret_len, uint32_t pcr_mask, uint8_t *out,
+		    size_t out_cap, size_t *out_len);
+
+/*
+ * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret().
+ * @ctx:        initialised TPM context
+ * @blob:       sealed blob
+ * @blob_len:   length of @blob
+ * @out_secret: buffer receiving the plaintext
+ * @out_cap:    capacity of @out_secret
+ * @out_len:    set to the plaintext length on success
+ *
+ * Recreates the storage primary, loads the sealed object, and unseals it
+ * over a primary-salted, response-encrypted policy session that satisfies
+ * the blob's PolicyPCR. Fails (mapped TPM policy error) when the current
+ * PCRs differ from the seal-time state. Returns 0 on success, -EINVAL on a
+ * malformed blob or bad arguments, -ENOSPC if @out_secret is too small,
+ * negative errno / LOTA_ERR_TPM_* on TPM failure.
+ */
+int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
+		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
+		      size_t *out_len);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
+
+/* Pure helper: expose the PCR-mask -> selection bitmap for unit tests. */
+int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
+				   uint32_t *out_count);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);

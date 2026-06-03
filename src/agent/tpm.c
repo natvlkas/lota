@@ -34,6 +34,7 @@
 #include <tss2/tss2_tcti_device.h>
 #include <tss2/tss2_tctildr.h>
 
+#include "../../include/lota_seal.h"
 #include "quote.h"
 #include "tpm.h"
 
@@ -3736,3 +3737,521 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 	*out_size = data_size;
 	return 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * Sealed keys: bind a secret to the current PCR state (PolicyPCR).
+ *
+ * Secret is sealed under a deterministic restricted storage primary in
+ * the owner hierarchy, with an authPolicy that requires the selected PCRs
+ * to reproduce their seal-time values. The blob is inert at rest: it only
+ * loads on the same TPM and only unseals when the host booted into the
+ * expected state. The unseal session is salted by the primary and carries
+ * response-parameter encryption so the released secret is not exposed in
+ * clear on the TPM transport.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Deterministic restricted storage primary used to wrap sealed objects.
+ * unique is left empty so the TPM derives the same key every time from the
+ * owner seed and this template, letting unseal recreate it without any
+ * persistent handle.
+ */
+static void seal_primary_template(TPM2B_PUBLIC *pub)
+{
+	memset(pub, 0, sizeof(*pub));
+	pub->publicArea.type = TPM2_ALG_RSA;
+	pub->publicArea.nameAlg = TPM2_ALG_SHA256;
+	pub->publicArea.objectAttributes =
+	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+	    TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
+	    TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
+	pub->publicArea.parameters.rsaDetail.symmetric.algorithm = TPM2_ALG_AES;
+	pub->publicArea.parameters.rsaDetail.symmetric.keyBits.aes = 128;
+	pub->publicArea.parameters.rsaDetail.symmetric.mode.aes = TPM2_ALG_CFB;
+	pub->publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
+	pub->publicArea.parameters.rsaDetail.keyBits = 2048;
+	pub->publicArea.parameters.rsaDetail.exponent = 0;
+	pub->publicArea.unique.rsa.size = 0;
+}
+
+static int seal_create_primary(struct tpm_context *ctx, ESYS_TR *out_handle)
+{
+	TPM2B_PUBLIC in_public;
+	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
+	TPM2B_DATA outside_info = {.size = 0};
+	TPML_PCR_SELECTION creation_pcr = {.count = 0};
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_CREATION_DATA *creation_data = NULL;
+	TPM2B_DIGEST *creation_hash = NULL;
+	TPMT_TK_CREATION *creation_ticket = NULL;
+	TSS2_RC rc;
+	int ret;
+
+	seal_primary_template(&in_public);
+
+	struct esys_create_primary_args args = {
+	    .esys_ctx = ctx->esys_ctx,
+	    .primary_handle = ESYS_TR_RH_OWNER,
+	    .shandle1 = ESYS_TR_PASSWORD,
+	    .in_sensitive = &in_sensitive,
+	    .in_public = &in_public,
+	    .outside_info = &outside_info,
+	    .creation_pcr = &creation_pcr,
+	    .object_handle_out = out_handle,
+	    .out_public_out = &out_public,
+	    .creation_data_out = &creation_data,
+	    .creation_hash_out = &creation_hash,
+	    .creation_ticket_out = &creation_ticket,
+	};
+	ret = tpm_call_with_backoff(
+	    ctx, esys_create_primary_thunk, &args, &rc, 4, (void **)&out_public,
+	    (void **)&creation_data, (void **)&creation_hash,
+	    (void **)&creation_ticket);
+	Esys_Free(out_public);
+	Esys_Free(creation_data);
+	Esys_Free(creation_hash);
+	Esys_Free(creation_ticket);
+	return ret;
+}
+
+/* Build a single-bank SHA-256 PCR selection from a LOTA PCR mask. */
+static void seal_mask_to_selection(uint32_t pcr_mask, TPML_PCR_SELECTION *sel)
+{
+	memset(sel, 0, sizeof(*sel));
+	sel->count = 1;
+	sel->pcrSelections[0].hash = TPM_HASH_ALG;
+	sel->pcrSelections[0].sizeofSelect = 3;
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+		if (pcr_mask & (1U << i))
+			sel->pcrSelections[0].pcrSelect[i / 8] |=
+			    (uint8_t)(1U << (i % 8));
+	}
+}
+
+struct esys_create_args {
+	ESYS_CONTEXT *esys_ctx;
+	ESYS_TR parent;
+	ESYS_TR shandle1;
+	const TPM2B_SENSITIVE_CREATE *in_sensitive;
+	const TPM2B_PUBLIC *in_public;
+	const TPM2B_DATA *outside_info;
+	const TPML_PCR_SELECTION *creation_pcr;
+	TPM2B_PRIVATE **out_private_out;
+	TPM2B_PUBLIC **out_public_out;
+	TPM2B_CREATION_DATA **creation_data_out;
+	TPM2B_DIGEST **creation_hash_out;
+	TPMT_TK_CREATION **creation_ticket_out;
+};
+
+static TSS2_RC esys_create_thunk(void *u)
+{
+	struct esys_create_args *a = u;
+	return Esys_Create(a->esys_ctx, a->parent, a->shandle1, ESYS_TR_NONE,
+			   ESYS_TR_NONE, a->in_sensitive, a->in_public,
+			   a->outside_info, a->creation_pcr, a->out_private_out,
+			   a->out_public_out, a->creation_data_out,
+			   a->creation_hash_out, a->creation_ticket_out);
+}
+
+struct esys_policy_get_digest_args {
+	ESYS_CONTEXT *esys_ctx;
+	ESYS_TR session;
+	TPM2B_DIGEST **digest_out;
+};
+
+static TSS2_RC esys_policy_get_digest_thunk(void *u)
+{
+	struct esys_policy_get_digest_args *a = u;
+	return Esys_PolicyGetDigest(a->esys_ctx, a->session, ESYS_TR_NONE,
+				    ESYS_TR_NONE, ESYS_TR_NONE, a->digest_out);
+}
+
+struct esys_unseal_args {
+	ESYS_CONTEXT *esys_ctx;
+	ESYS_TR item;
+	ESYS_TR session;
+	TPM2B_SENSITIVE_DATA **data_out;
+};
+
+static TSS2_RC esys_unseal_thunk(void *u)
+{
+	struct esys_unseal_args *a = u;
+	return Esys_Unseal(a->esys_ctx, a->item, a->session, ESYS_TR_NONE,
+			   ESYS_TR_NONE, a->data_out);
+}
+
+/*
+ * Compute the authPolicy digest a sealed object must carry to require the
+ * given PCR selection. A trial policy session folds the current PCR values
+ * into the digest; the same PolicyPCR at unseal time only reproduces it
+ * when the PCRs match.
+ */
+static int seal_compute_policy_digest(struct tpm_context *ctx,
+				      const TPML_PCR_SELECTION *sel,
+				      TPM2B_DIGEST *out_policy)
+{
+	TPMT_SYM_DEF sym = {.algorithm = TPM2_ALG_NULL};
+	ESYS_TR session = ESYS_TR_NONE;
+	TPM2B_DIGEST *policy = NULL;
+	TSS2_RC rc;
+	int ret;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_StartAuthSession(
+			   ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+			   ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+			   TPM2_SE_TRIAL, &sym, TPM2_ALG_SHA256, &session));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_PolicyPCR(ctx->esys_ctx, session, ESYS_TR_NONE,
+				      ESYS_TR_NONE, ESYS_TR_NONE, NULL, sel));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto out;
+	}
+
+	{
+		struct esys_policy_get_digest_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .session = session,
+		    .digest_out = &policy,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_policy_get_digest_thunk,
+					    &args, &rc, 1, (void **)&policy);
+		if (ret < 0)
+			goto out;
+	}
+
+	if (policy->size > sizeof(out_policy->buffer)) {
+		ret = -EOVERFLOW;
+		goto out;
+	}
+	out_policy->size = policy->size;
+	memcpy(out_policy->buffer, policy->buffer, policy->size);
+	ret = 0;
+out:
+	Esys_Free(policy);
+	if (session != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, session);
+	return ret;
+}
+
+/*
+ * Diagnostic composite: SHA-256 over the selected PCR values in ascending
+ * index order. Recorded in the blob so an operator can see which PCR state
+ * a secret was sealed against. Not security-critical; the authPolicy is
+ * the binding.
+ */
+static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
+				   uint8_t out[LOTA_SEAL_PCR_DIGEST_SIZE])
+{
+	EVP_MD_CTX *md = EVP_MD_CTX_new();
+	unsigned int out_len = LOTA_SEAL_PCR_DIGEST_SIZE;
+	int ret = -EIO;
+
+	if (!md)
+		return -ENOMEM;
+	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1)
+		goto out;
+
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+		uint8_t value[LOTA_HASH_SIZE];
+		if (!(pcr_mask & (1U << i)))
+			continue;
+		ret = tpm_read_pcr(ctx, i, TPM_HASH_ALG, value);
+		if (ret < 0)
+			goto out;
+		if (EVP_DigestUpdate(md, value, sizeof(value)) != 1) {
+			ret = -EIO;
+			goto out;
+		}
+	}
+
+	if (EVP_DigestFinal_ex(md, out, &out_len) != 1) {
+		ret = -EIO;
+		goto out;
+	}
+	ret = 0;
+out:
+	EVP_MD_CTX_free(md);
+	return ret;
+}
+
+int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
+		    size_t secret_len, uint32_t pcr_mask, uint8_t *out,
+		    size_t out_cap, size_t *out_len)
+{
+	ESYS_TR primary = ESYS_TR_NONE;
+	TPM2B_PUBLIC in_public = {.size = 0};
+	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
+	TPM2B_DATA outside_info = {.size = 0};
+	TPML_PCR_SELECTION creation_pcr = {.count = 0};
+	TPML_PCR_SELECTION sel;
+	TPM2B_DIGEST policy = {.size = 0};
+	TPM2B_PRIVATE *out_private = NULL;
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_CREATION_DATA *creation_data = NULL;
+	TPM2B_DIGEST *creation_hash = NULL;
+	TPMT_TK_CREATION *creation_ticket = NULL;
+	uint8_t pub_buf[LOTA_SEAL_MAX_PUB];
+	uint8_t priv_buf[LOTA_SEAL_MAX_PRIV];
+	size_t pub_off = 0, priv_off = 0;
+	struct lota_seal_meta meta;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !secret || !out ||
+	    !out_len)
+		return -EINVAL;
+	if (secret_len == 0 || secret_len > LOTA_SEAL_MAX_SECRET)
+		return -EINVAL;
+	if (pcr_mask == 0)
+		pcr_mask = LOTA_SEAL_DEFAULT_PCR_MASK;
+	if (lota_seal_validate_pcr_mask(pcr_mask) != 0)
+		return -EINVAL;
+
+	seal_mask_to_selection(pcr_mask, &sel);
+
+	ret = seal_create_primary(ctx, &primary);
+	if (ret < 0)
+		return ret;
+
+	ret = seal_compute_policy_digest(ctx, &sel, &policy);
+	if (ret < 0)
+		goto out;
+
+	/* Sealed keyed-hash data object: no userAuth, policy-gated unseal. */
+	in_public.publicArea.type = TPM2_ALG_KEYEDHASH;
+	in_public.publicArea.nameAlg = TPM2_ALG_SHA256;
+	in_public.publicArea.objectAttributes =
+	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT;
+	in_public.publicArea.authPolicy.size = policy.size;
+	memcpy(in_public.publicArea.authPolicy.buffer, policy.buffer,
+	       policy.size);
+	in_public.publicArea.parameters.keyedHashDetail.scheme.scheme =
+	    TPM2_ALG_NULL;
+
+	in_sensitive.sensitive.userAuth.size = 0;
+	in_sensitive.sensitive.data.size = (uint16_t)secret_len;
+	memcpy(in_sensitive.sensitive.data.buffer, secret, secret_len);
+
+	{
+		struct esys_create_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .parent = primary,
+		    .shandle1 = ESYS_TR_PASSWORD,
+		    .in_sensitive = &in_sensitive,
+		    .in_public = &in_public,
+		    .outside_info = &outside_info,
+		    .creation_pcr = &creation_pcr,
+		    .out_private_out = &out_private,
+		    .out_public_out = &out_public,
+		    .creation_data_out = &creation_data,
+		    .creation_hash_out = &creation_hash,
+		    .creation_ticket_out = &creation_ticket,
+		};
+		ret = tpm_call_with_backoff(
+		    ctx, esys_create_thunk, &args, &rc, 5,
+		    (void **)&out_private, (void **)&out_public,
+		    (void **)&creation_data, (void **)&creation_hash,
+		    (void **)&creation_ticket);
+		if (ret < 0)
+			goto out;
+	}
+
+	rc = Tss2_MU_TPM2B_PUBLIC_Marshal(out_public, pub_buf, sizeof(pub_buf),
+					  &pub_off);
+	if (rc != TSS2_RC_SUCCESS || pub_off == 0) {
+		ret = -EIO;
+		goto out;
+	}
+	rc = Tss2_MU_TPM2B_PRIVATE_Marshal(out_private, priv_buf,
+					   sizeof(priv_buf), &priv_off);
+	if (rc != TSS2_RC_SUCCESS || priv_off == 0) {
+		ret = -EIO;
+		goto out;
+	}
+
+	memset(&meta, 0, sizeof(meta));
+	meta.pcr_mask = pcr_mask;
+	meta.pcr_alg = LOTA_SEAL_PCR_ALG_SHA256;
+	meta.pub_len = (uint16_t)pub_off;
+	meta.priv_len = (uint16_t)priv_off;
+	ret = seal_compute_pcr_digest(ctx, pcr_mask, meta.pcr_digest);
+	if (ret < 0)
+		goto out;
+
+	{
+		size_t total =
+		    (size_t)LOTA_SEAL_HEADER_SIZE + pub_off + priv_off;
+		if (total > out_cap) {
+			ret = -ENOSPC;
+			goto out;
+		}
+		ret = lota_seal_serialize_header(out, &meta);
+		if (ret < 0)
+			goto out;
+		memcpy(out + LOTA_SEAL_HEADER_SIZE, pub_buf, pub_off);
+		memcpy(out + LOTA_SEAL_HEADER_SIZE + pub_off, priv_buf,
+		       priv_off);
+		*out_len = total;
+		ret = 0;
+	}
+
+out:
+	secure_bzero(in_sensitive.sensitive.data.buffer,
+		     sizeof(in_sensitive.sensitive.data.buffer));
+	secure_bzero(priv_buf, sizeof(priv_buf));
+	Esys_Free(out_private);
+	Esys_Free(out_public);
+	Esys_Free(creation_data);
+	Esys_Free(creation_hash);
+	Esys_Free(creation_ticket);
+	if (primary != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, primary);
+	return ret;
+}
+
+int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
+		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
+		      size_t *out_len)
+{
+	struct lota_seal_meta meta;
+	size_t body_off = 0;
+	TPM2B_PUBLIC sealed_public = {.size = 0};
+	TPM2B_PRIVATE sealed_private = {.size = 0};
+	TPML_PCR_SELECTION sel;
+	ESYS_TR primary = ESYS_TR_NONE;
+	ESYS_TR sealed = ESYS_TR_NONE;
+	ESYS_TR session = ESYS_TR_NONE;
+	TPM2B_SENSITIVE_DATA *data = NULL;
+	TPMT_SYM_DEF sym = {
+	    .algorithm = TPM2_ALG_AES,
+	    .keyBits.aes = 128,
+	    .mode.aes = TPM2_ALG_CFB,
+	};
+	size_t off;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !blob ||
+	    !out_secret || !out_len)
+		return -EINVAL;
+
+	ret = lota_seal_parse_header(blob, blob_len, &meta, &body_off);
+	if (ret < 0)
+		return ret;
+
+	off = body_off;
+	rc = Tss2_MU_TPM2B_PUBLIC_Unmarshal(blob, blob_len, &off,
+					    &sealed_public);
+	if (rc != TSS2_RC_SUCCESS || off != body_off + meta.pub_len)
+		return -EINVAL;
+	rc = Tss2_MU_TPM2B_PRIVATE_Unmarshal(blob, blob_len, &off,
+					     &sealed_private);
+	if (rc != TSS2_RC_SUCCESS || off != blob_len)
+		return -EINVAL;
+
+	seal_mask_to_selection(meta.pcr_mask, &sel);
+
+	ret = seal_create_primary(ctx, &primary);
+	if (ret < 0)
+		return ret;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_Load(ctx->esys_ctx, primary, ESYS_TR_PASSWORD,
+				 ESYS_TR_NONE, ESYS_TR_NONE, &sealed_private,
+				 &sealed_public, &sealed));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto out;
+	}
+
+	/*
+	 * Policy session salted by the primary and carrying response-parameter
+	 * encryption, so the unsealed secret is encrypted on the TPM transport.
+	 */
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_StartAuthSession(
+			   ctx->esys_ctx, primary, ESYS_TR_NONE, ESYS_TR_NONE,
+			   ESYS_TR_NONE, ESYS_TR_NONE, NULL, TPM2_SE_POLICY,
+			   &sym, TPM2_ALG_SHA256, &session));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto out;
+	}
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TRSess_SetAttributes(ctx->esys_ctx, session,
+						 TPMA_SESSION_CONTINUESESSION |
+						     TPMA_SESSION_ENCRYPT,
+						 TPMA_SESSION_CONTINUESESSION |
+						     TPMA_SESSION_ENCRYPT));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto out;
+	}
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_PolicyPCR(ctx->esys_ctx, session, ESYS_TR_NONE,
+				      ESYS_TR_NONE, ESYS_TR_NONE, NULL, &sel));
+	if (rc != TSS2_RC_SUCCESS) {
+		ret = tss2_rc_to_errno(rc);
+		goto out;
+	}
+
+	{
+		struct esys_unseal_args args = {
+		    .esys_ctx = ctx->esys_ctx,
+		    .item = sealed,
+		    .session = session,
+		    .data_out = &data,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_unseal_thunk, &args, &rc,
+					    1, (void **)&data);
+		if (ret < 0)
+			goto out;
+	}
+
+	if (data->size > out_cap) {
+		ret = -ENOSPC;
+		goto out;
+	}
+	memcpy(out_secret, data->buffer, data->size);
+	*out_len = data->size;
+	ret = 0;
+
+out:
+	if (data) {
+		secure_bzero(data->buffer, sizeof(data->buffer));
+		Esys_Free(data);
+	}
+	if (session != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, session);
+	if (sealed != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, sealed);
+	if (primary != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, primary);
+	return ret;
+}
+
+#ifdef LOTA_TPM_TESTING
+int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
+				   uint32_t *out_count)
+{
+	TPML_PCR_SELECTION sel;
+
+	if (!out_select || !out_count)
+		return -EINVAL;
+	seal_mask_to_selection(pcr_mask, &sel);
+	if (sel.count != 1)
+		return -EINVAL;
+	out_select[0] = sel.pcrSelections[0].pcrSelect[0];
+	out_select[1] = sel.pcrSelections[0].pcrSelect[1];
+	out_select[2] = sel.pcrSelections[0].pcrSelect[2];
+	*out_count = sel.count;
+	return 0;
+}
+#endif /* LOTA_TPM_TESTING */
