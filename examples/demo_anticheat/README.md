@@ -14,11 +14,25 @@ The binary lands at `build/examples/demo_anticheat` and links against the gaming
 | `--server URL`   | `http://127.0.0.1:7443/heartbeat`  | demo server `/heartbeat` endpoint                             |
 | `--game-id ID`   | `trust-pong`                       | game id stamped into the LACH header                          |
 | `--socket PATH`  | (default agent socket)             | override the agent UNIX socket path                           |
-| `--provider eac|battleye` | `eac`                     | anti-cheat provider id stamped into the LACH header           |
+| `--provider eac/battleye` | `eac`                     | anti-cheat provider id stamped into the LACH header           |
 | `--interval SEC` | `5`                                | seconds between heartbeats; also `$LOTA_DEMO_INTERVAL_SEC`    |
 | `--once`         | off                                | fire a single heartbeat, exit with the server-reported state  |
 | `--tamper-marker PATH` | (none)                       | flip a token byte when PATH exists; also `$LOTA_DEMO_TAMPER_MARKER` |
+| `--print-runtime-objects` | off                       | print the runtime manifest (loaded object paths) and exit |
 | `--help`         | n/a                                | print usage and exit                                          |
+
+## Re-measurement runtime manifest
+
+Each heartbeat carries a runtime measurement of the producer's live image
+- the main binary plus every shared library it loads. The server
+reproduces the expected value from the set of ELF files that make up that
+runtime. Capture the list once with `--print-runtime-objects` and hand it
+to the server:
+
+```sh
+demo_anticheat --print-runtime-objects > runtime-manifest.txt
+demo_server --anticheat-runtime-manifest runtime-manifest.txt ...
+```
 
 ## Exit codes
 

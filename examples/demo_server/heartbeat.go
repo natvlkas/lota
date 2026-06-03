@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"debug/elf"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -33,7 +35,11 @@ const (
 	heartbeatNonceDomainV2 = "lota-ac-heartbeat:v2\x00"
 	domainVersionV2        = 2
 
-	runtimeMeasureDomain = "lota-ac-runtime-measure:v1\x00"
+	// Runtime measures every file-backed loaded object.
+	// Each object yields a content digest under runtimeObjectDomain.
+	// Combined image digest folds them, keyed by soname, under runtimeMeasureDomain.
+	runtimeObjectDomain  = "lota-ac-runtime-object:v1\x00"
+	runtimeMeasureDomain = "lota-ac-runtime-measure:v2\x00"
 )
 
 // rejectErr signals that a packet failed at the wire-format layer and
@@ -230,25 +236,29 @@ func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	_, _ = h.Write(hdr.gameIDHash[:])
 	binary.LittleEndian.PutUint32(u32[:], hdr.domainVersion)
 	_, _ = h.Write(u32[:])
-	// V2 binds the runtime measurement (EXT-2).
+	// V2 binds the runtime measurement
 	_, _ = h.Write(hdr.runtimeMeas[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
 }
 
-// computeExpectedRuntimeMeasure mirrors
-// lota_ac_compute_expected_runtime_measure() in src/sdk/lota_anticheat.c.
-// It hashes the file-backed bytes of the executable (PF_X) PT_LOAD
-// segments of an ELF binary, in ascending p_vaddr order, using the same
-// canonical layout the SDK producer measures from its live mapping. The
-// server precomputes this so it can reject heartbeats whose live code
-// pages no longer match the registered binary.
-func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
-	var out [32]byte
+// runtimeObject is one measured object: its soname (file basename) and
+// the content digest over its executable segments.
+type runtimeObject struct {
+	soname string
+	digest [32]byte
+}
+
+// runtimeObjectDigest mirrors rt_file_object_digest() in
+// src/sdk/lota_anticheat.c. It hashes the file-backed bytes of the
+// executable (PF_X) PT_LOAD segments of an ELF object, in ascending
+// p_vaddr order, under runtimeObjectDomain. hasExec is false for an
+// object with no executable segment; such an object contributes nothing.
+func runtimeObjectDigest(path string) (digest [32]byte, hasExec bool, err error) {
 	f, err := elf.Open(path)
 	if err != nil {
-		return out, err
+		return digest, false, err
 	}
 	defer f.Close()
 
@@ -260,14 +270,14 @@ func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
 		}
 	}
 	if len(segs) == 0 {
-		return out, fmt.Errorf("no executable PT_LOAD segment in %s", path)
+		return digest, false, nil
 	}
 	sort.Slice(segs, func(i, j int) bool {
 		return segs[i].Vaddr < segs[j].Vaddr
 	})
 
 	h := sha256.New()
-	_, _ = h.Write([]byte(runtimeMeasureDomain))
+	_, _ = h.Write([]byte(runtimeObjectDomain))
 	var le4 [4]byte
 	binary.LittleEndian.PutUint32(le4[:], uint32(len(segs)))
 	_, _ = h.Write(le4[:])
@@ -280,11 +290,67 @@ func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
 		binary.LittleEndian.PutUint64(le8[:], p.Filesz)
 		_, _ = h.Write(le8[:])
 		if _, err := io.CopyN(h, p.Open(), int64(p.Filesz)); err != nil {
-			return out, fmt.Errorf("read segment of %s: %w", path, err)
+			return digest, false, fmt.Errorf("read segment of %s: %w",
+				path, err)
 		}
+	}
+	copy(digest[:], h.Sum(nil))
+	return digest, true, nil
+}
+
+// computeExpectedRuntimeMeasureSet mirrors
+// lota_ac_compute_expected_runtime_measure_set(). It folds the per-object
+// digests of the given ELF files (the trusted runtime manifest) into the
+// combined image digest, keyed by soname (file basename) and sorted, so
+// the order of paths does not matter. Files with no executable segment
+// are skipped. The server reproduces this to reject heartbeats whose live
+// code pages no longer match the registered binaries.
+func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
+	var out [32]byte
+	objs := make([]runtimeObject, 0, len(paths))
+	for _, p := range paths {
+		dg, hasExec, err := runtimeObjectDigest(p)
+		if err != nil {
+			return out, err
+		}
+		if !hasExec {
+			continue
+		}
+		objs = append(objs, runtimeObject{
+			soname: filepath.Base(p),
+			digest: dg,
+		})
+	}
+	if len(objs) == 0 {
+		return out, fmt.Errorf("no executable object in runtime manifest")
+	}
+	sort.Slice(objs, func(i, j int) bool {
+		if objs[i].soname != objs[j].soname {
+			return objs[i].soname < objs[j].soname
+		}
+		return bytes.Compare(objs[i].digest[:], objs[j].digest[:]) < 0
+	})
+
+	h := sha256.New()
+	_, _ = h.Write([]byte(runtimeMeasureDomain))
+	var le4 [4]byte
+	binary.LittleEndian.PutUint32(le4[:], uint32(len(objs)))
+	_, _ = h.Write(le4[:])
+	for _, o := range objs {
+		binary.LittleEndian.PutUint32(le4[:], uint32(len(o.soname)))
+		_, _ = h.Write(le4[:])
+		_, _ = h.Write([]byte(o.soname))
+		_, _ = h.Write(o.digest[:])
 	}
 	copy(out[:], h.Sum(nil))
 	return out, nil
+}
+
+// computeExpectedRuntimeMeasure is the single-object convenience: the
+// combined measurement for an image made of one object (a statically
+// linked producer, or when verifying the main executable alone).
+func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
+	return computeExpectedRuntimeMeasureSet([]string{path})
 }
 
 // checkFreshness enforces the demo's monotonic-sequence and bounded-

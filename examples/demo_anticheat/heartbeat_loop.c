@@ -49,6 +49,7 @@ struct demo_options {
 	enum lota_ac_provider provider;
 	unsigned int interval_sec;
 	bool once;
+	bool print_runtime_objects;
 };
 
 struct response_buf {
@@ -70,12 +71,18 @@ static void print_usage(const char *argv0)
 	    stderr,
 	    "Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 	    "          [--provider eac|battleye] [--interval SEC] [--once]\n"
-	    "          [--tamper-marker PATH]\n"
+	    "          [--tamper-marker PATH] [--print-runtime-objects]\n"
 	    "\n"
 	    "Opens an lota_ac_session against the local LOTA agent and\n"
 	    "POSTs heartbeats to the demo server. Exit code in --once mode\n"
 	    "matches the server verdict: 0=TRUSTED, 1=UNTRUSTED, 2=REJECT,\n"
 	    "3=transport error, 64=usage error.\n"
+	    "\n"
+	    "--print-runtime-objects prints, one path per line, the\n"
+	    "file-backed objects (main binary + shared libraries) this\n"
+	    "process maps and that the runtime measurement covers,\n"
+	    "then exits. Redirect it into a file to capture the trusted\n"
+	    "runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
 	    "\n"
 	    "When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
 	    "exported) and the named path exists at heartbeat time, the\n"
@@ -84,6 +91,32 @@ static void print_usage(const char *argv0)
 	    "UNTRUSTED. The wire format itself stays well-formed, so this\n"
 	    "exercises the integrity path rather than the parser.\n",
 	    argv0);
+}
+
+static int print_runtime_object_cb(const char *path, void *user)
+{
+	(void)user;
+	printf("%s\n", path);
+	return 0;
+}
+
+/*
+ * Emit the trusted runtime manifest: the file-backed objects this
+ * process maps and that the runtime measurement covers.
+ * The operator captures this once and feeds it to
+ * 'demo_server --anticheat-runtime-manifest'.
+ */
+static int print_runtime_objects(void)
+{
+	int rc = lota_ac_list_runtime_objects(print_runtime_object_cb, NULL);
+	if (rc < 0) {
+		fprintf(
+		    stderr,
+		    "demo_anticheat: cannot enumerate runtime objects: %s\n",
+		    strerror(-rc));
+		return DEMO_EXIT_TRANSPORT;
+	}
+	return 0;
 }
 
 static int parse_provider(const char *s, enum lota_ac_provider *out)
@@ -110,6 +143,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->provider = LOTA_AC_PROVIDER_EAC;
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
+	opt->print_runtime_objects = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
 	if (env_interval && *env_interval) {
@@ -130,12 +164,13 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	    {"interval", required_argument, NULL, 'i'},
 	    {"once", no_argument, NULL, '1'},
 	    {"tamper-marker", required_argument, NULL, 'T'},
+	    {"print-runtime-objects", no_argument, NULL, 'O'},
 	    {"help", no_argument, NULL, 'h'},
 	    {0, 0, 0, 0},
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:h", long_opts,
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:Oh", long_opts,
 				NULL)) != -1) {
 		switch (c) {
 		case 's':
@@ -164,6 +199,9 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		}
 		case '1':
 			opt->once = true;
+			break;
+		case 'O':
+			opt->print_runtime_objects = true;
 			break;
 		case 'T':
 			if (!optarg || !*optarg) {
@@ -373,6 +411,9 @@ int main(int argc, char **argv)
 		print_usage(argv[0]);
 		return DEMO_EXIT_USAGE;
 	}
+
+	if (opt.print_runtime_objects)
+		return print_runtime_objects();
 
 	struct sigaction sa = {.sa_handler = on_signal};
 	sigemptyset(&sa.sa_mask);

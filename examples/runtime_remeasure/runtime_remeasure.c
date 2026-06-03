@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA EXT-2 runtime re-measurement demonstrator.
+ * LOTA runtime re-measurement demonstrator.
  *
  * A standalone, TPM-free reference for the runtime measurement that the
  * anti-cheat heartbeat binds into every beat. It needs no agent, no
@@ -15,8 +15,9 @@
  *      producer's live measurement.
  *
  *   2. A one-byte change inside an executable segment flips the digest
- *      (--patch-demo). That is exactly the on-disk-vs-live drift EXT-2
- *      closes: a runtime patch the session-start file hash never saw.
+ *      (--patch-demo). That is exactly the on-disk-vs-live drift runtime
+ *      re-measurements closes: a runtime patch the session-start file
+ *      hash never saw.
  *
  *   3. Re-measuring a steady process repeatedly yields a stable digest
  *      (--watch), which is what the heartbeat does on every interval.
@@ -124,65 +125,196 @@ done:
 	return ret;
 }
 
-/* Default mode: prove live measurement == on-disk measurement. */
-static int run_default(const char *exe_path)
+/* Collect the enumerated runtime object paths into a fixed table. */
+#define RM_MAX_OBJS 512
+struct obj_table {
+	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX];
+	size_t count;
+	int overflow;
+};
+
+static int obj_collect_cb(const char *path, void *user)
+{
+	struct obj_table *t = user;
+	if (t->count >= RM_MAX_OBJS) {
+		t->overflow = 1;
+		return 1;
+	}
+	strncpy(t->paths[t->count], path, LOTA_AC_RUNTIME_PATH_MAX - 1);
+	t->paths[t->count][LOTA_AC_RUNTIME_PATH_MAX - 1] = '\0';
+	t->count++;
+	return 0;
+}
+
+/*
+ * Default mode: prove the live mapped image (all loaded objects) equals
+ * the set measure reproduced from the same objects' on-disk files.
+ * This is the producer/verifier invariant runtime re-measurements relies on.
+ */
+static int run_default(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	uint8_t file[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct obj_table t = {0};
+	const char **vec = NULL;
 	int rc;
+	int ret = 1;
+
+	t.paths = calloc(RM_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!t.paths) {
+		fprintf(stderr, "out of memory\n");
+		return 1;
+	}
+
+	rc = lota_ac_list_runtime_objects(obj_collect_cb, &t);
+	if (rc < 0 || t.overflow || t.count == 0) {
+		fprintf(stderr, "object enumeration failed (%s)\n",
+			t.overflow ? "too many objects"
+				   : strerror(rc ? -rc : 0));
+		goto out;
+	}
+
+	vec = calloc(t.count, sizeof(*vec));
+	if (!vec) {
+		fprintf(stderr, "out of memory\n");
+		goto out;
+	}
+	for (size_t i = 0; i < t.count; i++)
+		vec[i] = t.paths[i];
 
 	rc = lota_ac_compute_runtime_measure(live);
 	if (rc < 0) {
 		fprintf(stderr, "live measurement failed: %s\n", strerror(-rc));
-		return 1;
+		goto out;
 	}
-	rc = lota_ac_compute_expected_runtime_measure(exe_path, file);
+	rc = lota_ac_compute_expected_runtime_measure_set(vec, t.count, set);
 	if (rc < 0) {
-		fprintf(stderr, "file measurement of %s failed: %s\n", exe_path,
-			strerror(-rc));
-		return 1;
+		fprintf(stderr, "set measurement failed: %s\n", strerror(-rc));
+		goto out;
 	}
 
+	printf("measured objects:     %zu\n", t.count);
 	print_digest("live (mapped image):", live);
-	print_digest("file (on-disk ELF):", file);
+	print_digest("set (on-disk files):", set);
 
-	if (memcmp(live, file, sizeof(live)) != 0) {
-		printf("RESULT: MISMATCH - live image differs from %s\n",
-		       exe_path);
-		return 1;
+	if (memcmp(live, set, sizeof(live)) != 0) {
+		printf("RESULT: MISMATCH - live image differs from on-disk "
+		       "objects\n");
+		goto out;
 	}
-	printf("RESULT: MATCH - live image matches %s\n", exe_path);
+	printf("RESULT: MATCH - live image matches its on-disk objects\n");
+	ret = 0;
+out:
+	free(vec);
+	free(t.paths);
+	return ret;
+}
+
+static int print_path_cb(const char *path, void *user)
+{
+	(void)user;
+	printf("%s\n", path);
 	return 0;
 }
 
-/* --compare: report whether another binary measures the same as self. */
-static int run_compare(const char *other)
+/* --list-objects: print the trusted runtime manifest, one path per line. */
+static int run_list_objects(void)
 {
-	uint8_t self_live[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	uint8_t other_file[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	int rc;
-
-	rc = lota_ac_compute_runtime_measure(self_live);
+	int rc = lota_ac_list_runtime_objects(print_path_cb, NULL);
 	if (rc < 0) {
-		fprintf(stderr, "live measurement failed: %s\n", strerror(-rc));
-		return 1;
-	}
-	rc = lota_ac_compute_expected_runtime_measure(other, other_file);
-	if (rc < 0) {
-		fprintf(stderr, "file measurement of %s failed: %s\n", other,
+		fprintf(stderr, "object enumeration failed: %s\n",
 			strerror(-rc));
 		return 1;
 	}
-
-	print_digest("self (mapped image):", self_live);
-	print_digest("other (on-disk ELF):", other_file);
-
-	if (memcmp(self_live, other_file, sizeof(self_live)) != 0) {
-		printf("RESULT: DIFFERENT - %s is not this image\n", other);
-		return 0;
-	}
-	printf("RESULT: SAME - %s measures identically to this image\n", other);
 	return 0;
+}
+
+/*
+ * --manifest FILE: read a manifest (one ELF path per line, '#' comments
+ * and blank lines ignored), compute the set measure, and compare it to
+ * the live image. This is the verifier-side reproduction path.
+ */
+static int run_manifest(const char *manifest)
+{
+	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char line[LOTA_AC_RUNTIME_PATH_MAX];
+	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX] = NULL;
+	const char **vec = NULL;
+	size_t count = 0;
+	FILE *f;
+	int rc;
+	int ret = 1;
+
+	f = fopen(manifest, "re");
+	if (!f) {
+		fprintf(stderr, "cannot open manifest %s: %s\n", manifest,
+			strerror(errno));
+		return 1;
+	}
+	paths = calloc(RM_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!paths) {
+		fclose(f);
+		fprintf(stderr, "out of memory\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), f)) {
+		char *s = line;
+		size_t n;
+		while (*s == ' ' || *s == '\t')
+			s++;
+		n = strlen(s);
+		while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == ' ' ||
+				 s[n - 1] == '\t'))
+			s[--n] = '\0';
+		if (n == 0 || s[0] == '#')
+			continue;
+		if (count >= RM_MAX_OBJS) {
+			fprintf(stderr, "manifest has too many entries\n");
+			goto out;
+		}
+		snprintf(paths[count], LOTA_AC_RUNTIME_PATH_MAX, "%s", s);
+		count++;
+	}
+	if (count == 0) {
+		fprintf(stderr, "manifest %s has no paths\n", manifest);
+		goto out;
+	}
+
+	vec = calloc(count, sizeof(*vec));
+	if (!vec) {
+		fprintf(stderr, "out of memory\n");
+		goto out;
+	}
+	for (size_t i = 0; i < count; i++)
+		vec[i] = paths[i];
+
+	rc = lota_ac_compute_runtime_measure(live);
+	if (rc < 0) {
+		fprintf(stderr, "live measurement failed: %s\n", strerror(-rc));
+		goto out;
+	}
+	rc = lota_ac_compute_expected_runtime_measure_set(vec, count, set);
+	if (rc < 0) {
+		fprintf(stderr, "manifest measurement failed: %s\n",
+			strerror(-rc));
+		goto out;
+	}
+
+	print_digest("live (mapped image):", live);
+	print_digest("set (manifest files):", set);
+	if (memcmp(live, set, sizeof(live)) != 0) {
+		printf("RESULT: MISMATCH - live image differs from manifest\n");
+		goto out;
+	}
+	printf("RESULT: MATCH - live image matches the manifest\n");
+	ret = 0;
+out:
+	free(vec);
+	free(paths);
+	fclose(f);
+	return ret;
 }
 
 /* --patch-demo: a one-byte code patch must flip the digest. */
@@ -242,7 +374,8 @@ static int run_patch_demo(const char *exe_path)
 	print_digest("after 1-byte patch:", after);
 
 	if (memcmp(before, after, sizeof(before)) == 0) {
-		printf("RESULT: UNDETECTED - patch did not change the digest\n");
+		printf(
+		    "RESULT: UNDETECTED - patch did not change the digest\n");
 		goto done;
 	}
 	printf("RESULT: DETECTED - code patch flipped the runtime digest\n");
@@ -291,15 +424,23 @@ static int run_watch(unsigned interval, unsigned count)
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"usage: %s [--compare PATH | --patch-demo | --watch SEC]\n"
-		"           [--count N] [--exe PATH]\n"
+		"usage: %s [--list-objects | --manifest FILE | --patch-demo |\n"
+		"           --watch SEC] [--count N] [--exe PATH]\n"
 		"\n"
-		"  (no flags)       prove the live image matches its ELF file\n"
-		"  --compare PATH   compare this image to another ELF\n"
-		"  --patch-demo     show a 1-byte code patch flips the digest\n"
+		"  (no flags)       prove the live image (all loaded objects)\n"
+		"                   matches the set measure of its on-disk "
+		"files\n"
+		"  --list-objects   print the trusted runtime manifest, one "
+		"path\n"
+		"                   per line (main binary + shared libraries)\n"
+		"  --manifest FILE  reproduce the set measure from FILE and "
+		"compare\n"
+		"                   it to the live image (verifier side)\n"
+		"  --patch-demo     show a 1-byte code patch flips an object "
+		"digest\n"
 		"  --watch SEC      re-measure this image every SEC seconds\n"
 		"  --count N        number of --watch ticks (default 5)\n"
-		"  --exe PATH       ELF used for the file side (default "
+		"  --exe PATH       ELF copied for --patch-demo (default "
 		"/proc/self/exe)\n",
 		prog);
 }
@@ -307,14 +448,17 @@ static void usage(const char *prog)
 int main(int argc, char **argv)
 {
 	const char *exe_path = "/proc/self/exe";
-	const char *compare = NULL;
+	const char *manifest = NULL;
+	int list_objects = 0;
 	int patch_demo = 0;
 	long watch = -1;
 	unsigned count = 5;
 
 	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
-			compare = argv[++i];
+		if (strcmp(argv[i], "--list-objects") == 0) {
+			list_objects = 1;
+		} else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
+			manifest = argv[++i];
 		} else if (strcmp(argv[i], "--patch-demo") == 0) {
 			patch_demo = 1;
 		} else if (strcmp(argv[i], "--watch") == 0 && i + 1 < argc) {
@@ -342,11 +486,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (compare)
-		return run_compare(compare);
+	if (list_objects)
+		return run_list_objects();
+	if (manifest)
+		return run_manifest(manifest);
 	if (patch_demo)
 		return run_patch_demo(exe_path);
 	if (watch >= 0)
 		return run_watch((unsigned)watch, count);
-	return run_default(exe_path);
+	return run_default();
 }

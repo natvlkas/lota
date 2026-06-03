@@ -25,6 +25,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -39,6 +40,34 @@ import (
 	"syscall"
 	"time"
 )
+
+// readRuntimeManifest reads a trusted runtime manifest: one ELF path per
+// line, with '#' comments and blank lines ignored.
+// Returned paths are folded into the expected runtime measurement.
+func readRuntimeManifest(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var paths []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		paths = append(paths, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("manifest contains no paths")
+	}
+	return paths, nil
+}
 
 const (
 	defaultListen   = "127.0.0.1:7443"
@@ -59,13 +88,20 @@ func main() {
 	anticheatBin := flag.String("anticheat-binary", "",
 		"path to the demo_anticheat producer binary; its SHA-256 is "+
 			"mixed into the expected game-binding hash exactly like "+
-			"lota_ac_compute_game_binding_hash() does on the client, "+
-			"and its executable segments are measured into the "+
-			"expected runtime measurement. Required for any "+
-			"non-test invocation: leaving it empty keeps the server "+
-			"from being able to reproduce the hash and the runtime "+
-			"measurement the heartbeat producer stamps into the LACH "+
-			"header.")
+			"lota_ac_compute_game_binding_hash() does on the client. "+
+			"Required for any non-test invocation: leaving it empty "+
+			"keeps the server from being able to reproduce the hash "+
+			"the heartbeat producer stamps into the LACH header.")
+	runtimeManifest := flag.String("anticheat-runtime-manifest", "",
+		"path to the trusted runtime manifest: a text file with one "+
+			"ELF path per line (the producer binary plus the shared "+
+			"libraries it loads), '#' comments and blank lines "+
+			"ignored. Capture it with "+
+			"'demo_anticheat --print-runtime-objects'. The server "+
+			"folds these into the expected runtime measurement. "+
+			"When omitted, the runtime measurement falls back to "+
+			"--anticheat-binary alone, which only matches a "+
+			"statically linked producer.")
 	flag.Parse()
 
 	var anticheatDigest [32]byte
@@ -80,14 +116,25 @@ func main() {
 		}
 		anticheatDigest = sha256.Sum256(bin)
 
-		// precompute the runtime measurement of the producer's
-		// executable segments so the server can reject heartbeats whose
-		// live code pages diverge from this binary
-		runtimeMeasure, err = computeExpectedRuntimeMeasure(*anticheatBin)
+		// Precompute the runtime measurement the producer must report
+		// so the server can reject heartbeats whose live code pages
+		// diverge from the registered binaries. With a manifest this
+		// spans every loaded object; without one it covers just the
+		// producer binary (a statically linked image).
+		objs := []string{*anticheatBin}
+		if *runtimeManifest != "" {
+			objs, err = readRuntimeManifest(*runtimeManifest)
+			if err != nil {
+				fmt.Fprintf(os.Stderr,
+					"demo_server: read --anticheat-runtime-manifest %s: %v\n",
+					*runtimeManifest, err)
+				os.Exit(2)
+			}
+		}
+		runtimeMeasure, err = computeExpectedRuntimeMeasureSet(objs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"demo_server: measure --anticheat-binary %s: %v\n",
-				*anticheatBin, err)
+				"demo_server: measure runtime manifest: %v\n", err)
 			os.Exit(2)
 		}
 	}
