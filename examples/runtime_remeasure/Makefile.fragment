@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+#
+# Build rules for the runtime re-measurement demonstrator.
+# Invoked by the top-level Makefile under `make examples`.
+# TOP_DIR / BUILD_DIR / INC_DIR / SDK_BUILD_DIR are passed in from the
+# parent so this fragment never reaches back into the top Makefile's
+# private state.
+
+TARGET := $(BUILD_DIR)/runtime_remeasure
+SRCS := runtime_remeasure.c
+
+CC ?= gcc
+CFLAGS := -Wall -Wextra -Werror -O2 -g
+CFLAGS += -I$(INC_DIR)
+CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong -fstack-clash-protection
+CFLAGS += -fcf-protection=full
+CFLAGS += -D_FORTIFY_SOURCE=2 -fPIE
+CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
+ifdef SANITIZE
+CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+CFLAGS += -fno-sanitize-recover=all
+endif
+
+LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
+ifdef SANITIZE
+LDFLAGS += -fsanitize=$(SANITIZE)
+endif
+LDLIBS := -L$(SDK_BUILD_DIR) -llota_anticheat -llotagaming -llotaserver -lcrypto
+LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR)
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(SRCS) $(SDK_BUILD_DIR)/liblota_anticheat.so
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
+	@echo "Built: $@"
+
+clean:
+	rm -f $(TARGET)

@@ -14,12 +14,34 @@ at `build/examples/demo_server`.
 
 ## Flags
 
-| Flag                 | Default                                | Meaning                                                   |
-| -------------------- | -------------------------------------- | --------------------------------------------------------- |
-| `--listen`           | `127.0.0.1:7443`                       | host:port to listen on (loopback only by design)          |
-| `--aik-pub`          | (none)                                 | path to the AIK public key (DER or PEM); required outside tests |
-| `--expected-games`   | `trust-pong=lota-demo-CS2-clone`       | comma-separated `game_id=license` entries the server accepts |
-| `--max-age`          | `300`                                  | maximum heartbeat age in seconds before UNTRUSTED         |
+| Flag                          | Default                                | Meaning                                                   |
+| ----------------------------- | -------------------------------------- | --------------------------------------------------------- |
+| `--listen`                    | `127.0.0.1:7443`                       | host:port to listen on (loopback only by design)          |
+| `--aik-pub`                   | (none)                                 | path to the AIK public key (DER or PEM); required outside tests |
+| `--expected-games`            | `trust-pong=lota-demo-CS2-clone`       | comma-separated `game_id=license` entries the server accepts |
+| `--max-age`                   | `300`                                  | maximum heartbeat age in seconds before UNTRUSTED         |
+| `--anticheat-binary`          | (none)                                 | producer binary; its SHA-256 feeds the expected game-binding hash |
+| `--anticheat-runtime-manifest`| (none)                                 | trusted runtime manifest (one ELF path per line) for the runtime measurement |
+
+### Runtime measurement
+
+The heartbeat carries a runtime measurement of the producer's live image
+- the main binary plus every shared library it loads. The server
+reproduces the expected value from a **trusted runtime manifest**: the set
+of ELF files that make up the producer's runtime. Capture it from the
+producer once and pass it in:
+
+```sh
+demo_anticheat --print-runtime-objects > runtime-manifest.txt
+demo_server --aik-pub aik.der \
+            --anticheat-binary ./demo_anticheat \
+            --anticheat-runtime-manifest runtime-manifest.txt
+```
+
+A heartbeat whose live measurement does not match the manifest is answered
+`UNTRUSTED` with reason `runtime measurement mismatch`. When the manifest
+is omitted, the runtime measurement falls back to `--anticheat-binary`
+alone, which only matches a statically linked producer.
 
 TLS is intentionally out of scope. The demo runs on loopback so the operator can curl every endpoint without bringing in a CA. 
 The production guidance is "put the verifier behind your existing game auth gateway"; that gateway already owns TLS termination.
@@ -53,11 +75,12 @@ Response:
 Body: raw LACH bytes (binary, `Content-Type: application/octet-stream`).
 The handler:
 
-1. parses the 78-byte header documented in `include/lota_anticheat.h`,
+1. parses the 110-byte header documented in `include/lota_anticheat.h`,
 2. rejects on bad magic / version / size / unsupported `domain_version`
    (verdict `REJECT`, HTTP 400),
-3. fails closed on an unknown `game_id_hash`, replayed / stale
-   sequence, future timestamp, or signature/nonce mismatch (verdict
+3. fails closed on an unknown `game_id_hash`, a runtime-measurement
+   mismatch against the registered binary, a replayed / stale sequence,
+   a future timestamp, or a signature/nonce mismatch (verdict
    `UNTRUSTED`, HTTP 200),
 4. returns `{"state":"TRUSTED","license":"lota-demo-CS2-clone"}` only
    when the embedded LOTA token verifies against the configured AIK

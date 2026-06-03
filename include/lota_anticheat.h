@@ -28,27 +28,30 @@ extern "C" {
 #endif
 
 #define LOTA_AC_MAGIC 0x4C414348 /* "LACH" little-endian */
-#define LOTA_AC_VERSION 2
-#define LOTA_AC_HEADER_SIZE 78
+#define LOTA_AC_VERSION 3
+#define LOTA_AC_HEADER_SIZE 110
 #define LOTA_AC_MAX_TOKEN 1608
 #define LOTA_AC_MAX_HEARTBEAT (LOTA_AC_HEADER_SIZE + LOTA_AC_MAX_TOKEN)
 #define LOTA_AC_MAX_GAME_ID 64
 #define LOTA_AC_SESSION_ID_SIZE 16
 #define LOTA_AC_GAME_HASH_SIZE 32
+#define LOTA_AC_RUNTIME_MEASURE_SIZE 32
 
 /*
  * Domain-version negotiation.
  *
- * Each value names a frozen pair of hash domain strings used to derive
- * the game-binding hash and the heartbeat nonce. Producer stamps the
- * value into the wire; verifier rejects anything outside its accepted
- * set. New string variants must allocate the next integer rather than
- * silently replacing an existing one.
+ * Each value names a frozen pair of hash domain strings used to derive the
+ * game-binding hash and the heartbeat nonce. Producer stamps the value into the
+ * wire; verifier rejects anything outside its accepted set. New string variants
+ * must allocate the next integer instead of silently replacing an existing one.
  *
  * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v1\\0"
+ * V2: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v2\\0"
+ *
  */
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
-#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
+#define LOTA_AC_DOMAIN_VERSION_V2 2u
+#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V2
 
 /* default heartbeat interval in seconds */
 #define LOTA_AC_DEFAULT_HEARTBEAT_SEC 30
@@ -119,7 +122,7 @@ struct lota_ac_config {
  *
  *   offset  size   field
  *   0       4      magic           0x4C414348
- *   4       1      version         0x02
+ *   4       1      version         0x03
  *   5       1      provider        EAC=1, BE=2
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
@@ -133,7 +136,10 @@ struct lota_ac_config {
  *   74      4      domain_version  LOTA_AC_DOMAIN_VERSION_*; selects the
  *                                  game-binding/heartbeat domain pair and
  *                                  is itself bound into the heartbeat nonce
- *   78      var    lota_token[]    full LOTA token (wire format)
+ *   78      32     runtime_measure live re-measurement of the executable
+ *                                  image; nonce-bound and checked against
+ *                                  the verifier's expected value
+ *   110     var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {
 	uint32_t magic;
@@ -147,6 +153,7 @@ struct lota_ac_heartbeat_wire {
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint16_t token_size;
 	uint32_t domain_version;
+	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
 } __attribute__((packed));
 
 struct lota_ac_info {
@@ -243,6 +250,108 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 				      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
 
 /*
+ * Runtime re-measurement of the live loaded image.
+ *
+ * Game-binding hash above pins SHA-256 of the on-disk main executable
+ * at session start. It cannot detect an attacker who patches code pages
+ * in memory without touching the file, and it says nothing about the
+ * shared libraries the process maps. Game logic frequently lives in a
+ * shared object, so a complete runtime measurement must cover every
+ * loaded module, not just the main program.
+ *
+ * Runtime measurement closes that TOCTOU window by hashing the
+ * executable PT_LOAD segments of every file-backed loaded object (the
+ * main executable + each shared library) as they are mapped in the
+ * live address space.
+ *
+ * Kernel-provided vDSO (linux-vdso / linux-gate) is excluded:
+ * it has no backing file, so a verifier cannot reproduce it.
+ *
+ * Per-object digest (content only, position-independent):
+ *   SHA-256("lota-ac-runtime-object:v1\\0" || seg_count_LE32 ||
+ *           for each executable (PF_X) PT_LOAD segment, ascending
+ *           p_vaddr:
+ *               p_vaddr_LE64 || p_offset_LE64 || p_filesz_LE64 ||
+ *               segment_bytes[p_filesz])
+ *
+ * Combined image digest, over all objects sorted ascending by soname
+ * (the object's file basename), so neither load order nor library search
+ * path affects the result:
+ *   SHA-256("lota-ac-runtime-measure:v2\\0" || object_count_LE32 ||
+ *           for each object:
+ *               soname_len_LE32 || soname_bytes || object_digest[32])
+ *
+ * For position-independent x86-64 code the executable segments carry no
+ * load-time relocations (and full RELRO keeps the GOT/PLT data, not code,
+ * mutable), so each live object mapping is byte-identical to its on-disk
+ * segment content.
+ *
+ * Producer measures its own running image.
+ * Verifier reproduces the expected digest from the same set of ELF files
+ * (the trusted runtime manifest).
+ * Divergence means the live code pages of some module no longer match the
+ * registered binaries.
+ */
+
+/* Upper bound on the path length reported by the object enumerator. */
+#define LOTA_AC_RUNTIME_PATH_MAX 4096
+
+/*
+ * Measure the live, mapped image of the calling process: the main
+ * executable plus every file-backed shared object, excluding the vDSO.
+ *
+ * Returns 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
+ * failure, -E2BIG if a single object has more executable segments than
+ * the implementation supports or the process maps more objects than the
+ * implementation supports, -EIO on a digest failure, -ENOENT if no
+ * file-backed executable object is found.
+ */
+int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+
+/*
+ * Callback invoked once per file-backed loaded object. path is the
+ * object's on-disk path (the resolved main-executable path, or a shared
+ * library path). Return 0 to continue enumeration, non-zero to stop.
+ */
+typedef int (*lota_ac_runtime_object_fn)(const char *path, void *user);
+
+/*
+ * Enumerate the on-disk paths of the file-backed objects that
+ * lota_ac_compute_runtime_measure() measures, applying the identical
+ * filtering (vDSO excluded). Use this to capture the trusted runtime
+ * manifest a verifier needs to reproduce the expected measurement.
+ *
+ * Returns 0 on success (including when the callback stops early),
+ * -EINVAL on a NULL callback, negative errno if the main executable
+ * path cannot be resolved.
+ */
+int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
+
+/*
+ * Precompute the expected runtime measurement from a set of ELF files
+ * (the trusted runtime manifest): the producer's main executable and the
+ * shared libraries it loads. Objects are keyed by file basename and
+ * combined in canonical sorted order, so the order of `paths` does not
+ * matter. Files with no executable PT_LOAD segment contribute nothing.
+ *
+ * Returns 0 on success, -EINVAL on a NULL argument, -ENOENT if the set
+ * yields no executable object, -E2BIG if too many objects/segments,
+ * negative errno on an I/O or parse failure of any file.
+ */
+int lota_ac_compute_expected_runtime_measure_set(
+    const char *const *paths, size_t count,
+    uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+
+/*
+ * Convenience wrapper: the expected runtime measurement for an image made
+ * of a single object (a statically linked executable, or when verifying
+ * the main executable alone). Equivalent to
+ * lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
+ */
+int lota_ac_compute_expected_runtime_measure(
+    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+
+/*
  * Verify a heartbeat packet.
  *
  * Parses the heartbeat header, extracts the embedded LOTA token,
@@ -250,6 +359,14 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
  * Also requires expected_game_id_hash and rejects heartbeats that do not match
  * the expected game identity binding.
  * Fills info with session/attestation details.
+ *
+ * expected_runtime_measure is the runtime measurement a trustworthy
+ * producer must report for this image.
+ * See lota_ac_compute_expected_runtime_measure()
+ *
+ * It is mandatory: the heartbeat is rejected unless its runtime_measure
+ * field matches, and the value is also bound into the nonce so a fully
+ * signed token cannot carry a stale or substituted measurement.
  *
  * SECURITY: aik_pub_der is mandatory. Parse-only operation is rejected
  * because unverified claims are attacker-controlled and must not drive
@@ -263,6 +380,7 @@ int lota_ac_verify_heartbeat(
     const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
     size_t aik_pub_len,
     const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
     struct lota_ac_info *info);
 
 const char *lota_ac_state_str(enum lota_ac_state state);

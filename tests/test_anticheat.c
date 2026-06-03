@@ -162,9 +162,10 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 				 uint8_t provider, uint32_t sequence,
 				 uint32_t flags, uint64_t timestamp,
 				 const uint8_t game_hash[32],
+				 const uint8_t runtime_measure[32],
 				 uint32_t domain_version)
 {
-	static const char domain[] = "lota-ac-heartbeat:v1";
+	static const char domain[] = "lota-ac-heartbeat:v2";
 	uint8_t seq_le[4], flags_le[4], ts_le[8], ver_le[4];
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
 	unsigned int out_len = 32;
@@ -188,10 +189,69 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 	     EVP_DigestUpdate(ctx, ts_le, sizeof(ts_le)) &&
 	     EVP_DigestUpdate(ctx, game_hash, 32) &&
 	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
+	     EVP_DigestUpdate(ctx, runtime_measure, 32) &&
 	     EVP_DigestFinal_ex(ctx, out, &out_len);
 
 	EVP_MD_CTX_free(ctx);
 	return ok ? 0 : -EIO;
+}
+
+/*
+ * Runtime measurement the test producer image must report.
+ * Producer measures every loaded object, so the expected value is the set
+ * measure over the objects the runtime enumerator reports, exactly as a
+ * verifier reproduces it from the trusted runtime manifest.
+ */
+#define EXPECTED_RT_MAX_OBJS 128
+struct rt_path_collect {
+	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX];
+	size_t max;
+	size_t count;
+	int overflow;
+};
+
+static int rt_path_collect_cb(const char *path, void *user)
+{
+	struct rt_path_collect *c = user;
+	if (c->count >= c->max) {
+		c->overflow = 1;
+		return 1;
+	}
+	strncpy(c->paths[c->count], path, LOTA_AC_RUNTIME_PATH_MAX - 1);
+	c->paths[c->count][LOTA_AC_RUNTIME_PATH_MAX - 1] = '\0';
+	c->count++;
+	return 0;
+}
+
+static int expected_runtime_measure_test(uint8_t out[32])
+{
+	struct rt_path_collect c = {0};
+	const char **vec;
+	int ret;
+
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths)
+		return -ENOMEM;
+	c.max = EXPECTED_RT_MAX_OBJS;
+
+	if (lota_ac_list_runtime_objects(rt_path_collect_cb, &c) != 0 ||
+	    c.overflow || c.count == 0) {
+		free(c.paths);
+		return -EIO;
+	}
+
+	vec = calloc(c.count, sizeof(*vec));
+	if (!vec) {
+		free(c.paths);
+		return -ENOMEM;
+	}
+	for (size_t i = 0; i < c.count; i++)
+		vec[i] = c.paths[i];
+
+	ret = lota_ac_compute_expected_runtime_measure_set(vec, c.count, out);
+	free(vec);
+	free(c.paths);
+	return ret;
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
@@ -201,6 +261,7 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 {
 	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
 	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t nonce[32];
 	uint8_t token[2048];
 	uint64_t timestamp = (uint64_t)time(NULL);
@@ -212,8 +273,15 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 
 	if (compute_game_id_hash_test(game_id, game_hash) != 0)
 		return -EIO;
+	/*
+	 * Measure the live image, exactly as the SDK producer does.
+	 *
+	 * It must equal the file-derived value the verifier precomputes.
+	 */
+	if (lota_ac_compute_runtime_measure(runtime_measure) != 0)
+		return -EIO;
 	if (compute_hb_nonce_test(nonce, session_id, provider, sequence, flags,
-				  timestamp, game_hash,
+				  timestamp, game_hash, runtime_measure,
 				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
 		return -EIO;
 
@@ -237,6 +305,7 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 	memcpy(out + 40, game_hash, sizeof(game_hash));
 	write_le16(out + 72, (uint16_t)token_len);
 	write_le32(out + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
+	memcpy(out + 78, runtime_measure, sizeof(runtime_measure));
 	memcpy(out + LOTA_AC_HEADER_SIZE, token, token_len);
 
 	*out_len = total;
@@ -610,8 +679,8 @@ static void test_state_no_files(void)
 
 static void test_wire_header_size(void)
 {
-	TEST("wire: header struct == 78 bytes");
-	if (sizeof(struct lota_ac_heartbeat_wire) != 78) {
+	TEST("wire: header struct == 110 bytes");
+	if (sizeof(struct lota_ac_heartbeat_wire) != 110) {
 		FAIL("size mismatch");
 		return;
 	}
@@ -880,11 +949,16 @@ static void test_verify_roundtrip(void)
 		FAIL("expected game hash compute failed");
 		return;
 	}
+	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	if (expected_runtime_measure_test(expected_rm) != 0) {
+		FAIL("expected runtime measure compute failed");
+		return;
+	}
 
 	/* fail closed: cryptographic verification key is mandatory */
 	struct lota_ac_info verified;
-	ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
-				       expected_game_hash, &verified);
+	ret = lota_ac_verify_heartbeat(
+	    buf, written, NULL, 0, expected_game_hash, expected_rm, &verified);
 	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
 		return;
@@ -910,10 +984,15 @@ static void test_verify_battleye_roundtrip(void)
 		FAIL("expected game hash compute failed");
 		return;
 	}
+	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	if (expected_runtime_measure_test(expected_rm) != 0) {
+		FAIL("expected runtime measure compute failed");
+		return;
+	}
 
 	struct lota_ac_info info;
-	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
-					   expected_game_hash, &info);
+	int ret = lota_ac_verify_heartbeat(
+	    buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
 	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
 		return;
@@ -935,9 +1014,10 @@ static void test_verify_rejects_game_hash_mismatch(void)
 		return;
 	}
 
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
-	int ret =
-	    lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash, &info);
+	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash,
+					   any_rm, &info);
 	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
@@ -950,8 +1030,10 @@ static void test_verify_null_data(void)
 {
 	TEST("verify: NULL data -> INVALID_ARG");
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, expected_game_hash,
+				     any_rm,
 				     &info) != LOTA_AC_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
@@ -964,8 +1046,9 @@ static void test_verify_null_info(void)
 	TEST("verify: NULL info -> INVALID_ARG");
 	uint8_t data[128] = {0};
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     NULL) != LOTA_AC_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
@@ -978,9 +1061,10 @@ static void test_verify_truncated(void)
 	TEST("verify: truncated data -> BAD_TOKEN");
 	uint8_t data[32] = {0};
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
@@ -1003,9 +1087,10 @@ static void test_verify_bad_magic(void)
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
@@ -1028,9 +1113,10 @@ static void test_verify_bad_version(void)
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     &info) != LOTA_AC_ERR_VERSION) {
 		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
@@ -1053,9 +1139,10 @@ static void test_verify_bad_provider(void)
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
@@ -1078,9 +1165,10 @@ static void test_verify_size_mismatch(void)
 	hdr->token_size = 128;
 
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
-				     expected_game_hash,
+				     expected_game_hash, any_rm,
 				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
@@ -1109,9 +1197,15 @@ static void test_verify_header_flags_tamper_rejected(void)
 		FAIL("expected game hash compute failed");
 		return;
 	}
+	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	if (expected_runtime_measure_test(expected_rm) != 0) {
+		FAIL("expected runtime measure compute failed");
+		return;
+	}
 
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
+				     expected_rm,
 				     &info) != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
 		return;
@@ -1142,10 +1236,85 @@ static void test_verify_rejects_unknown_domain_version(void)
 	/* stamp a domain version that is not in the accepted table */
 	write_le32(buf + 74, 0xdeadbeefU);
 
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
+				     any_rm,
 				     &info) != LOTA_SERVER_ERR_BAD_VERSION) {
 		FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+		return;
+	}
+	PASS();
+}
+
+static void test_verify_rejects_runtime_measure_mismatch(void)
+{
+	TEST("verify: wrong expected runtime measure -> BAD_TOKEN");
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t wrong_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	size_t written = 0;
+
+	if (build_bound_heartbeat_packet(buf, sizeof(buf), &written,
+					 LOTA_AC_PROVIDER_EAC,
+					 "test-rm-mismatch", 0x07, 3) != 0) {
+		FAIL("packet build failed");
+		return;
+	}
+	if (compute_game_id_hash_test("test-rm-mismatch", expected_game_hash) !=
+	    0) {
+		FAIL("expected game hash compute failed");
+		return;
+	}
+	if (expected_runtime_measure_test(wrong_rm) != 0) {
+		FAIL("expected runtime measure compute failed");
+		return;
+	}
+	/* a verifier expecting a different image must reject this heartbeat */
+	wrong_rm[0] ^= 0xFF;
+
+	struct lota_ac_info info;
+	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
+				     wrong_rm,
+				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
+		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+		return;
+	}
+	PASS();
+}
+
+static void test_verify_rejects_runtime_field_tamper(void)
+{
+	TEST("verify: tampered runtime_measure field -> BAD_TOKEN");
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	size_t written = 0;
+
+	if (build_bound_heartbeat_packet(buf, sizeof(buf), &written,
+					 LOTA_AC_PROVIDER_EAC, "test-rm-tamper",
+					 0x07, 4) != 0) {
+		FAIL("packet build failed");
+		return;
+	}
+	if (compute_game_id_hash_test("test-rm-tamper", expected_game_hash) !=
+	    0) {
+		FAIL("expected game hash compute failed");
+		return;
+	}
+	if (expected_runtime_measure_test(expected_rm) != 0) {
+		FAIL("expected runtime measure compute failed");
+		return;
+	}
+
+	/* flip a byte of the wire runtime_measure field (offset 78) */
+	buf[78] ^= 0xFF;
+
+	struct lota_ac_info info;
+	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
+				     expected_rm,
+				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
+		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
 		return;
 	}
 	PASS();
@@ -1490,6 +1659,8 @@ int main(void)
 	test_verify_size_mismatch();
 	test_verify_header_flags_tamper_rejected();
 	test_verify_rejects_unknown_domain_version();
+	test_verify_rejects_runtime_measure_mismatch();
+	test_verify_rejects_runtime_field_tamper();
 
 	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();

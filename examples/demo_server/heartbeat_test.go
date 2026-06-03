@@ -35,10 +35,24 @@ var testAnticheatExeDigest = [32]byte{
 	0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
 }
 
+// testRuntimeMeasure stands in for the runtime measurement of the
+// producer image. The tests fabricate packets in memory rather than
+// running a binary, so a stable constant keeps the gameBinding and the
+// heartbeat header in agreement
+//
+// Production callers derive it from the real binary via
+// computeExpectedRuntimeMeasure()
+var testRuntimeMeasure = [32]byte{
+	0x52, 0x4D, 0x45, 0x41, 0x53, 0x55, 0x52, 0x45,
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
+	0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
+	0x0F, 0x1E, 0x2D, 0x3C, 0x4B, 0x5A, 0x69, 0x78,
+}
+
 func newTestServer(t *testing.T, key *rsa.PrivateKey) *demoServer {
 	t.Helper()
 	games, err := parseExpectedGames(testGameID+"="+testLicense,
-		testAnticheatExeDigest)
+		testAnticheatExeDigest, testRuntimeMeasure)
 	if err != nil {
 		t.Fatalf("parseExpectedGames: %v", err)
 	}
@@ -66,7 +80,8 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 		lotaFlags:     0x07,
 		timestamp:     uint64(time.Now().Unix()),
 		gameIDHash:    computeGameBindingHash(testGameID, testAnticheatExeDigest),
-		domainVersion: domainVersionV1,
+		domainVersion: domainVersionV2,
+		runtimeMeas:   testRuntimeMeasure,
 	}
 	if mutate != nil {
 		mutate(hdr)
@@ -112,6 +127,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	copy(pkt[40:72], hdr.gameIDHash[:])
 	binary.LittleEndian.PutUint16(pkt[72:74], uint16(len(token)))
 	binary.LittleEndian.PutUint32(pkt[74:78], hdr.domainVersion)
+	copy(pkt[78:110], hdr.runtimeMeas[:])
 	copy(pkt[lachHeaderSize:], token)
 	hdr.totalSize = uint16(len(pkt))
 	hdr.tokenSize = uint16(len(token))
@@ -219,12 +235,30 @@ func TestHeartbeat_UntrustedOnUnknownGameHash(t *testing.T) {
 	}
 }
 
+func TestHeartbeat_UntrustedOnRuntimeMeasureMismatch(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	s := newTestServer(t, key)
+
+	// heartbeat whose runtime measurement differs from the registered
+	// binary: the live code pages no longer match
+	pkt := newSignedHeartbeat(t, key, func(h *lachHeader) {
+		for i := range h.runtimeMeas {
+			h.runtimeMeas[i] ^= 0xFF
+		}
+	})
+	resp := decodeVerdict(t, postHeartbeat(s, pkt))
+	if resp.State != verdictUntrust ||
+		resp.Reason != "runtime measurement mismatch" {
+		t.Fatalf("state=%s reason=%q", resp.State, resp.Reason)
+	}
+}
+
 func TestHeartbeat_UntrustedOnTamperedHeader(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	s := newTestServer(t, key)
 
 	pkt := newSignedHeartbeat(t, key, nil)
-	// flip the sequence field after signing: the nonce binding falls apart.
+	// flip the sequence field after signing: the nonce binding falls apart
 	binary.LittleEndian.PutUint32(pkt[24:28], 999)
 
 	resp := decodeVerdict(t, postHeartbeat(s, pkt))

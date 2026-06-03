@@ -31,6 +31,7 @@ TPM_DIR=""
 RUNTIME_DIR=""
 AIK_DIR=""
 AIK_PEM=""
+RUNTIME_MANIFEST=""
 TAMPER_MARKER=""
 TCTI=""
 AGENT_STARTED=0
@@ -306,6 +307,7 @@ init_tmp() {
 	RUNTIME_DIR="$TMP_DIR/runtime"
 	AIK_DIR="$TMP_DIR/aik"
 	AIK_PEM="$AIK_DIR/aik.pem"
+	RUNTIME_MANIFEST="$TMP_DIR/runtime-manifest.txt"
 	TAMPER_MARKER="$TMP_DIR/tamper.marker"
 	TCTI="swtpm:host=127.0.0.1,port=$TPM_PORT"
 
@@ -384,15 +386,37 @@ start_agent() {
 	note "exported AIK public key: $AIK_PEM"
 }
 
+generate_runtime_manifest() {
+	# Runtime measures every loaded object (main binary + shared
+	# libraries), so the server reproduces the expected measurement from
+	# the producer's runtime manifest, not the binary alone.
+	# The producer emits its own loaded-object set.
+	# For a localhost/http run the set is identical to the one it maps
+	# while sending heartbeats.
+	if [ "$DRY_RUN" -eq 1 ]; then
+		run_or_print "$EXAMPLES_BIN/demo_anticheat" \
+			--print-runtime-objects
+		return
+	fi
+	if ! "$EXAMPLES_BIN/demo_anticheat" --print-runtime-objects \
+		>"$RUNTIME_MANIFEST" 2>"$LOG_DIR/runtime_manifest.log"; then
+		tail -n 40 "$LOG_DIR/runtime_manifest.log" >&2 || true
+		die "could not capture the producer runtime manifest"
+	fi
+	note "runtime manifest: $RUNTIME_MANIFEST"
+}
+
 start_demo_server() {
 	local pid
 	local log_file
 
 	log "Step 5/7: start demo verifier/server"
+	generate_runtime_manifest
 	start_bg demo_server "$EXAMPLES_BIN/demo_server" \
 		--listen "$LISTEN_ADDR" \
 		--aik-pub "$AIK_PEM" \
 		--anticheat-binary "$EXAMPLES_BIN/demo_anticheat" \
+		--anticheat-runtime-manifest "$RUNTIME_MANIFEST" \
 		--expected-games "$GAME_ID=lota-demo-CS2-clone"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
@@ -493,6 +517,7 @@ main() {
 		RUNTIME_DIR="$TMP_DIR/runtime"
 		AIK_DIR="$TMP_DIR/aik"
 		AIK_PEM="$AIK_DIR/aik.pem"
+		RUNTIME_MANIFEST="$TMP_DIR/runtime-manifest.txt"
 		TAMPER_MARKER="$TMP_DIR/tamper.marker"
 		TCTI="swtpm:host=127.0.0.1,port=$TPM_PORT"
 	fi

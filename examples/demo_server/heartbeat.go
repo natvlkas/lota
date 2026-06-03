@@ -3,12 +3,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"time"
 
 	verifysdk "github.com/szymonwilczek/lota/sdk/server"
@@ -18,16 +22,24 @@ import (
 // caught by the test suite which fabricates packets with these exact
 // offsets.
 const (
-	lachMagic         uint32 = 0x4C414348 // 'LACH'
-	lachVersion       uint8  = 2
-	lachHeaderSize           = 78
-	lachSessionIDSize        = 16
-	lachGameHashSize         = 32
-	lachMaxToken             = 1608
-	lachMaxPacket            = lachHeaderSize + lachMaxToken
+	lachMagic           uint32 = 0x4C414348 // 'LACH'
+	lachVersion         uint8  = 3
+	lachHeaderSize             = 110
+	lachSessionIDSize          = 16
+	lachGameHashSize           = 32
+	lachRuntimeMeasSize        = 32
+	lachMaxToken               = 1608
+	lachMaxPacket              = lachHeaderSize + lachMaxToken
 
-	heartbeatNonceDomainV1 = "lota-ac-heartbeat:v1\x00"
-	domainVersionV1        = 1
+	// V2 binds the runtime measurement into the heartbeat nonce
+	heartbeatNonceDomainV2 = "lota-ac-heartbeat:v2\x00"
+	domainVersionV2        = 2
+
+	// Runtime measures every file-backed loaded object.
+	// Each object yields a content digest under runtimeObjectDomain.
+	// Combined image digest folds them, keyed by soname, under runtimeMeasureDomain.
+	runtimeObjectDomain  = "lota-ac-runtime-object:v1\x00"
+	runtimeMeasureDomain = "lota-ac-runtime-measure:v2\x00"
 )
 
 // rejectErr signals that a packet failed at the wire-format layer and
@@ -50,6 +62,7 @@ type lachHeader struct {
 	gameIDHash    [lachGameHashSize]byte
 	tokenSize     uint16
 	domainVersion uint32
+	runtimeMeas   [lachRuntimeMeasSize]byte
 }
 
 func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +98,20 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			sessionHex, hdr.sequence, "unknown game_id_hash")
 		writeJSON(w, http.StatusOK, heartbeatResponse{
 			State: verdictUntrust, Reason: "unknown game_id_hash",
+		})
+		return
+	}
+
+	// Live image measurement must match the registered binary.
+	// Mismatch means the running code pages diverged from the on-disk
+	// executable the server expects.
+	if hdr.runtimeMeas != game.runtimeMeasure {
+		s.recordVerdictWithLicense(sessionHex, gameHashHex,
+			verdictUntrust, game.licenseID)
+		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
+			sessionHex, hdr.sequence, "runtime measurement mismatch")
+		writeJSON(w, http.StatusOK, heartbeatResponse{
+			State: verdictUntrust, Reason: "runtime measurement mismatch",
 		})
 		return
 	}
@@ -172,8 +199,9 @@ func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 	copy(hdr.gameIDHash[:], buf[40:72])
 	hdr.tokenSize = binary.LittleEndian.Uint16(buf[72:74])
 	hdr.domainVersion = binary.LittleEndian.Uint32(buf[74:78])
+	copy(hdr.runtimeMeas[:], buf[78:110])
 
-	if hdr.domainVersion != domainVersionV1 {
+	if hdr.domainVersion != domainVersionV2 {
 		return nil, nil, &rejectErr{msg: fmt.Sprintf("unsupported domain_version %d",
 			hdr.domainVersion)}
 	}
@@ -194,7 +222,7 @@ func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 // would no longer match the nonce the server expects.
 func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte(heartbeatNonceDomainV1))
+	_, _ = h.Write([]byte(heartbeatNonceDomainV2))
 	_, _ = h.Write(hdr.sessionID[:])
 	_, _ = h.Write([]byte{hdr.provider})
 	var u32 [4]byte
@@ -208,9 +236,121 @@ func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	_, _ = h.Write(hdr.gameIDHash[:])
 	binary.LittleEndian.PutUint32(u32[:], hdr.domainVersion)
 	_, _ = h.Write(u32[:])
+	// V2 binds the runtime measurement
+	_, _ = h.Write(hdr.runtimeMeas[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+// runtimeObject is one measured object: its soname (file basename) and
+// the content digest over its executable segments.
+type runtimeObject struct {
+	soname string
+	digest [32]byte
+}
+
+// runtimeObjectDigest mirrors rt_file_object_digest() in
+// src/sdk/lota_anticheat.c. It hashes the file-backed bytes of the
+// executable (PF_X) PT_LOAD segments of an ELF object, in ascending
+// p_vaddr order, under runtimeObjectDomain. hasExec is false for an
+// object with no executable segment; such an object contributes nothing.
+func runtimeObjectDigest(path string) (digest [32]byte, hasExec bool, err error) {
+	f, err := elf.Open(path)
+	if err != nil {
+		return digest, false, err
+	}
+	defer f.Close()
+
+	var segs []*elf.Prog
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_LOAD && p.Flags&elf.PF_X != 0 &&
+			p.Filesz > 0 {
+			segs = append(segs, p)
+		}
+	}
+	if len(segs) == 0 {
+		return digest, false, nil
+	}
+	sort.Slice(segs, func(i, j int) bool {
+		return segs[i].Vaddr < segs[j].Vaddr
+	})
+
+	h := sha256.New()
+	_, _ = h.Write([]byte(runtimeObjectDomain))
+	var le4 [4]byte
+	binary.LittleEndian.PutUint32(le4[:], uint32(len(segs)))
+	_, _ = h.Write(le4[:])
+	var le8 [8]byte
+	for _, p := range segs {
+		binary.LittleEndian.PutUint64(le8[:], p.Vaddr)
+		_, _ = h.Write(le8[:])
+		binary.LittleEndian.PutUint64(le8[:], p.Off)
+		_, _ = h.Write(le8[:])
+		binary.LittleEndian.PutUint64(le8[:], p.Filesz)
+		_, _ = h.Write(le8[:])
+		if _, err := io.CopyN(h, p.Open(), int64(p.Filesz)); err != nil {
+			return digest, false, fmt.Errorf("read segment of %s: %w",
+				path, err)
+		}
+	}
+	copy(digest[:], h.Sum(nil))
+	return digest, true, nil
+}
+
+// computeExpectedRuntimeMeasureSet mirrors
+// lota_ac_compute_expected_runtime_measure_set(). It folds the per-object
+// digests of the given ELF files (the trusted runtime manifest) into the
+// combined image digest, keyed by soname (file basename) and sorted, so
+// the order of paths does not matter. Files with no executable segment
+// are skipped. The server reproduces this to reject heartbeats whose live
+// code pages no longer match the registered binaries.
+func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
+	var out [32]byte
+	objs := make([]runtimeObject, 0, len(paths))
+	for _, p := range paths {
+		dg, hasExec, err := runtimeObjectDigest(p)
+		if err != nil {
+			return out, err
+		}
+		if !hasExec {
+			continue
+		}
+		objs = append(objs, runtimeObject{
+			soname: filepath.Base(p),
+			digest: dg,
+		})
+	}
+	if len(objs) == 0 {
+		return out, fmt.Errorf("no executable object in runtime manifest")
+	}
+	sort.Slice(objs, func(i, j int) bool {
+		if objs[i].soname != objs[j].soname {
+			return objs[i].soname < objs[j].soname
+		}
+		return bytes.Compare(objs[i].digest[:], objs[j].digest[:]) < 0
+	})
+
+	h := sha256.New()
+	_, _ = h.Write([]byte(runtimeMeasureDomain))
+	var le4 [4]byte
+	binary.LittleEndian.PutUint32(le4[:], uint32(len(objs)))
+	_, _ = h.Write(le4[:])
+	for _, o := range objs {
+		binary.LittleEndian.PutUint32(le4[:], uint32(len(o.soname)))
+		_, _ = h.Write(le4[:])
+		_, _ = h.Write([]byte(o.soname))
+		_, _ = h.Write(o.digest[:])
+	}
+	copy(out[:], h.Sum(nil))
+	return out, nil
+}
+
+// computeExpectedRuntimeMeasure is the single-object convenience: the
+// combined measurement for an image made of one object (a statically
+// linked producer, or when verifying the main executable alone).
+func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
+	return computeExpectedRuntimeMeasureSet([]string{path})
 }
 
 // checkFreshness enforces the demo's monotonic-sequence and bounded-
