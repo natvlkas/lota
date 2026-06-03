@@ -471,6 +471,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_seal_blob \
 	$(TEST_BIN_DIR)/test_seal_tpm \
+	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_SDK_BIN)
@@ -587,6 +588,10 @@ $(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c | $(BUIL
 	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
@@ -634,6 +639,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_seal_blob
 	@$(BUILD_DIR)/test_seal_tpm
+	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_symbols
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="

@@ -277,6 +277,15 @@ struct tpm_context {
 	 * single agent lifecycle.
 	 */
 	bool boot_commitment_locked;
+
+	/*
+	 * AIK userAuth at-rest hardening (default off). When seal_aik_auth is
+	 * set, the agent keeps a copy of the AIK userAuth sealed to the
+	 * boot/PCR state and prefers it on load. seal_aik_auth_strict drops
+	 * the plaintext sidecar entirely, so the auth exists only sealed.
+	 */
+	bool seal_aik_auth;
+	bool seal_aik_auth_strict;
 };
 
 /*
@@ -809,6 +818,14 @@ typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 /* Pure helper: expose the PCR-mask -> selection bitmap for unit tests. */
 int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
 				   uint32_t *out_count);
+
+/* AIK-auth at-rest hardening test hooks (dispatch + path derivation). */
+int tpm_test_aik_save_auth(struct tpm_context *ctx,
+			   const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+int tpm_test_aik_load_auth(struct tpm_context *ctx);
+int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf,
+				size_t len);
+int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);

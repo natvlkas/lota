@@ -147,6 +147,8 @@ static int load_config_into_options(struct cli_options *opts,
 
 	agent_globals_lock(&g_agent);
 	g_agent.tpm_ctx.aik_handle = cfg->aik_handle;
+	g_agent.tpm_ctx.seal_aik_auth = cfg->seal_aik_auth;
+	g_agent.tpm_ctx.seal_aik_auth_strict = cfg->seal_aik_auth_strict;
 	agent_globals_unlock(&g_agent);
 
 	int kret = tpm_set_kernel_path(

@@ -46,6 +46,12 @@ static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
 static int tpm_aik_load_auth(struct tpm_context *ctx);
 static int tpm_aik_save_auth(struct tpm_context *ctx,
 			     const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+static int tpm_aik_save_auth_plaintext(struct tpm_context *ctx,
+				       const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+static int tpm_aik_load_auth_plaintext(struct tpm_context *ctx);
+static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
+				    const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+static int tpm_aik_load_auth_sealed(struct tpm_context *ctx);
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					 int had_existing_aik);
@@ -3099,8 +3105,8 @@ static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE])
 	return -EIO;
 }
 
-static int tpm_aik_save_auth(struct tpm_context *ctx,
-			     const uint8_t auth[TPM_AIK_AUTH_SIZE])
+static int tpm_aik_save_auth_plaintext(struct tpm_context *ctx,
+				       const uint8_t auth[TPM_AIK_AUTH_SIZE])
 {
 	char path[PATH_MAX];
 	char tmp[PATH_MAX];
@@ -3174,7 +3180,7 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 	return 0;
 }
 
-static int tpm_aik_load_auth(struct tpm_context *ctx)
+static int tpm_aik_load_auth_plaintext(struct tpm_context *ctx)
 {
 	char path[PATH_MAX];
 	int fd;
@@ -3232,6 +3238,216 @@ static int tpm_aik_load_auth(struct tpm_context *ctx)
 	ctx->aik_auth_loaded = true;
 	secure_bzero(&rec, sizeof(rec));
 	return 0;
+}
+
+/* Path of the sealed AIK-auth copy: aik_auth.sealed next to the metadata. */
+static int tpm_aik_auth_sealed_path_for_ctx(struct tpm_context *ctx, char *buf,
+					    size_t buf_len)
+{
+	const char *meta_path;
+	const char *slash;
+	size_t dir_len;
+
+	if (!ctx || !buf || buf_len == 0)
+		return -EINVAL;
+
+	meta_path =
+	    ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+	slash = strrchr(meta_path, '/');
+	if (!slash)
+		return -EINVAL;
+
+	dir_len = (slash == meta_path) ? 1 : (size_t)(slash - meta_path);
+	if (dir_len + 1 + strlen("aik_auth.sealed") + 1 > buf_len)
+		return -ENAMETOOLONG;
+
+	memcpy(buf, meta_path, dir_len);
+	buf[dir_len] = '\0';
+	if (dir_len > 1)
+		snprintf(buf + dir_len, buf_len - dir_len, "/aik_auth.sealed");
+	else
+		snprintf(buf + dir_len, buf_len - dir_len, "aik_auth.sealed");
+	return 0;
+}
+
+/*
+ * Seal the AIK userAuth to the boot/PCR state and write it atomically with
+ * 0600 permissions. Mirrors the plaintext sidecar's durable-write dance.
+ */
+static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
+				    const uint8_t auth[TPM_AIK_AUTH_SIZE])
+{
+	char path[PATH_MAX];
+	char tmp[PATH_MAX];
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	size_t blob_len = 0;
+	int fd;
+	int ret;
+	ssize_t n;
+
+	if (!ctx || !auth)
+		return -EINVAL;
+
+	ret = tpm_aik_auth_sealed_path_for_ctx(ctx, path, sizeof(path));
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_seal_secret(ctx, auth, TPM_AIK_AUTH_SIZE,
+			      LOTA_SEAL_DEFAULT_PCR_MASK, blob, sizeof(blob),
+			      &blob_len);
+	if (ret < 0)
+		return ret;
+
+	ret = mkdirs(path, 0755);
+	if (ret < 0)
+		goto out;
+
+	ret = snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path);
+	if (ret < 0 || (size_t)ret >= sizeof(tmp)) {
+		ret = -ENAMETOOLONG;
+		goto out;
+	}
+
+	fd = mkstemp(tmp);
+	if (fd < 0) {
+		ret = -errno;
+		goto out;
+	}
+	if (fchmod(fd, 0600) != 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp);
+		goto out;
+	}
+
+	n = write(fd, blob, blob_len);
+	if (n != (ssize_t)blob_len) {
+		ret = -EIO;
+		close(fd);
+		unlink(tmp);
+		goto out;
+	}
+	if (fsync(fd) != 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp);
+		goto out;
+	}
+	close(fd);
+
+	if (rename(tmp, path) != 0) {
+		ret = -errno;
+		unlink(tmp);
+		goto out;
+	}
+	ret = fsync_parent_dir(path);
+out:
+	secure_bzero(blob, sizeof(blob));
+	return ret;
+}
+
+/*
+ * Load the AIK userAuth from the sealed copy.
+ *
+ * Returns -ENOENT when no sealed file exists (so callers can fall back),
+ * TPM policy error when the host is not in the sealed boot state,
+ * or -EPROTO if the unsealed length is not the expected auth size.
+ */
+static int tpm_aik_load_auth_sealed(struct tpm_context *ctx)
+{
+	char path[PATH_MAX];
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	uint8_t secret[LOTA_SEAL_MAX_SECRET];
+	size_t secret_len = 0;
+	ssize_t n;
+	int fd;
+	int ret;
+
+	if (!ctx)
+		return -EINVAL;
+
+	ret = tpm_aik_auth_sealed_path_for_ctx(ctx, path, sizeof(path));
+	if (ret < 0)
+		return ret;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	n = read(fd, blob, sizeof(blob));
+	close(fd);
+	if (n <= 0)
+		return -EIO;
+
+	ret = tpm_unseal_secret(ctx, blob, (size_t)n, secret, sizeof(secret),
+				&secret_len);
+	secure_bzero(blob, sizeof(blob));
+	if (ret < 0)
+		return ret;
+	if (secret_len != TPM_AIK_AUTH_SIZE) {
+		secure_bzero(secret, sizeof(secret));
+		return -EPROTO;
+	}
+
+	memcpy(ctx->aik_auth, secret, TPM_AIK_AUTH_SIZE);
+	ctx->aik_auth_loaded = true;
+	secure_bzero(secret, sizeof(secret));
+	return 0;
+}
+
+/*
+ * Save dispatcher. Default (both flags off) is byte-for-byte the previous
+ * plaintext behaviour. With sealing on, the sealed copy is written; strict
+ * additionally drops the plaintext sidecar so the auth exists only sealed.
+ */
+static int tpm_aik_save_auth(struct tpm_context *ctx,
+			     const uint8_t auth[TPM_AIK_AUTH_SIZE])
+{
+	bool seal = ctx && (ctx->seal_aik_auth || ctx->seal_aik_auth_strict);
+	int ret;
+
+	if (!ctx || !auth)
+		return -EINVAL;
+
+	if (seal) {
+		ret = tpm_aik_save_auth_sealed(ctx, auth);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (ctx->seal_aik_auth_strict) {
+		/* Hardened: no plaintext on disk. Remove any stale sidecar. */
+		char path[PATH_MAX];
+		if (tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path)) == 0)
+			unlink(path);
+		return 0;
+	}
+
+	return tpm_aik_save_auth_plaintext(ctx, auth);
+}
+
+/*
+ * Load dispatcher.
+ * With sealing on, the sealed copy is tried first.
+ * In non-strict mode a missing or unusable sealed copy falls back to the
+ * plaintext sidecar (supports migration and boot-state changes).
+ * Default (flags off) goes straight to the plaintext path, unchanged.
+ */
+static int tpm_aik_load_auth(struct tpm_context *ctx)
+{
+	if (!ctx)
+		return -EINVAL;
+
+	if (ctx->seal_aik_auth || ctx->seal_aik_auth_strict) {
+		int ret = tpm_aik_load_auth_sealed(ctx);
+		if (ret == 0)
+			return 0;
+		if (ctx->seal_aik_auth_strict)
+			return ret; /* no plaintext fallback when hardened */
+		/* non-strict: fall through to the plaintext sidecar */
+	}
+
+	return tpm_aik_load_auth_plaintext(ctx);
 }
 
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
@@ -3315,10 +3531,11 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 
 		{
 			/*
-			 * Unit tests intentionally exercise metadata
+			 * unit tests intentionally exercise metadata
 			 * persistence without a real TPM, so esys_ctx may be
-			 * NULL; in that case skip the TPM existence check and
-			 * initialize defaults.
+			 * NULL
+			 * in that case skip the TPM existence check and
+			 * initialize defaults
 			 */
 			if (ctx->esys_ctx) {
 				int exists = aik_exists(ctx, NULL);
@@ -4253,5 +4470,26 @@ int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
 	out_select[2] = sel.pcrSelections[0].pcrSelect[2];
 	*out_count = sel.count;
 	return 0;
+}
+
+int tpm_test_aik_save_auth(struct tpm_context *ctx,
+			   const uint8_t auth[TPM_AIK_AUTH_SIZE])
+{
+	return tpm_aik_save_auth(ctx, auth);
+}
+
+int tpm_test_aik_load_auth(struct tpm_context *ctx)
+{
+	return tpm_aik_load_auth(ctx);
+}
+
+int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len)
+{
+	return tpm_aik_auth_path_for_ctx(ctx, buf, len);
+}
+
+int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len)
+{
+	return tpm_aik_auth_sealed_path_for_ctx(ctx, buf, len);
 }
 #endif /* LOTA_TPM_TESTING */
