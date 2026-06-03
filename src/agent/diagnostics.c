@@ -111,6 +111,12 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_tpm_flag)
 		return diagnostic_exit_code(test_tpm());
 
+	if (opts->seal_flag)
+		return diagnostic_exit_code(do_seal(opts->seal_pcrs));
+
+	if (opts->unseal_flag)
+		return diagnostic_exit_code(do_unseal());
+
 	if (opts->test_iommu_flag)
 		return diagnostic_exit_code(test_iommu());
 

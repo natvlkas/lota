@@ -11,7 +11,10 @@
 #include <sys/random.h>
 #include <unistd.h>
 
+#include <stdlib.h>
+
 #include "../../include/lota.h"
+#include "../../include/lota_seal.h"
 #include "agent.h"
 #include "iommu.h"
 #include "quote.h"
@@ -258,4 +261,182 @@ int test_iommu(void)
 		}
 		return 1;
 	}
+}
+
+/*
+ * Read all of stdin into buf (capacity cap). Returns the byte count via
+ * *out_len, -E2BIG if the input exceeds cap, or a negative errno. Reading
+ * the secret / blob from stdin keeps it out of argv and the environment.
+ */
+static int read_all_stdin(uint8_t *buf, size_t cap, size_t *out_len)
+{
+	size_t total = 0;
+
+	for (;;) {
+		if (total == cap) {
+			/* probe for a trailing byte to detect overflow */
+			uint8_t extra;
+			ssize_t n = read(STDIN_FILENO, &extra, 1);
+			if (n > 0)
+				return -E2BIG;
+			if (n == 0)
+				break;
+			if (errno == EINTR)
+				continue;
+			return -errno;
+		}
+		ssize_t n = read(STDIN_FILENO, buf + total, cap - total);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -errno;
+		}
+		if (n == 0)
+			break;
+		total += (size_t)n;
+	}
+	*out_len = total;
+	return 0;
+}
+
+static int write_all_stdout(const uint8_t *buf, size_t len)
+{
+	size_t off = 0;
+
+	while (off < len) {
+		ssize_t n = write(STDOUT_FILENO, buf + off, len - off);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -errno;
+		}
+		off += (size_t)n;
+	}
+	return 0;
+}
+
+static int parse_seal_mask(const char *str, uint32_t *out_mask)
+{
+	char *end = NULL;
+	unsigned long v;
+
+	if (!str) {
+		*out_mask = 0; /* 0 -> tpm_seal_secret picks the default */
+		return 0;
+	}
+	errno = 0;
+	v = strtoul(str, &end, 0);
+	if (errno != 0 || end == str || *end != '\0' || v > 0xFFFFFFFFul)
+		return -EINVAL;
+	if (lota_seal_validate_pcr_mask((uint32_t)v) != 0)
+		return -EINVAL;
+	*out_mask = (uint32_t)v;
+	return 0;
+}
+
+/*
+ * do_seal - read a secret from stdin, seal it to the PCR state, write the
+ * sealed blob to stdout. Operator/root tool; never exposed over IPC.
+ */
+int do_seal(const char *pcr_str)
+{
+	uint8_t secret[LOTA_SEAL_MAX_SECRET];
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	size_t secret_len = 0, blob_len = 0;
+	uint32_t pcr_mask = 0;
+	int ret;
+
+	if (parse_seal_mask(pcr_str, &pcr_mask) < 0) {
+		fprintf(stderr, "Invalid --seal-pcrs value\n");
+		return 1;
+	}
+
+	ret = read_all_stdin(secret, sizeof(secret), &secret_len);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read secret from stdin: %s\n",
+			ret == -E2BIG ? "too large (max 128 bytes)"
+				      : strerror(-ret));
+		return 1;
+	}
+	if (secret_len == 0) {
+		fprintf(stderr, "Refusing to seal an empty secret\n");
+		return 1;
+	}
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		explicit_bzero(secret, sizeof(secret));
+		return 1;
+	}
+
+	ret = tpm_seal_secret(&g_agent.tpm_ctx, secret, secret_len, pcr_mask,
+			      blob, sizeof(blob), &blob_len);
+	explicit_bzero(secret, sizeof(secret));
+	if (ret < 0) {
+		fprintf(stderr, "Seal failed: %s\n", tpm_strerror(ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		return 1;
+	}
+	tpm_cleanup(&g_agent.tpm_ctx);
+
+	if (write_all_stdout(blob, blob_len) < 0) {
+		fprintf(stderr, "Failed to write sealed blob to stdout\n");
+		return 1;
+	}
+	fprintf(stderr, "Sealed %zu-byte secret to a %zu-byte blob.\n",
+		secret_len, blob_len);
+	return 0;
+}
+
+/*
+ * do_unseal - read a sealed blob from stdin, unseal it, write the secret
+ * to stdout. Fails closed when the host is not in the sealed PCR state.
+ */
+int do_unseal(void)
+{
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	uint8_t secret[LOTA_SEAL_MAX_SECRET];
+	size_t blob_len = 0, secret_len = 0;
+	int ret;
+
+	ret = read_all_stdin(blob, sizeof(blob), &blob_len);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read blob from stdin: %s\n",
+			ret == -E2BIG ? "too large" : strerror(-ret));
+		return 1;
+	}
+	if (blob_len == 0) {
+		fprintf(stderr, "No sealed blob on stdin\n");
+		return 1;
+	}
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	ret = tpm_unseal_secret(&g_agent.tpm_ctx, blob, blob_len, secret,
+				sizeof(secret), &secret_len);
+	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr,
+			"Unseal failed: %s\n"
+			"(the host may not be in the sealed boot state)\n",
+			tpm_strerror(ret));
+		explicit_bzero(secret, sizeof(secret));
+		return 1;
+	}
+
+	ret = write_all_stdout(secret, secret_len);
+	explicit_bzero(secret, sizeof(secret));
+	if (ret < 0) {
+		fprintf(stderr, "Failed to write secret to stdout\n");
+		return 1;
+	}
+	fprintf(stderr, "Unsealed %zu-byte secret.\n", secret_len);
+	return 0;
 }

@@ -63,6 +63,18 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --dump-config     Print loaded configuration and exit\n");
 	printf("  --test-tpm        Test TPM operations and exit\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
+	printf("  --seal            Seal a secret read from stdin to the PCR "
+	       "state;\n");
+	printf("                    write the sealed blob to stdout and "
+	       "exit\n");
+	printf("  --unseal          Unseal a blob read from stdin; write the "
+	       "secret\n");
+	printf("                    to stdout and exit (fails closed if the "
+	       "boot\n");
+	printf("                    state differs from seal time)\n");
+	printf("  --seal-pcrs MASK  PCR bitmask for --seal (e.g. 0x4001); "
+	       "default\n");
+	printf("                    is PCRs 0-7 plus PCR14\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (unsigned tokens, for protocol testing)\n");

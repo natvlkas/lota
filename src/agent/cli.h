@@ -37,6 +37,9 @@ struct cli_options {
 	int export_policy_flag;
 	int attest_flag;
 	int enroll_flag;
+	int seal_flag;
+	int unseal_flag;
+	const char *seal_pcrs; /* PCR mask string for --seal; NULL = default */
 	const char *gen_signing_key_prefix;
 	const char *sign_policy_file;
 	const char *verify_policy_file;

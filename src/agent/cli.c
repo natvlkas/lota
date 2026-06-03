@@ -217,6 +217,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"attest", no_argument, 0, 'a'},
 	    {"attest-interval", required_argument, 0, 'I'},
 	    {"enroll", no_argument, 0, 1004},
+	    {"seal", no_argument, 0, 1007},
+	    {"unseal", no_argument, 0, 1008},
+	    {"seal-pcrs", required_argument, 0, 1009},
 	    {"ca-server", required_argument, 0, 1005},
 	    {"ca-port", required_argument, 0, 1006},
 	    {"server", required_argument, 0, 's'},
@@ -337,6 +340,15 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1004:
 			opts->enroll_flag = 1;
+			break;
+		case 1007:
+			opts->seal_flag = 1;
+			break;
+		case 1008:
+			opts->unseal_flag = 1;
+			break;
+		case 1009:
+			opts->seal_pcrs = optarg;
 			break;
 		case 1005:
 			opts->ca_server = optarg;
