@@ -619,8 +619,10 @@ static int rt_file_object_digest(const char *path, uint8_t out[32],
 	*has_exec = 0;
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
+	if (fd < 0) {
+		ret = -errno;
+		goto out;
+	}
 
 	ret = pread_full(fd, &ehdr, sizeof(ehdr), 0);
 	if (ret < 0)

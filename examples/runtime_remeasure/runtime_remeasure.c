@@ -98,7 +98,7 @@ static int copy_file(const char *src, const char *dst)
 	int ret = -1;
 
 	if (in < 0)
-		return -1;
+		goto done;
 	out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0700);
 	if (out < 0)
 		goto done;
@@ -454,30 +454,39 @@ int main(int argc, char **argv)
 	long watch = -1;
 	unsigned count = 5;
 
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "--list-objects") == 0) {
+	int i = 1;
+	while (i < argc) {
+		const char *arg = argv[i];
+
+		if (strcmp(arg, "--list-objects") == 0) {
 			list_objects = 1;
-		} else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
-			manifest = argv[++i];
-		} else if (strcmp(argv[i], "--patch-demo") == 0) {
+			i += 1;
+		} else if (strcmp(arg, "--manifest") == 0 && i + 1 < argc) {
+			manifest = argv[i + 1];
+			i += 2;
+		} else if (strcmp(arg, "--patch-demo") == 0) {
 			patch_demo = 1;
-		} else if (strcmp(argv[i], "--watch") == 0 && i + 1 < argc) {
-			watch = strtol(argv[++i], NULL, 10);
+			i += 1;
+		} else if (strcmp(arg, "--watch") == 0 && i + 1 < argc) {
+			watch = strtol(argv[i + 1], NULL, 10);
 			if (watch < 0) {
 				usage(argv[0]);
 				return 2;
 			}
-		} else if (strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
-			long c = strtol(argv[++i], NULL, 10);
+			i += 2;
+		} else if (strcmp(arg, "--count") == 0 && i + 1 < argc) {
+			long c = strtol(argv[i + 1], NULL, 10);
 			if (c <= 0) {
 				usage(argv[0]);
 				return 2;
 			}
 			count = (unsigned)c;
-		} else if (strcmp(argv[i], "--exe") == 0 && i + 1 < argc) {
-			exe_path = argv[++i];
-		} else if (strcmp(argv[i], "--help") == 0 ||
-			   strcmp(argv[i], "-h") == 0) {
+			i += 2;
+		} else if (strcmp(arg, "--exe") == 0 && i + 1 < argc) {
+			exe_path = argv[i + 1];
+			i += 2;
+		} else if (strcmp(arg, "--help") == 0 ||
+			   strcmp(arg, "-h") == 0) {
 			usage(argv[0]);
 			return 0;
 		} else {
