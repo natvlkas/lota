@@ -196,10 +196,62 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 	return ok ? 0 : -EIO;
 }
 
-/* runtime measurement the test producer image must report */
+/*
+ * Runtime measurement the test producer image must report.
+ * Producer measures every loaded object, so the expected value is the set
+ * measure over the objects the runtime enumerator reports, exactly as a
+ * verifier reproduces it from the trusted runtime manifest.
+ */
+#define EXPECTED_RT_MAX_OBJS 128
+struct rt_path_collect {
+	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX];
+	size_t max;
+	size_t count;
+	int overflow;
+};
+
+static int rt_path_collect_cb(const char *path, void *user)
+{
+	struct rt_path_collect *c = user;
+	if (c->count >= c->max) {
+		c->overflow = 1;
+		return 1;
+	}
+	strncpy(c->paths[c->count], path, LOTA_AC_RUNTIME_PATH_MAX - 1);
+	c->paths[c->count][LOTA_AC_RUNTIME_PATH_MAX - 1] = '\0';
+	c->count++;
+	return 0;
+}
+
 static int expected_runtime_measure_test(uint8_t out[32])
 {
-	return lota_ac_compute_expected_runtime_measure("/proc/self/exe", out);
+	struct rt_path_collect c = {0};
+	const char **vec;
+	int ret;
+
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths)
+		return -ENOMEM;
+	c.max = EXPECTED_RT_MAX_OBJS;
+
+	if (lota_ac_list_runtime_objects(rt_path_collect_cb, &c) != 0 ||
+	    c.overflow || c.count == 0) {
+		free(c.paths);
+		return -EIO;
+	}
+
+	vec = calloc(c.count, sizeof(*vec));
+	if (!vec) {
+		free(c.paths);
+		return -ENOMEM;
+	}
+	for (size_t i = 0; i < c.count; i++)
+		vec[i] = c.paths[i];
+
+	ret = lota_ac_compute_expected_runtime_measure_set(vec, c.count, out);
+	free(vec);
+	free(c.paths);
+	return ret;
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,

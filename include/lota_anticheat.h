@@ -250,54 +250,103 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 				      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
 
 /*
- * Runtime re-measurement of the live executable image.
+ * Runtime re-measurement of the live loaded image.
  *
- * Game-binding hash above pins SHA-256 of the on-disk executable at
- * session start. It cannot detect an attacker who patches code pages in
- * memory without touching the file.
+ * Game-binding hash above pins SHA-256 of the on-disk main executable
+ * at session start. It cannot detect an attacker who patches code pages
+ * in memory without touching the file, and it says nothing about the
+ * shared libraries the process maps. Game logic frequently lives in a
+ * shared object, so a complete runtime measurement must cover every
+ * loaded module, not just the main program.
  *
- * Runtime measurement closes that TOCTOU window by hashing the executable
- * PT_LOAD segments as they are mapped in the live address space.
+ * Runtime measurement closes that TOCTOU window by hashing the
+ * executable PT_LOAD segments of every file-backed loaded object (the
+ * main executable + each shared library) as they are mapped in the
+ * live address space.
  *
- * Canonical digest:
- *   SHA-256("lota-ac-runtime-measure:v1\\0" || seg_count_LE32 ||
- *           for each executable (PF_X) PT_LOAD segment, in ascending
- *           p_vaddr order:
+ * Kernel-provided vDSO (linux-vdso / linux-gate) is excluded:
+ * it has no backing file, so a verifier cannot reproduce it.
+ *
+ * Per-object digest (content only, position-independent):
+ *   SHA-256("lota-ac-runtime-object:v1\\0" || seg_count_LE32 ||
+ *           for each executable (PF_X) PT_LOAD segment, ascending
+ *           p_vaddr:
  *               p_vaddr_LE64 || p_offset_LE64 || p_filesz_LE64 ||
  *               segment_bytes[p_filesz])
  *
+ * Combined image digest, over all objects sorted ascending by soname
+ * (the object's file basename), so neither load order nor library search
+ * path affects the result:
+ *   SHA-256("lota-ac-runtime-measure:v2\\0" || object_count_LE32 ||
+ *           for each object:
+ *               soname_len_LE32 || soname_bytes || object_digest[32])
+ *
  * For position-independent x86-64 code the executable segments carry no
- * load-time relocations, so the live mapping is byte-identical to the
- * on-disk segment content.
+ * load-time relocations (and full RELRO keeps the GOT/PLT data, not code,
+ * mutable), so each live object mapping is byte-identical to its on-disk
+ * segment content.
  *
  * Producer measures its own running image.
- * Verifier precomputes the expected digest from the same ELF file.
- *
- * Divergence means the live code pages no longer match the registered
- * binary.
+ * Verifier reproduces the expected digest from the same set of ELF files
+ * (the trusted runtime manifest).
+ * Divergence means the live code pages of some module no longer match the
+ * registered binaries.
  */
 
+/* Upper bound on the path length reported by the object enumerator. */
+#define LOTA_AC_RUNTIME_PATH_MAX 4096
+
 /*
- * Measure the live, mapped executable image of the calling process.
+ * Measure the live, mapped image of the calling process: the main
+ * executable plus every file-backed shared object, excluding the vDSO.
  *
- * Hashes the in-memory PF_X PT_LOAD segments of the main program object
- * (as reported by dl_iterate_phdr). Returns 0 on success, -EINVAL on a
- * NULL argument, -ENOMEM on allocation failure, -E2BIG if the image has
- * more executable segments than the implementation supports, -EIO on a
- * digest failure, -ENOENT if no executable segment is found.
+ * Returns 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
+ * failure, -E2BIG if a single object has more executable segments than
+ * the implementation supports or the process maps more objects than the
+ * implementation supports, -EIO on a digest failure, -ENOENT if no
+ * file-backed executable object is found.
  */
 int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /*
- * Precompute the expected runtime measurement from an ELF file on disk.
+ * Callback invoked once per file-backed loaded object. path is the
+ * object's on-disk path (the resolved main-executable path, or a shared
+ * library path). Return 0 to continue enumeration, non-zero to stop.
+ */
+typedef int (*lota_ac_runtime_object_fn)(const char *path, void *user);
+
+/*
+ * Enumerate the on-disk paths of the file-backed objects that
+ * lota_ac_compute_runtime_measure() measures, applying the identical
+ * filtering (vDSO excluded). Use this to capture the trusted runtime
+ * manifest a verifier needs to reproduce the expected measurement.
  *
- * Parses the ELF program headers and hashes the file-backed bytes of the
- * PF_X PT_LOAD segments using the same canonical layout as
- * lota_ac_compute_runtime_measure(). Use this to derive the value a
- * trustworthy producer must report for exe_path.
+ * Returns 0 on success (including when the callback stops early),
+ * -EINVAL on a NULL callback, negative errno if the main executable
+ * path cannot be resolved.
+ */
+int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
+
+/*
+ * Precompute the expected runtime measurement from a set of ELF files
+ * (the trusted runtime manifest): the producer's main executable and the
+ * shared libraries it loads. Objects are keyed by file basename and
+ * combined in canonical sorted order, so the order of `paths` does not
+ * matter. Files with no executable PT_LOAD segment contribute nothing.
  *
- * Returns 0 on success, EINVAL on a NULL argument, negative errno
- * on an I/O or parse failure.
+ * Returns 0 on success, -EINVAL on a NULL argument, -ENOENT if the set
+ * yields no executable object, -E2BIG if too many objects/segments,
+ * negative errno on an I/O or parse failure of any file.
+ */
+int lota_ac_compute_expected_runtime_measure_set(
+    const char *const *paths, size_t count,
+    uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+
+/*
+ * Convenience wrapper: the expected runtime measurement for an image made
+ * of a single object (a statically linked executable, or when verifying
+ * the main executable alone). Equivalent to
+ * lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
  */
 int lota_ac_compute_expected_runtime_measure(
     const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);

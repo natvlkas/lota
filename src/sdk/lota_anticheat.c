@@ -200,13 +200,37 @@ static int compute_game_id_hash(const char *game_id,
 /*
  * Runtime re-measurement.
  *
- * Canonical digest over the executable PT_LOAD segments, computed either
- * from the live mapping (producer) or the ELF file (verifier).
+ * Measures every file-backed loaded object (main executable + shared
+ * libraries, excluding the vDSO). Each object yields a content-only
+ * digest over its executable PT_LOAD segments; the combined image digest
+ * folds those, keyed by soname (file basename) and sorted, so neither
+ * load order nor search path matters. Computed either from the live
+ * mapping (producer) or from a set of ELF files (verifier).
  *
- * See lota_anticheat.h for the wire-level documentation of the layout.
+ * See lota_anticheat.h for the canonical layout.
  */
-#define LOTA_AC_RUNTIME_MEASURE_DOMAIN "lota-ac-runtime-measure:v1"
+#define LOTA_AC_RUNTIME_MEASURE_DOMAIN "lota-ac-runtime-measure:v2"
+#define LOTA_AC_RUNTIME_OBJECT_DOMAIN "lota-ac-runtime-object:v1"
 #define LOTA_AC_RUNTIME_MAX_SEGS 16
+#define LOTA_AC_RUNTIME_MAX_OBJS 256
+#define LOTA_AC_SONAME_MAX 256
+
+/* One measured object: its soname (file basename) and content digest. */
+struct rt_object {
+	char soname[LOTA_AC_SONAME_MAX];
+	uint8_t digest[LOTA_AC_RUNTIME_MEASURE_SIZE];
+};
+
+static const char *rt_basename(const char *path)
+{
+	const char *slash = strrchr(path, '/');
+	return slash ? slash + 1 : path;
+}
+
+static int rt_starts_with(const char *s, const char *prefix)
+{
+	return strncmp(s, prefix, strlen(prefix)) == 0;
+}
 
 static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
 					  uint64_t offset, uint64_t filesz)
@@ -225,49 +249,49 @@ static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
 	return 0;
 }
 
-struct runtime_measure_self_ctx {
-	EVP_MD_CTX *md;
-	int done; /* main program object is reported first; stop after it */
-	int err;
-};
-
-static int runtime_measure_self_cb(struct dl_phdr_info *info, size_t size,
-				   void *data)
+/* Begin a per-object digest with its domain and executable segment count. */
+static int rt_object_digest_begin(EVP_MD_CTX *md, uint32_t seg_count)
 {
-	struct runtime_measure_self_ctx *st = data;
+	static const char domain[] = LOTA_AC_RUNTIME_OBJECT_DOMAIN;
+	uint8_t le[4];
+
+	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
+	    EVP_DigestUpdate(md, domain, sizeof(domain)) != 1)
+		return -EIO;
+	lota__write_le32(le, seg_count);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+		return -EIO;
+	return 0;
+}
+
+/*
+ * Per-object digest of the live mapping. Fills out on success and sets
+ * *has_exec. An object with no executable PT_LOAD segment is valid and
+ * simply contributes nothing (*has_exec = 0).
+ */
+static int rt_live_object_digest(struct dl_phdr_info *info, uint8_t out[32],
+				 int *has_exec)
+{
 	const ElfW(Phdr) * segs[LOTA_AC_RUNTIME_MAX_SEGS];
 	uint32_t n = 0;
-	uint8_t le[4];
-	size_t i;
+	EVP_MD_CTX *md;
+	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
+	int ret = -EIO;
 
-	(void)size;
+	*has_exec = 0;
 
-	if (st->done)
-		return 1;
-	st->done = 1;
-
-	for (i = 0; i < info->dlpi_phnum; i++) {
+	for (size_t i = 0; i < info->dlpi_phnum; i++) {
 		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
-		if (ph->p_type != PT_LOAD)
+		if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_X) ||
+		    ph->p_filesz == 0)
 			continue;
-		if (!(ph->p_flags & PF_X))
-			continue;
-		if (ph->p_filesz == 0)
-			continue;
-		if (n >= LOTA_AC_RUNTIME_MAX_SEGS) {
-			st->err = -E2BIG;
-			return 1;
-		}
+		if (n >= LOTA_AC_RUNTIME_MAX_SEGS)
+			return -E2BIG;
 		segs[n++] = ph;
 	}
+	if (n == 0)
+		return 0; /* no executable code: skip this object */
 
-	if (n == 0) {
-		st->err = -ENOENT;
-		return 1;
-	}
-
-	/* ascending p_vaddr
-	 * n is tiny so insertion sort is fine */
 	for (uint32_t k = 1; k < n; k++) {
 		const ElfW(Phdr) *key = segs[k];
 		uint32_t j = k;
@@ -278,11 +302,11 @@ static int runtime_measure_self_cb(struct dl_phdr_info *info, size_t size,
 		segs[j] = key;
 	}
 
-	lota__write_le32(le, n);
-	if (EVP_DigestUpdate(st->md, le, sizeof(le)) != 1) {
-		st->err = -EIO;
-		return 1;
-	}
+	md = EVP_MD_CTX_new();
+	if (!md)
+		return -ENOMEM;
+	if (rt_object_digest_begin(md, n) < 0)
+		goto out;
 
 	for (uint32_t k = 0; k < n; k++) {
 		const ElfW(Phdr) *ph = segs[k];
@@ -290,50 +314,245 @@ static int runtime_measure_self_cb(struct dl_phdr_info *info, size_t size,
 		    (const uint8_t *)(info->dlpi_addr + ph->p_vaddr);
 
 		if (runtime_measure_update_seg_hdr(
-			st->md, ph->p_vaddr, ph->p_offset, ph->p_filesz) < 0) {
-			st->err = -EIO;
-			return 1;
-		}
-		if (EVP_DigestUpdate(st->md, bytes, ph->p_filesz) != 1) {
-			st->err = -EIO;
-			return 1;
-		}
+			md, ph->p_vaddr, ph->p_offset, ph->p_filesz) < 0)
+			goto out;
+		if (EVP_DigestUpdate(md, bytes, ph->p_filesz) != 1)
+			goto out;
 	}
 
+	if (EVP_DigestFinal_ex(md, out, &out_len) != 1)
+		goto out;
+	*has_exec = 1;
+	ret = 0;
+out:
+	EVP_MD_CTX_free(md);
+	return ret;
+}
+
+/* qsort comparator: order objects by soname, then digest as a tiebreak. */
+static int rt_object_cmp(const void *a, const void *b)
+{
+	const struct rt_object *oa = a;
+	const struct rt_object *ob = b;
+	int c = strcmp(oa->soname, ob->soname);
+	if (c != 0)
+		return c;
+	return memcmp(oa->digest, ob->digest, LOTA_AC_RUNTIME_MEASURE_SIZE);
+}
+
+/* Fold the sorted object set into the combined image digest. */
+static int rt_finalize_combined(struct rt_object *objs, size_t count,
+				uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	static const char domain[] = LOTA_AC_RUNTIME_MEASURE_DOMAIN;
+	EVP_MD_CTX *md;
+	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
+	uint8_t le[4];
+	int ret = -EIO;
+
+	if (count == 0)
+		return -ENOENT;
+
+	qsort(objs, count, sizeof(*objs), rt_object_cmp);
+
+	md = EVP_MD_CTX_new();
+	if (!md)
+		return -ENOMEM;
+	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
+	    EVP_DigestUpdate(md, domain, sizeof(domain)) != 1)
+		goto out;
+	lota__write_le32(le, (uint32_t)count);
+	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+		goto out;
+
+	for (size_t i = 0; i < count; i++) {
+		uint32_t slen = (uint32_t)strlen(objs[i].soname);
+		lota__write_le32(le, slen);
+		if (EVP_DigestUpdate(md, le, sizeof(le)) != 1)
+			goto out;
+		if (EVP_DigestUpdate(md, objs[i].soname, slen) != 1)
+			goto out;
+		if (EVP_DigestUpdate(md, objs[i].digest,
+				     LOTA_AC_RUNTIME_MEASURE_SIZE) != 1)
+			goto out;
+	}
+
+	if (EVP_DigestFinal_ex(md, out, &out_len) != 1)
+		goto out;
+	ret = 0;
+out:
+	EVP_MD_CTX_free(md);
+	return ret;
+}
+
+static int rt_add_object(struct rt_object *objs, size_t *count,
+			 const char *soname, const uint8_t digest[32])
+{
+	if (*count >= LOTA_AC_RUNTIME_MAX_OBJS)
+		return -E2BIG;
+	if (strlen(soname) >= LOTA_AC_SONAME_MAX)
+		return -ENAMETOOLONG;
+	memset(&objs[*count], 0, sizeof(objs[*count]));
+	strncpy(objs[*count].soname, soname, LOTA_AC_SONAME_MAX - 1);
+	memcpy(objs[*count].digest, digest, LOTA_AC_RUNTIME_MEASURE_SIZE);
+	(*count)++;
+	return 0;
+}
+
+static int rt_resolve_self_exe(char *buf, size_t len)
+{
+	ssize_t n = readlink("/proc/self/exe", buf, len - 1);
+	if (n < 0)
+		return -errno;
+	buf[n] = '\0';
+	return 0;
+}
+
+/*
+ * Decide whether a dl_iterate_phdr object is measured, and resolve its
+ * on-disk path and soname. index 0 is always the main executable.
+ * Returns 1 to include, 0 to skip (vDSO / unnamed auxiliary objects).
+ */
+static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
+			      const char *self_exe, const char **path_out,
+			      const char **soname_out)
+{
+	if (index == 0) {
+		*path_out = self_exe;
+		*soname_out = rt_basename(self_exe);
+		return 1;
+	}
+	if (!info->dlpi_name || info->dlpi_name[0] == '\0')
+		return 0; /* anonymous auxiliary object (e.g. vDSO) */
+
+	const char *base = rt_basename(info->dlpi_name);
+	if (rt_starts_with(base, "linux-vdso") ||
+	    rt_starts_with(base, "linux-gate"))
+		return 0;
+
+	*path_out = info->dlpi_name;
+	*soname_out = base;
 	return 1;
+}
+
+struct rt_collect_ctx {
+	struct rt_object *objs;
+	size_t count;
+	unsigned index;
+	const char *self_exe;
+	int err;
+};
+
+static int rt_collect_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+	struct rt_collect_ctx *ctx = data;
+	const char *path = NULL;
+	const char *soname = NULL;
+	uint8_t digest[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	int has_exec = 0;
+	int rc;
+	unsigned index = ctx->index++;
+
+	(void)size;
+
+	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+		return 0;
+
+	rc = rt_live_object_digest(info, digest, &has_exec);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	if (!has_exec)
+		return 0;
+
+	rc = rt_add_object(ctx->objs, &ctx->count, soname, digest);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	return 0;
 }
 
 int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
 {
-	static const char domain[] = LOTA_AC_RUNTIME_MEASURE_DOMAIN;
-	struct runtime_measure_self_ctx st = {0};
-	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
+	struct rt_collect_ctx ctx;
+	char self_exe[LOTA_AC_RUNTIME_PATH_MAX];
+	int ret;
 
 	if (!out)
 		return -EINVAL;
 
-	st.md = EVP_MD_CTX_new();
-	if (!st.md)
+	ret = rt_resolve_self_exe(self_exe, sizeof(self_exe));
+	if (ret < 0)
+		return ret;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.objs = calloc(LOTA_AC_RUNTIME_MAX_OBJS, sizeof(*ctx.objs));
+	if (!ctx.objs)
 		return -ENOMEM;
+	ctx.self_exe = self_exe;
 
-	if (EVP_DigestInit_ex(st.md, EVP_sha256(), NULL) != 1 ||
-	    EVP_DigestUpdate(st.md, domain, sizeof(domain)) != 1) {
-		EVP_MD_CTX_free(st.md);
-		return -EIO;
+	dl_iterate_phdr(rt_collect_cb, &ctx);
+	if (ctx.err) {
+		ret = ctx.err;
+		goto out;
 	}
 
-	dl_iterate_phdr(runtime_measure_self_cb, &st);
-	if (st.err) {
-		EVP_MD_CTX_free(st.md);
-		return st.err;
-	}
+	ret = rt_finalize_combined(ctx.objs, ctx.count, out);
+out:
+	free(ctx.objs);
+	return ret;
+}
 
-	if (EVP_DigestFinal_ex(st.md, out, &out_len) != 1) {
-		EVP_MD_CTX_free(st.md);
-		return -EIO;
-	}
+struct rt_list_ctx {
+	lota_ac_runtime_object_fn fn;
+	void *user;
+	unsigned index;
+	const char *self_exe;
+	int stop;
+};
 
-	EVP_MD_CTX_free(st.md);
+static int rt_list_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+	struct rt_list_ctx *ctx = data;
+	const char *path = NULL;
+	const char *soname = NULL;
+	unsigned index = ctx->index++;
+
+	(void)size;
+
+	if (ctx->stop)
+		return 1;
+	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+		return 0;
+
+	if (ctx->fn(path, ctx->user) != 0) {
+		ctx->stop = 1;
+		return 1;
+	}
+	return 0;
+}
+
+int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user)
+{
+	struct rt_list_ctx ctx;
+	char self_exe[LOTA_AC_RUNTIME_PATH_MAX];
+	int ret;
+
+	if (!fn)
+		return -EINVAL;
+
+	ret = rt_resolve_self_exe(self_exe, sizeof(self_exe));
+	if (ret < 0)
+		return ret;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.fn = fn;
+	ctx.user = user;
+	ctx.self_exe = self_exe;
+
+	dl_iterate_phdr(rt_list_cb, &ctx);
 	return 0;
 }
 
@@ -378,32 +597,34 @@ static int runtime_measure_update_file_seg(EVP_MD_CTX *md, int fd,
 	return 0;
 }
 
-int lota_ac_compute_expected_runtime_measure(
-    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+/*
+ * Per-object digest from an ELF file on disk. Mirrors
+ * rt_live_object_digest(). Fills out and sets *has_exec on success; a
+ * file with no executable PT_LOAD segment is valid (*has_exec = 0).
+ * Returns a negative error for a malformed or unreadable file.
+ */
+static int rt_file_object_digest(const char *path, uint8_t out[32],
+				 int *has_exec)
 {
-	static const char domain[] = LOTA_AC_RUNTIME_MEASURE_DOMAIN;
 	Elf64_Ehdr ehdr;
 	Elf64_Phdr *phdrs = NULL;
 	const Elf64_Phdr *segs[LOTA_AC_RUNTIME_MAX_SEGS];
 	EVP_MD_CTX *md = NULL;
 	unsigned int out_len = LOTA_AC_RUNTIME_MEASURE_SIZE;
-	uint8_t le[4];
 	uint32_t n = 0;
 	size_t phsz;
 	int fd = -1;
 	int ret = -EIO;
 
-	if (!exe_path || !out)
-		return -EINVAL;
+	*has_exec = 0;
 
-	fd = open(exe_path, O_RDONLY | O_CLOEXEC);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 
 	ret = pread_full(fd, &ehdr, sizeof(ehdr), 0);
 	if (ret < 0)
 		goto out;
-
 	if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
 		ret = -EINVAL;
 		goto out;
@@ -434,11 +655,8 @@ int lota_ac_compute_expected_runtime_measure(
 
 	for (size_t i = 0; i < ehdr.e_phnum; i++) {
 		const Elf64_Phdr *ph = &phdrs[i];
-		if (ph->p_type != PT_LOAD)
-			continue;
-		if (!(ph->p_flags & PF_X))
-			continue;
-		if (ph->p_filesz == 0)
+		if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_X) ||
+		    ph->p_filesz == 0)
 			continue;
 		if (n >= LOTA_AC_RUNTIME_MAX_SEGS) {
 			ret = -E2BIG;
@@ -448,7 +666,7 @@ int lota_ac_compute_expected_runtime_measure(
 	}
 
 	if (n == 0) {
-		ret = -ENOENT;
+		ret = 0; /* no executable code: caller skips this object */
 		goto out;
 	}
 
@@ -467,14 +685,7 @@ int lota_ac_compute_expected_runtime_measure(
 		ret = -ENOMEM;
 		goto out;
 	}
-	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
-	    EVP_DigestUpdate(md, domain, sizeof(domain)) != 1) {
-		ret = -EIO;
-		goto out;
-	}
-
-	lota__write_le32(le, n);
-	if (EVP_DigestUpdate(md, le, sizeof(le)) != 1) {
+	if (rt_object_digest_begin(md, n) < 0) {
 		ret = -EIO;
 		goto out;
 	}
@@ -496,8 +707,8 @@ int lota_ac_compute_expected_runtime_measure(
 		ret = -EIO;
 		goto out;
 	}
+	*has_exec = 1;
 	ret = 0;
-
 out:
 	if (md)
 		EVP_MD_CTX_free(md);
@@ -505,6 +716,53 @@ out:
 	if (fd >= 0)
 		close(fd);
 	return ret;
+}
+
+int lota_ac_compute_expected_runtime_measure_set(
+    const char *const *paths, size_t count,
+    uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	struct rt_object *objs;
+	size_t nobj = 0;
+	int ret;
+
+	if (!paths || !out)
+		return -EINVAL;
+
+	objs = calloc(LOTA_AC_RUNTIME_MAX_OBJS, sizeof(*objs));
+	if (!objs)
+		return -ENOMEM;
+
+	for (size_t i = 0; i < count; i++) {
+		uint8_t digest[LOTA_AC_RUNTIME_MEASURE_SIZE];
+		int has_exec = 0;
+
+		if (!paths[i]) {
+			ret = -EINVAL;
+			goto out;
+		}
+		ret = rt_file_object_digest(paths[i], digest, &has_exec);
+		if (ret < 0)
+			goto out;
+		if (!has_exec)
+			continue;
+		ret = rt_add_object(objs, &nobj, rt_basename(paths[i]), digest);
+		if (ret < 0)
+			goto out;
+	}
+
+	ret = rt_finalize_combined(objs, nobj, out);
+out:
+	free(objs);
+	return ret;
+}
+
+int lota_ac_compute_expected_runtime_measure(
+    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	if (!exe_path || !out)
+		return -EINVAL;
+	return lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out);
 }
 
 static int compute_heartbeat_nonce(

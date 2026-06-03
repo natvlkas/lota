@@ -44,26 +44,16 @@ static int tests_passed;
 
 static char tmp_path[256];
 
-/*
- * Copy /proc/self/exe to a writable temp file
- * Returns 0 on success
- */
-static int copy_self_exe(char *out_path, size_t out_len)
+/* Copy /proc/self/exe to a writable temp file; returns 0 on success. */
+/* Copy /proc/self/exe into an already-open fd. */
+static int copy_self_into_fd(int out)
 {
 	uint8_t buf[8192];
-	int in = -1;
-	int out = -1;
+	int in = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
 	int ret = -1;
 
-	snprintf(out_path, out_len, "/tmp/lota_rm_XXXXXX");
-	out = mkstemp(out_path);
-	if (out < 0)
-		return -1;
-
-	in = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
 	if (in < 0)
-		goto done;
-
+		return -1;
 	for (;;) {
 		ssize_t n = read(in, buf, sizeof(buf));
 		if (n < 0) {
@@ -77,12 +67,35 @@ static int copy_self_exe(char *out_path, size_t out_len)
 			goto done;
 	}
 	ret = 0;
-
 done:
-	if (in >= 0)
-		close(in);
-	if (out >= 0)
-		close(out);
+	close(in);
+	return ret;
+}
+
+/* Copy /proc/self/exe to an explicit destination path. */
+static int copy_self_to(const char *dst)
+{
+	int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0700);
+	int ret;
+	if (out < 0)
+		return -1;
+	ret = copy_self_into_fd(out);
+	close(out);
+	return ret;
+}
+
+static int copy_self_exe(char *out_path, size_t out_len)
+{
+	int out;
+	int ret = -1;
+
+	snprintf(out_path, out_len, "/tmp/lota_rm_XXXXXX");
+	out = mkstemp(out_path);
+	if (out < 0)
+		return -1;
+
+	ret = copy_self_into_fd(out);
+	close(out);
 	return ret;
 }
 
@@ -144,23 +157,106 @@ static void test_live_self_measure(void)
 	PASS();
 }
 
-static void test_file_measure_matches_live(void)
+/* Collect the object paths reported by lota_ac_list_runtime_objects. */
+#define COLLECT_MAX_OBJS 128
+struct path_collector {
+	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX];
+	size_t max;
+	size_t count;
+	int overflow;
+};
+
+static int collect_path_cb(const char *path, void *user)
+{
+	struct path_collector *c = user;
+	if (c->count >= c->max) {
+		c->overflow = 1;
+		return 1;
+	}
+	strncpy(c->paths[c->count], path, LOTA_AC_RUNTIME_PATH_MAX - 1);
+	c->paths[c->count][LOTA_AC_RUNTIME_PATH_MAX - 1] = '\0';
+	c->count++;
+	return 0;
+}
+
+static void test_list_objects_self_first(void)
+{
+	struct path_collector c = {0};
+	char self[LOTA_AC_RUNTIME_PATH_MAX];
+	ssize_t n;
+
+	TEST("object enumeration lists the main executable first");
+	c.paths = calloc(COLLECT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths) {
+		FAIL("alloc");
+		return;
+	}
+	c.max = COLLECT_MAX_OBJS;
+
+	int rc = lota_ac_list_runtime_objects(collect_path_cb, &c);
+	n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	if (rc != 0 || c.count == 0 || n < 0) {
+		free(c.paths);
+		FAIL("list");
+		return;
+	}
+	self[n] = '\0';
+
+	const char *want = strrchr(self, '/');
+	want = want ? want + 1 : self;
+	const char *got = strrchr(c.paths[0], '/');
+	got = got ? got + 1 : c.paths[0];
+
+	int ok = strcmp(want, got) == 0;
+	free(c.paths);
+	if (!ok) {
+		FAIL("first object is not the main executable");
+		return;
+	}
+	PASS();
+}
+
+static void test_live_matches_object_set(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	uint8_t file[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct path_collector c = {0};
 
-	TEST("file measure of /proc/self/exe equals live measure");
-	if (lota_ac_compute_runtime_measure(live) != 0) {
-		FAIL("live");
+	TEST("live image equals the set measure of its loaded objects");
+	c.paths = calloc(COLLECT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths) {
+		FAIL("alloc");
 		return;
 	}
-	if (lota_ac_compute_expected_runtime_measure("/proc/self/exe", file) !=
-	    0) {
-		FAIL("file");
+	c.max = COLLECT_MAX_OBJS;
+
+	if (lota_ac_list_runtime_objects(collect_path_cb, &c) != 0 ||
+	    c.overflow || c.count == 0) {
+		free(c.paths);
+		FAIL("list");
 		return;
 	}
-	if (memcmp(live, file, sizeof(live)) != 0) {
-		FAIL("live != file");
+
+	const char **vec = calloc(c.count, sizeof(*vec));
+	if (!vec) {
+		free(c.paths);
+		FAIL("alloc vec");
+		return;
+	}
+	for (size_t i = 0; i < c.count; i++)
+		vec[i] = c.paths[i];
+
+	int ok = lota_ac_compute_runtime_measure(live) == 0 &&
+		 lota_ac_compute_expected_runtime_measure_set(vec, c.count,
+							      set) == 0;
+	free(vec);
+	free(c.paths);
+	if (!ok) {
+		FAIL("measure");
+		return;
+	}
+	if (memcmp(live, set, sizeof(live)) != 0) {
+		FAIL("live != set over enumerated objects");
 		return;
 	}
 	PASS();
@@ -168,28 +264,44 @@ static void test_file_measure_matches_live(void)
 
 static void test_file_measure_copy_matches(void)
 {
-	uint8_t orig[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	uint8_t copy[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	char path[256];
+	uint8_t a[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t b[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char d1[] = "/tmp/lota_rm_c1_XXXXXX";
+	char d2[] = "/tmp/lota_rm_c2_XXXXXX";
+	char p1[300], p2[300];
 
-	TEST("file measure is stable across an identical copy");
-	if (copy_self_exe(path, sizeof(path)) != 0) {
+	/*
+	 * The combined digest binds the object soname (file basename), so an
+	 * identical copy only measures equal under the same basename. Two
+	 * copies named "img" in different directories isolate the content
+	 * comparison from the soname binding.
+	 */
+	TEST("identical copies under the same soname measure equal");
+	if (!mkdtemp(d1) || !mkdtemp(d2)) {
+		FAIL("mkdtemp");
+		return;
+	}
+	snprintf(p1, sizeof(p1), "%s/img", d1);
+	snprintf(p2, sizeof(p2), "%s/img", d2);
+	if (copy_self_to(p1) != 0 || copy_self_to(p2) != 0) {
 		FAIL("copy");
-		return;
+		goto cleanup;
 	}
-	int ok = lota_ac_compute_expected_runtime_measure("/proc/self/exe",
-							  orig) == 0 &&
-		 lota_ac_compute_expected_runtime_measure(path, copy) == 0;
-	unlink(path);
-	if (!ok) {
+	if (lota_ac_compute_expected_runtime_measure(p1, a) != 0 ||
+	    lota_ac_compute_expected_runtime_measure(p2, b) != 0) {
 		FAIL("measure");
-		return;
+		goto cleanup;
 	}
-	if (memcmp(orig, copy, sizeof(orig)) != 0) {
+	if (memcmp(a, b, sizeof(a)) != 0) {
 		FAIL("copy differs");
-		return;
+		goto cleanup;
 	}
 	PASS();
+cleanup:
+	unlink(p1);
+	unlink(p2);
+	rmdir(d1);
+	rmdir(d2);
 }
 
 static void test_tamper_in_exec_segment_detected(void)
@@ -682,23 +794,21 @@ static void test_synthetic_two_segments_stable(void)
 {
 	uint8_t first[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t second[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	char p1[256], p2[256];
+	char path[256];
 	const struct seg_spec segs[] = {
 	    {PT_LOAD, PF_R | PF_X, 0x1000, 64, 0x5A},
 	    {PT_LOAD, PF_R | PF_X, 0x4000, 128, 0xA5},
 	};
 	struct elf_spec spec = {.segs = segs, .nseg = 2};
 
-	TEST("identical synthetic ELFs measure identically");
-	if (build_elf_tmp(&spec, p1, sizeof(p1)) != 0 ||
-	    build_elf_tmp(&spec, p2, sizeof(p2)) != 0) {
+	TEST("a two-segment synthetic ELF measures deterministically");
+	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
 		FAIL("build");
 		return;
 	}
-	int ok = lota_ac_compute_expected_runtime_measure(p1, first) == 0 &&
-		 lota_ac_compute_expected_runtime_measure(p2, second) == 0;
-	unlink(p1);
-	unlink(p2);
+	int ok = lota_ac_compute_expected_runtime_measure(path, first) == 0 &&
+		 lota_ac_compute_expected_runtime_measure(path, second) == 0;
+	unlink(path);
 	if (!ok) {
 		FAIL("measure");
 		return;
@@ -710,12 +820,109 @@ static void test_synthetic_two_segments_stable(void)
 	PASS();
 }
 
+static void test_set_order_independent(void)
+{
+	uint8_t ab[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t ba[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t one[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char pa[256], pb[256];
+	const struct seg_spec sa[] = {
+	    {PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x11},
+	};
+	const struct seg_spec sb[] = {
+	    {PT_LOAD, PF_R | PF_X, 0x1000, 48, 0x22},
+	};
+	struct elf_spec ea = {.segs = sa, .nseg = 1};
+	struct elf_spec eb = {.segs = sb, .nseg = 1};
+
+	TEST("set measure is independent of object order");
+	if (build_elf_tmp(&ea, pa, sizeof(pa)) != 0 ||
+	    build_elf_tmp(&eb, pb, sizeof(pb)) != 0) {
+		FAIL("build");
+		return;
+	}
+	const char *order_ab[] = {pa, pb};
+	const char *order_ba[] = {pb, pa};
+	int ok = lota_ac_compute_expected_runtime_measure_set(order_ab, 2,
+							      ab) == 0 &&
+		 lota_ac_compute_expected_runtime_measure_set(order_ba, 2,
+							      ba) == 0 &&
+		 lota_ac_compute_expected_runtime_measure(pa, one) == 0;
+	unlink(pa);
+	unlink(pb);
+	if (!ok) {
+		FAIL("measure");
+		return;
+	}
+	/* swapping the two paths must not change the combined digest */
+	if (memcmp(ab, ba, sizeof(ab)) != 0) {
+		FAIL("order changed the set digest");
+		return;
+	}
+	/* a two-object set must differ from a single-object measure */
+	if (memcmp(ab, one, sizeof(ab)) == 0) {
+		FAIL("second object ignored in set");
+		return;
+	}
+	PASS();
+}
+
+static void test_set_skips_non_exec_member(void)
+{
+	uint8_t with_data[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t code_only[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char p_code[256], p_data[256];
+	const struct seg_spec code[] = {
+	    {PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x33},
+	};
+	const struct seg_spec data[] = {
+	    {PT_LOAD, PF_R | PF_W, 0x1000, 32, 0x44},
+	};
+	struct elf_spec ec = {.segs = code, .nseg = 1};
+	struct elf_spec ed = {.segs = data, .nseg = 1};
+
+	TEST("set ignores a member with no executable segment");
+	if (build_elf_tmp(&ec, p_code, sizeof(p_code)) != 0 ||
+	    build_elf_tmp(&ed, p_data, sizeof(p_data)) != 0) {
+		FAIL("build");
+		return;
+	}
+	const char *both[] = {p_code, p_data};
+	int ok =
+	    lota_ac_compute_expected_runtime_measure_set(both, 2, with_data) ==
+		0 &&
+	    lota_ac_compute_expected_runtime_measure(p_code, code_only) == 0;
+	unlink(p_code);
+	unlink(p_data);
+	if (!ok) {
+		FAIL("measure");
+		return;
+	}
+	/* the data-only object contributes nothing: digests must match */
+	if (memcmp(with_data, code_only, sizeof(with_data)) != 0) {
+		FAIL("non-exec member changed the digest");
+		return;
+	}
+	PASS();
+}
+
+static void test_list_null_callback(void)
+{
+	TEST("object enumeration rejects a NULL callback (-EINVAL)");
+	if (lota_ac_list_runtime_objects(NULL, NULL) != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA runtime re-measurement tests === \n\n");
 
 	test_live_self_measure();
-	test_file_measure_matches_live();
+	test_list_objects_self_first();
+	test_live_matches_object_set();
 	test_file_measure_copy_matches();
 	test_tamper_in_exec_segment_detected();
 	test_invalid_args();
@@ -733,6 +940,14 @@ int main(void)
 	test_rejects_too_many_exec_segments();
 	test_second_segment_fields_bound();
 	test_synthetic_two_segments_stable();
+
+	/*
+	 * multi-object set semantics
+	 * (runtime re-measurement all loaded objects)
+	 * */
+	test_set_order_independent();
+	test_set_skips_non_exec_member();
+	test_list_null_callback();
 
 	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
