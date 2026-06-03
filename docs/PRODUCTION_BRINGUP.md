@@ -199,6 +199,46 @@ production `--require-cert` default. See
 [`examples/enrollment/README.md`](../examples/enrollment/README.md) for
 the full end-to-end walk-through.
 
+### 7. Sealed keys (offline local attestation)
+
+Remote attestation proves state to a verifier over the network. Sealing
+is the local counterpart: the TPM releases a secret only when the host
+booted into the expected state, with no verifier round-trip. It is a
+local boundary the TPM enforces - useful for single-player / offline DRM
+and for at-rest key storage - but it does **not** replace remote
+attestation for competitive multiplayer, where the attacker owns the box.
+
+Seal a secret to the current boot state and recover it later:
+
+```sh
+# Seal: secret in on stdin, sealed blob out on stdout (root only).
+printf '%s' "$PER_TITLE_KEY" | sudo lota-agent --seal > title.sealed
+
+# Unseal: only succeeds when the host is in the sealed PCR state.
+sudo lota-agent --unseal < title.sealed
+```
+
+The default PCR set is firmware/kernel PCRs 0-7 plus LOTA's PCR14
+boot-commitment, so a firmware, kernel, or agent change makes the unseal
+fail closed. Pick a different set with `--seal-pcrs MASK` (for example
+`--seal-pcrs 0xC1` for PCRs 0, 6, 7) when you want the secret to survive
+agent upgrades.
+
+To harden the agent's own AIK userAuth at rest, enable sealing in
+`lota.conf`:
+
+```ini
+seal_aik_auth = true          # keep a sealed copy, prefer it on load
+seal_aik_auth_strict = true   # store ONLY sealed; no plaintext on disk
+```
+
+`strict` removes the plaintext sidecar, so a captured disk no longer
+yields the AIK auth even to an attacker with the same TPM in a different
+boot state. The trade-off: a legitimate firmware/kernel/agent change
+makes the sealed auth unrecoverable and forces AIK re-provisioning (and
+re-enrollment). Leave both keys at their default `false` to keep the
+existing plaintext-sidecar behaviour.
+
 ## What still fails after bring-up
 
 The most common failures, with the gate that produced them:
