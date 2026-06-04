@@ -216,6 +216,27 @@ production `--require-cert` default. See
 [`examples/enrollment/README.md`](../examples/enrollment/README.md) for
 the full end-to-end walk-through.
 
+The agent rotates the AIK on its own schedule (`--aik-ttl`, default 30d).
+It surfaces the rotation state over D-Bus so an operator -- or a fleet
+monitor -- can see when a rotation is due and when a re-enrollment is
+needed. `GetRotationStatus` returns the generation, the AIK creation time,
+the next-rotation deadline, any open grace window, and whether the stored
+certificate has been outdated by a rotation:
+
+```sh
+busctl call org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
+    GetRotationStatus
+# (tttttb) generation provisioned_at rotation_deadline ... reenroll_required
+
+busctl get-property org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
+    ReenrollRequired
+```
+
+When `ReenrollRequired` is true, the host rotated its AIK and the issued
+certificate is stale; clear it with the guided `sudo lota-agent --reenroll`
+above. The same properties emit `PropertiesChanged`, so a subscriber is
+notified the moment a rotation happens rather than having to poll.
+
 ### 7. Sealed keys (offline local attestation)
 
 Remote attestation proves state to a verifier over the network. Sealing

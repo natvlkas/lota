@@ -84,6 +84,17 @@ struct ipc_context {
 	uint32_t fail_count;
 	uint8_t mode;
 
+	/* AIK rotation state, surfaced read-only over D-Bus */
+	uint64_t aik_generation;     /* monotonic rotation counter */
+	uint64_t aik_provisioned_at; /* current AIK creation (Unix time) */
+	uint64_t
+	    aik_last_rotated_at; /* last rotation (Unix time, 0 if never) */
+	uint64_t
+	    aik_rotation_deadline; /* provisioned_at + TTL (0 if unknown) */
+	uint64_t
+	    aik_grace_deadline;	    /* end of post-rotation grace (0 if none) */
+	bool aik_reenroll_required; /* stored cert outdated by a rotation */
+
 	/* true when using socket activation (do not unlink socket) */
 	bool activated;
 };
@@ -141,6 +152,24 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
  * @success: Whether attestation succeeded
  */
 void ipc_record_attestation(struct ipc_context *ctx, bool success);
+
+/*
+ * ipc_update_rotation - Publish AIK rotation state.
+ * @ctx: Server context
+ * @generation: Current AIK generation counter
+ * @provisioned_at: Current AIK creation time (Unix seconds)
+ * @last_rotated_at: Last rotation time (Unix seconds, 0 if never)
+ * @rotation_deadline: provisioned_at + TTL (0 if unknown)
+ * @grace_deadline: End of post-rotation grace window (0 if none)
+ * @reenroll_required: True when a rotation has outdated the stored cert
+ *
+ * Updates the rotation fields and, when D-Bus is attached and a field
+ * changed, emits a PropertiesChanged for the rotation properties.
+ */
+void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
+			 uint64_t provisioned_at, uint64_t last_rotated_at,
+			 uint64_t rotation_deadline, uint64_t grace_deadline,
+			 bool reenroll_required);
 
 /*
  * ipc_set_mode - Update current mode

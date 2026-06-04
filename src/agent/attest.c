@@ -872,6 +872,43 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
 }
 
 /*
+ * Publish the current AIK rotation state over IPC / D-Bus: generation,
+ * creation time, the next-rotation deadline, any open grace window, and
+ * whether the issued certificate has been outdated by a local rotation
+ * (the enrolled generation no longer matching the live one), which an
+ * operator clears with a guided lota-agent --reenroll.
+ */
+static void publish_rotation_state(uint32_t aik_ttl)
+{
+	struct tpm_context *tpm = &g_agent.tpm_ctx;
+	struct enroll_state st;
+	uint64_t deadline = 0;
+	bool reenroll_required = false;
+	uint32_t ttl;
+
+	if (!tpm->aik_meta_loaded)
+		return;
+
+	ttl = aik_ttl ? aik_ttl : TPM_AIK_DEFAULT_TTL_SEC;
+	if (tpm->aik_meta.provisioned_at > 0)
+		deadline = (uint64_t)tpm->aik_meta.provisioned_at + ttl;
+
+	/*
+	 * Recorded enrollment whose generation trails the live AIK means a
+	 * rotation has outdated the stored certificate.
+	 * With no record there is no way to tell, so do not raise the flag
+	 */
+	if (enroll_state_load(&st) == 0)
+		reenroll_required =
+		    st.aik_generation != tpm->aik_meta.generation;
+
+	ipc_update_rotation(&g_agent.ipc_ctx, tpm->aik_meta.generation,
+			    (uint64_t)tpm->aik_meta.provisioned_at,
+			    (uint64_t)tpm->aik_meta.last_rotated_at, deadline,
+			    (uint64_t)tpm->grace_deadline, reenroll_required);
+}
+
+/*
  * Continuous attestation loop.
  * Re-attests every interval_sec seconds with exponential backoff on failure.
  */
@@ -997,6 +1034,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 	ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
 			  0);
+	publish_rotation_state(aik_ttl);
 
 	sdnotify_ready();
 	sdnotify_status("Attesting to %s:%d", server, port);
@@ -1025,6 +1063,12 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 					    (unsigned long)g_agent.tpm_ctx
 						.aik_meta.generation);
 				}
+				/*
+				 * Republish so the rotation, its grace window,
+				 * and the now-required re-enrollment surface
+				 * over D-Bus immediately
+				 */
+				publish_rotation_state(aik_ttl);
 			}
 		}
 
