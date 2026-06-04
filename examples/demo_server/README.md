@@ -22,6 +22,8 @@ at `build/examples/demo_server`.
 | `--max-age`                   | `300`                                  | maximum heartbeat age in seconds before UNTRUSTED         |
 | `--anticheat-binary`          | (none)                                 | producer binary; its SHA-256 feeds the expected game-binding hash |
 | `--anticheat-runtime-manifest`| (none)                                 | trusted runtime manifest (one ELF path per line) for the runtime measurement |
+| `--tls-cert` / `--tls-key`    | (none)                                 | PEM server keypair; enables HTTPS                         |
+| `--client-ca`                 | (none)                                 | PEM provisioning CA; require and verify an mTLS producer certificate |
 
 ### Runtime measurement
 
@@ -43,8 +45,24 @@ A heartbeat whose live measurement does not match the manifest is answered
 is omitted, the runtime measurement falls back to `--anticheat-binary`
 alone, which only matches a statically linked producer.
 
-TLS is intentionally out of scope. The demo runs on loopback so the operator can curl every endpoint without bringing in a CA. 
-The production guidance is "put the verifier behind your existing game auth gateway"; that gateway already owns TLS termination.
+### Transport security
+
+By default the demo serves plain HTTP on loopback so the operator can curl
+every endpoint without bringing in a CA. Pass `--tls-cert`/`--tls-key` to
+serve HTTPS, and add `--client-ca` to require the anti-cheat producer to
+present a provisioned certificate (mutual TLS): a heartbeat from anything
+but a provisioned producer is then refused at the TLS layer before any
+token is parsed. `examples/mtls/gen-certs.sh` provisions the keypairs and
+[`examples/mtls/README.md`](../mtls/README.md) documents the flow.
+
+```sh
+demo_server --aik-pub aik.der \
+            --tls-cert mtls/server.crt --tls-key mtls/server.key \
+            --client-ca mtls/ca.crt
+```
+
+The production guidance is otherwise "put the verifier behind your existing
+game auth gateway"; that gateway already owns TLS termination.
 
 ## Endpoints
 

@@ -19,8 +19,11 @@
 //                       to keep its banner in sync without owning a
 //                       heartbeat channel itself.
 //
-// TLS is deliberately out of scope: the demo runs on 127.0.0.1 so the
-// operator can curl every endpoint without bringing in a CA.
+// Transport security is opt-in. With no TLS flags the demo serves plain
+// HTTP on 127.0.0.1 so the operator can curl every endpoint without
+// bringing in a CA. Pass -tls-cert/-tls-key to serve HTTPS, and add
+// -client-ca to require a provisioned anti-cheat producer to present a
+// certificate (mutual TLS); see examples/mtls/README.md.
 
 package main
 
@@ -29,6 +32,8 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -85,6 +90,13 @@ func main() {
 		"comma-separated list of game_id=license entries the server accepts")
 	maxAgeSec := flag.Uint("max-age", 300,
 		"maximum heartbeat age in seconds")
+	tlsCert := flag.String("tls-cert", "",
+		"PEM server certificate; enables HTTPS (see examples/mtls)")
+	tlsKey := flag.String("tls-key", "",
+		"PEM server private key; required with -tls-cert")
+	clientCA := flag.String("client-ca", "",
+		"PEM provisioning CA; when set, require and verify an mTLS "+
+			"client certificate from the producer")
 	anticheatBin := flag.String("anticheat-binary", "",
 		"path to the demo_anticheat producer binary; its SHA-256 is "+
 			"mixed into the expected game-binding hash exactly like "+
@@ -162,9 +174,16 @@ func main() {
 	http.Handle("/heartbeat", http.HandlerFunc(srv.handleHeartbeat))
 	http.Handle("/state", http.HandlerFunc(srv.handleState))
 
+	tlsConfig, err := buildTLSConfig(*tlsCert, *tlsKey, *clientCA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "demo_server: %v\n", err)
+		os.Exit(2)
+	}
+
 	hs := &http.Server{
 		Addr:              *listen,
 		ReadHeaderTimeout: 5 * time.Second,
+		TLSConfig:         tlsConfig,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(),
@@ -172,11 +191,19 @@ func main() {
 	defer stop()
 
 	go func() {
-		log.Printf("demo_server listening on %s (games=%s)", *listen,
-			strings.Join(gameIDs(games), ","))
-		if err := hs.ListenAndServe(); err != nil &&
-			!errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("demo_server: %v", err)
+		log.Printf("demo_server listening on %s (games=%s, transport=%s)",
+			*listen, strings.Join(gameIDs(games), ","),
+			transportLabel(tlsConfig))
+		// ListenAndServeTLS reads the keypair from TLSConfig.Certificates
+		// when both path arguments are empty
+		var serveErr error
+		if tlsConfig != nil {
+			serveErr = hs.ListenAndServeTLS("", "")
+		} else {
+			serveErr = hs.ListenAndServe()
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Fatalf("demo_server: %v", serveErr)
 		}
 	}()
 
@@ -186,6 +213,56 @@ func main() {
 	defer cancel()
 	if err := hs.Shutdown(shutdownCtx); err != nil {
 		log.Printf("demo_server: shutdown: %v", err)
+	}
+}
+
+// buildTLSConfig turns the transport flags into a *tls.Config, or nil for
+// plain HTTP. -tls-cert and -tls-key must be set together; -client-ca adds
+// mutual TLS by requiring a producer certificate that verifies against the
+// provisioning CA.
+func buildTLSConfig(certPath, keyPath, clientCAPath string) (*tls.Config, error) {
+	if certPath == "" && keyPath == "" {
+		if clientCAPath != "" {
+			return nil, errors.New("-client-ca needs -tls-cert/-tls-key")
+		}
+		return nil, nil
+	}
+	if certPath == "" || keyPath == "" {
+		return nil, errors.New("-tls-cert and -tls-key must be set together")
+	}
+
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load server keypair: %w", err)
+	}
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	if clientCAPath != "" {
+		caPEM, err := os.ReadFile(clientCAPath)
+		if err != nil {
+			return nil, fmt.Errorf("read -client-ca: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("no certificate in -client-ca %s", clientCAPath)
+		}
+		cfg.ClientCAs = pool
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return cfg, nil
+}
+
+func transportLabel(cfg *tls.Config) string {
+	switch {
+	case cfg == nil:
+		return "http"
+	case cfg.ClientAuth == tls.RequireAndVerifyClientCert:
+		return "https+mtls"
+	default:
+		return "https"
 	}
 }
 
