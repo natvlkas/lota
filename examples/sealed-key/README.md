@@ -100,6 +100,41 @@ If you leave `seal_persistent_primary = false` (the default), seal/unseal
 ignore any persisted object and keep deriving per op — the intended
 behaviour for hosts that seal rarely.
 
+## Anti-rollback: the binding contract
+
+A sealed blob is bound to a boot/PCR **state**, not to a version. This is
+the intended contract, and it has a deliberate edge:
+
+- Booting the same expected state always releases the key - replaying a
+  recurring *good* state is by design (your offline key must work every
+  boot), **not** a rollback hole.
+- A different / tampered state fails closed.
+- PCR binding has no notion of "newer than", so it does **not** stop a
+  *downgrade*: revoking an old secret version while the host can still
+  reproduce the PCR state it was sealed against.
+
+LOTA core does not version or revoke sealed secrets, so it ships no
+monotonic-counter machinery - NV counters are a scarce global TPM resource
+and add a compound-policy path with no consumer in the core. If your use
+case genuinely needs downgrade protection, bind the secret to a TPM NV
+monotonic counter *in addition* to the PCRs and bump the counter to revoke.
+[`anti-rollback-recipe.sh`](anti-rollback-recipe.sh) is a complete, tested
+tpm2-tools recipe that seals under `PolicyPCR AND PolicyNV(counter <= now)`
+and shows the secret failing closed after the counter advances:
+
+```sh
+sudo anti-rollback-recipe.sh      # or, on swtpm, with TPM2TOOLS_TCTI set
+```
+
+It ends with:
+
+```
+==> Unseal while the counter is unchanged (must recover)
+    RESULT: OK - recovered the secret in-policy
+==> Unseal after the bump (must fail closed)
+    RESULT: REVOKED - unseal failed closed after the counter advanced
+```
+
 ## Hardening the agent's AIK auth
 
 The same primitive backs an opt-in at-rest hardening of the agent's own

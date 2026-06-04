@@ -254,6 +254,29 @@ sudo lota-agent --reprovision-aik
 sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert tls.crt
 ```
 
+#### Anti-rollback: what sealing binds, and what it does not
+
+LOTA sealing binds a secret to a boot/PCR **state**, and that is the
+intended contract. A few consequences worth stating plainly:
+
+- **Replaying a recurring good state is by design.** Rebooting into the
+  same expected state releases the key every time. For offline DRM and
+  at-rest storage that is the whole point, not a rollback hole.
+- **A different (tampered) state fails closed.** A firmware, kernel, or
+  agent change moves the bound PCRs and the unseal is denied.
+- **What PCR binding does *not* cover:** revoking an *old* secret version
+  while the host can still reproduce the PCR state it was sealed against -
+  i.e. a key/version *downgrade*. PCR binding has no notion of "newer than".
+
+LOTA core does not version or revoke sealed secrets, so it deliberately
+ships no monotonic-counter machinery (NV counters are a scarce, global TPM
+resource, and a compound PolicyPCR+PolicyNV path cannot be validated on the
+target hardware until the hardware bring-up above). If your use case *does*
+need downgrade protection, bind the secret to a TPM NV monotonic counter in
+addition to the PCRs and bump the counter to revoke. A complete, tested
+tpm2-tools recipe is in
+[`examples/sealed-key/anti-rollback-recipe.sh`](../examples/sealed-key/anti-rollback-recipe.sh).
+
 ## What still fails after bring-up
 
 The most common failures, with the gate that produced them:
