@@ -453,3 +453,76 @@ int do_unseal(void)
 	fprintf(stderr, "Unsealed %zu-byte secret.\n", secret_len);
 	return 0;
 }
+
+/*
+ * do_seal_aik_auth - adopt at-rest sealing of the AIK userAuth on an
+ * already-enrolled host, without re-enrolling. Seals the current auth to
+ * the current PCR state (and, with seal_aik_auth_strict in lota.conf, drops
+ * the plaintext sidecar).
+ */
+int do_seal_aik_auth(void)
+{
+	int ret;
+
+	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Could not seal AIK auth: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	if (g_agent.tpm_ctx.seal_aik_auth_strict)
+		fprintf(stderr,
+			"AIK auth sealed to the current boot state; plaintext "
+			"sidecar removed (strict).\n");
+	else
+		fprintf(
+		    stderr,
+		    "AIK auth sealed to the current boot state (plaintext "
+		    "sidecar kept; set seal_aik_auth_strict to drop it).\n");
+	return 0;
+}
+
+/*
+ * do_reprovision_aik - explicit recovery for strict at-rest sealing. When a
+ * firmware/kernel/agent change made the sealed AIK auth unrecoverable,
+ * rotate the AIK + auth and re-seal to the current state.
+ */
+int do_reprovision_aik(void)
+{
+	int ret;
+
+	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "AIK re-provisioning failed: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	fprintf(stderr,
+		"AIK rotated and its auth re-sealed to the current boot "
+		"state.\n"
+		"The previous AIK certificate is now stale -- re-enroll:\n"
+		"  lota-agent --enroll --ca-server <host> ...\n");
+	return 0;
+}

@@ -222,6 +222,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"seal", no_argument, 0, 1007},
 	    {"unseal", no_argument, 0, 1008},
 	    {"seal-pcrs", required_argument, 0, 1009},
+	    {"seal-aik-auth", no_argument, 0, 1010},
+	    {"reprovision-aik", no_argument, 0, 1011},
 	    {"ca-server", required_argument, 0, 1005},
 	    {"ca-port", required_argument, 0, 1006},
 	    {"server", required_argument, 0, 's'},
@@ -351,6 +353,12 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1009:
 			opts->seal_pcrs = optarg;
+			break;
+		case 1010:
+			opts->seal_aik_auth_migrate_flag = 1;
+			break;
+		case 1011:
+			opts->reprovision_aik_flag = 1;
 			break;
 		case 1005:
 			opts->ca_server = optarg;

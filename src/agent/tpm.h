@@ -820,6 +820,31 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
 		      size_t *out_len);
 
+/*
+ * tpm_aik_reseal_auth - re-seal the current AIK userAuth to the current PCR
+ * state so an already-enrolled host can adopt at-rest sealing without
+ * re-enrolling. Loads the auth if needed, writes aik_auth.sealed, and (in
+ * strict mode) drops the plaintext sidecar.
+ * Returns 0 / negative errno.
+ */
+int tpm_aik_reseal_auth(struct tpm_context *ctx);
+
+/*
+ * tpm_reprovision_aik - rotate the AIK and its userAuth, sealing the new
+ * auth to the current PCR state. Recovery for strict at-rest sealing after
+ * a boot-state change made the sealed auth unrecoverable. The previous AIK
+ * certificate becomes stale, so the caller must re-enroll.
+ * Returns 0 / negative errno.
+ */
+int tpm_reprovision_aik(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_strict_blocks_reprovision - pure recovery decision. Returns 1
+ * when a strict-mode AIK-auth load failure must NOT trigger a silent AIK
+ * rotation (i.e. strict and the failure was a PolicyPCR mismatch), else 0.
+ */
+int tpm_aik_strict_blocks_reprovision(int strict, int load_rc);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);

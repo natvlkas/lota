@@ -17,4 +17,12 @@ void print_hex(const char *label, const uint8_t *data, size_t len);
 int do_seal(const char *pcr_str);
 int do_unseal(void);
 
+/*
+ * AIK-auth at-rest lifecycle one-shots (root): adopt sealing on an
+ * already-enrolled host, or recover after a boot-state change rotated the
+ * sealed auth out of reach.
+ */
+int do_seal_aik_auth(void);
+int do_reprovision_aik(void);
+
 #endif /* LOTA_SELFTEST_H */

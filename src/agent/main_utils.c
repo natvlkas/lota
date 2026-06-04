@@ -75,6 +75,13 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --seal-pcrs MASK  PCR bitmask for --seal (e.g. 0x4001); "
 	       "default\n");
 	printf("                    is PCRs 0-7 plus PCR14\n");
+	printf("  --seal-aik-auth   Seal the AIK userAuth to the current boot "
+	       "state\n");
+	printf("                    (adopt at-rest sealing without "
+	       "re-enrolling)\n");
+	printf("  --reprovision-aik Rotate + re-seal the AIK auth after a "
+	       "boot-state\n");
+	printf("                    change (strict recovery); then re-enroll\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (unsigned tokens, for protocol testing)\n");

@@ -1267,9 +1267,20 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	if (ret == 1) {
 		/* existing key is accepted only when its non-empty auth is
 		 * present */
-		ret = tpm_aik_load_auth(ctx);
-		if (ret == 0)
+		int load_rc = tpm_aik_load_auth(ctx);
+		if (load_rc == 0)
 			return 0;
+
+		/*
+		 * Strict at-rest sealing: if the sealed auth failed only
+		 * because the host is no longer in the sealed boot state, do
+		 * NOT silently rotate the enrolled AIK. Surface the policy
+		 * error so the operator runs the explicit recovery
+		 * (--reprovision-aik) and re-enrolls deliberately.
+		 */
+		if (tpm_aik_strict_blocks_reprovision(ctx->seal_aik_auth_strict,
+						      load_rc))
+			return load_rc;
 
 		/* missing/corrupt auth means the key is not safely usable */
 		ret = tpm_aik_reprovision_with_auth(ctx, 1);
@@ -1280,6 +1291,27 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	}
 
 	ret = tpm_aik_reprovision_with_auth(ctx, 0);
+	if (ret < 0)
+		return ret;
+
+	return tpm_aik_save_new_key_metadata(ctx);
+}
+
+int tpm_reprovision_aik(struct tpm_context *ctx)
+{
+	int had;
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	had = aik_exists(ctx, NULL);
+	if (had < 0)
+		return had;
+
+	/* rotate the AIK and its userAuth, sealing the new auth to the
+	 * current PCR state */
+	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
 	if (ret < 0)
 		return ret;
 
@@ -3460,6 +3492,53 @@ static int tpm_aik_load_auth(struct tpm_context *ctx)
 	}
 
 	return tpm_aik_load_auth_plaintext(ctx);
+}
+
+/*
+ * Pure recovery decision for a strict-mode AIK-auth load failure.
+ *
+ * Returns 1 when the agent must NOT silently reprovision (rotate) the AIK:
+ * that is, in strict mode when the sealed auth failed specifically because
+ * the host is no longer in the sealed boot state (PolicyPCR mismatch).
+ * Silently rotating there would churn the enrolled AIK identity on every
+ * legitimate firmware/kernel/agent change. In every other case (non-strict,
+ * or a genuinely missing/corrupt auth) it returns 0 and the caller keeps
+ * the existing reprovision-on-failure behaviour.
+ */
+int tpm_aik_strict_blocks_reprovision(int strict, int load_rc)
+{
+	return (strict && load_rc == -LOTA_ERR_TPM_POLICY_FAIL) ? 1 : 0;
+}
+
+/*
+ * Re-seal the current AIK userAuth to the current PCR state. Lets an
+ * already-enrolled host adopt at-rest sealing without re-enrolling. Loads
+ * the auth if not already in memory, writes aik_auth.sealed, and in strict
+ * mode drops the plaintext sidecar.
+ */
+int tpm_aik_reseal_auth(struct tpm_context *ctx)
+{
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	if (!ctx->aik_auth_loaded) {
+		ret = tpm_aik_load_auth(ctx);
+		if (ret < 0)
+			return ret;
+	}
+
+	ret = tpm_aik_save_auth_sealed(ctx, ctx->aik_auth);
+	if (ret < 0)
+		return ret;
+
+	if (ctx->seal_aik_auth_strict) {
+		char path[PATH_MAX];
+		if (tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path)) == 0)
+			unlink(path);
+	}
+	return 0;
 }
 
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,

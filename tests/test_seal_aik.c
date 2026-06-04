@@ -204,6 +204,57 @@ static void test_strict_load_no_plaintext_fallback(void)
 	PASS();
 }
 
+static void test_recovery_decision(void)
+{
+	TEST("strict-mode reprovision-block decision is correct");
+	/* non-strict: a load failure always allows reprovision */
+	if (tpm_aik_strict_blocks_reprovision(0, -LOTA_ERR_TPM_POLICY_FAIL) !=
+	    0) {
+		FAIL("non-strict blocked");
+		return;
+	}
+	/* strict + boot-state mismatch: must block silent AIK rotation */
+	if (tpm_aik_strict_blocks_reprovision(1, -LOTA_ERR_TPM_POLICY_FAIL) !=
+	    1) {
+		FAIL("strict policy-fail not blocked");
+		return;
+	}
+	/* strict but a genuinely missing/corrupt auth: reprovision is fine */
+	if (tpm_aik_strict_blocks_reprovision(1, -ENOENT) != 0) {
+		FAIL("strict missing-auth blocked");
+		return;
+	}
+	if (tpm_aik_strict_blocks_reprovision(1, -EIO) != 0) {
+		FAIL("strict io-error blocked");
+		return;
+	}
+	/* a successful load is never a reprovision trigger */
+	if (tpm_aik_strict_blocks_reprovision(1, 0) != 0) {
+		FAIL("strict success blocked");
+		return;
+	}
+	PASS();
+}
+
+static void test_reseal_reprovision_arg_guards(void)
+{
+	struct tpm_context ctx;
+
+	TEST("reseal/reprovision reject NULL and uninitialised ctx");
+	memset(&ctx, 0, sizeof(ctx)); /* initialized == false */
+	if (tpm_aik_reseal_auth(NULL) != -EINVAL ||
+	    tpm_aik_reseal_auth(&ctx) != -EINVAL) {
+		FAIL("reseal guard");
+		return;
+	}
+	if (tpm_reprovision_aik(NULL) != -EINVAL ||
+	    tpm_reprovision_aik(&ctx) != -EINVAL) {
+		FAIL("reprovision guard");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("Running LOTA AIK-auth hardening tests...\n\n");
@@ -213,6 +264,8 @@ int main(void)
 	test_sealed_path_derivation();
 	test_sealing_on_without_tpm_fails_cleanly();
 	test_strict_load_no_plaintext_fallback();
+	test_recovery_decision();
+	test_reseal_reprovision_arg_guards();
 
 	cleanup_dir();
 	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
