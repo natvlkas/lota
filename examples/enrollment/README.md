@@ -51,6 +51,17 @@ vendor's root bundle. A `VERIFY_OK` at the end means the AIK was
 activation-bound to the EK and the verifier trusted it through the
 certificate chain alone.
 
+This demo passes a single `-ek-root` because swTPM mints one local CA. A
+production fleet instead trusts a pin-enforced multi-vendor bundle:
+
+```sh
+lota-attest-ca ... -ek-root-bundle /var/lib/lota/ek-roots
+```
+
+The CA fails closed if any pinned manufacturer root is missing, mismatched,
+or unpinned. See [`configs/ek-roots/README.md`](../../configs/ek-roots/README.md)
+for how to materialize the bundle from the vendor sources.
+
 The script starts `lota-verifier` from a writable runtime directory
 (`RUN_DIR`, default: a fresh `/tmp/lota-enrollment.*`) and points
 `--aik-store` / `--nonce-db` there. This keeps generated TLS material and
