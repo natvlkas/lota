@@ -471,6 +471,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
+	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_seal_blob \
 	$(TEST_BIN_DIR)/test_seal_envelope \
 	$(TEST_BIN_DIR)/test_seal_tpm \
@@ -587,6 +588,10 @@ $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c |
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_runtime_protect_digest: tests/test_runtime_protect_digest.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
@@ -649,6 +654,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_anticheat
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
+	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_seal_blob
 	@$(BUILD_DIR)/test_seal_envelope
 	@$(BUILD_DIR)/test_seal_tpm
