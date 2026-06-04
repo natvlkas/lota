@@ -705,6 +705,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	       ipc_token_hdr.runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
 	token->runtime_protect_epoch = ipc_token_hdr.runtime_protect_epoch;
+	token->runtime_protect_version = ipc_token_hdr.runtime_protect_version;
 	token->protect_pid_count = ipc_token_hdr.protect_pid_count;
 
 	if (ipc_token_hdr.pid_list_size !=
@@ -714,15 +715,23 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		return LOTA_ERR_PROTOCOL;
 	if (token->protect_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_ERR_PROTOCOL;
+	if (token->runtime_protect_version > LOTA_IPC_RUNTIME_PROTECT_V2)
+		return LOTA_ERR_PROTOCOL;
 
 	/* validate sizes */
 	if (ipc_token_hdr.attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
 	    ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
 		return LOTA_ERR_PROTOCOL;
 
-	size_t expected_len =
-	    LOTA_IPC_TOKEN_HEADER_SIZE + ipc_token_hdr.pid_list_size +
-	    ipc_token_hdr.attest_size + ipc_token_hdr.sig_size;
+	size_t image_list_size = 0;
+	if (token->runtime_protect_version == LOTA_IPC_RUNTIME_PROTECT_V2)
+		image_list_size = (size_t)token->protect_pid_count *
+				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
+
+	size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE +
+			      ipc_token_hdr.pid_list_size + image_list_size +
+			      ipc_token_hdr.attest_size +
+			      ipc_token_hdr.sig_size;
 	if (payload_len < expected_len)
 		return LOTA_ERR_PROTOCOL;
 
@@ -742,6 +751,19 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 			    ((uint32_t)data_ptr[3] << 24);
 			data_ptr += sizeof(uint32_t);
 		}
+	}
+
+	/* copy the v2 per-PID kernel image digests if present */
+	if (image_list_size > 0) {
+		token->protected_image_digests =
+		    calloc(token->protect_pid_count,
+			   sizeof(*token->protected_image_digests));
+		if (!token->protected_image_digests)
+			goto oom;
+
+		memcpy(token->protected_image_digests, data_ptr,
+		       image_list_size);
+		data_ptr += image_list_size;
 	}
 
 	/* copy attest_data if present */
@@ -789,6 +811,10 @@ void lota_token_free(struct lota_token *token)
 	free(token->protected_pids);
 	token->protected_pids = NULL;
 	token->protect_pid_count = 0;
+
+	free(token->protected_image_digests);
+	token->protected_image_digests = NULL;
+	token->runtime_protect_version = 0;
 }
 
 size_t lota_token_serialized_size(const struct lota_token *token)
@@ -805,9 +831,17 @@ size_t lota_token_serialized_size(const struct lota_token *token)
 	if (token->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return 0;
 
+	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2 &&
+	    token->protect_pid_count > 0 && !token->protected_image_digests)
+		return 0;
+
 	total = LOTA_TOKEN_HEADER_SIZE +
 		(size_t)token->protect_pid_count * sizeof(uint32_t) +
 		token->attest_size + token->signature_len;
+
+	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
+		total += (size_t)token->protect_pid_count *
+			 LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 
 	/* wire.total_size is uint16_t on wire; reject impossible encodings */
 	if (total > 0xFFFFu)
@@ -854,7 +888,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	    htole16((uint16_t)(token->protect_pid_count * sizeof(uint32_t)));
 	wire.attest_size = htole16((uint16_t)token->attest_size);
 	wire.sig_size = htole16((uint16_t)token->signature_len);
-	wire.reserved = 0;
+	wire.runtime_protect_version = htole16(token->runtime_protect_version);
 
 	/* write header */
 	memcpy(buf, &wire, sizeof(wire));
@@ -867,6 +901,15 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 			memcpy(buf + off, pid_le, sizeof(pid_le));
 			off += sizeof(pid_le);
 		}
+	}
+
+	/* write the v2 per-PID kernel image digests */
+	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2 &&
+	    token->protect_pid_count > 0 && token->protected_image_digests) {
+		size_t image_bytes = (size_t)token->protect_pid_count *
+				     LOTA_TOKEN_IMAGE_DIGEST_SIZE;
+		memcpy(buf + off, token->protected_image_digests, image_bytes);
+		off += image_bytes;
 	}
 
 	/* write attest_data */

@@ -157,6 +157,29 @@ int main(void)
 			FAIL("v1 and v2 collide");
 	}
 
+	TEST("v2 matches the cross-language known-answer vector");
+	{
+		/*
+		 * Locks the C and Go v2 folds to the same bytes.
+		 * pids {1,2}, image digests of 0xAA*32 and 0xBB*32
+		 * Mirror in the Go verifier's TestRuntimeProtectDigestV2_KAT.
+		 */
+		static const uint8_t kat[32] = {
+		    0x8d, 0x45, 0x1c, 0x6d, 0x0e, 0x1e, 0xa5, 0x11,
+		    0xdf, 0xc0, 0xa0, 0x5c, 0x8b, 0xe3, 0x7f, 0x35,
+		    0x02, 0xc7, 0x3f, 0xfd, 0x7a, 0x06, 0x73, 0x6a,
+		    0x0a, 0xff, 0xbc, 0xe3, 0xdb, 0xd5, 0x1e, 0x9d};
+		uint32_t kp[2] = {1, 2};
+		uint8_t ki[2][32];
+		memset(ki[0], 0xAA, 32);
+		memset(ki[1], 0xBB, 32);
+		if (lota_compute_runtime_protect_digest_v2(kp, ki, 2, b) == 0 &&
+		    memcmp(b, kat, 32) == 0)
+			PASS();
+		else
+			FAIL("KAT mismatch");
+	}
+
 	printf("\n%d/%d runtime protect digest tests passed\n", tests_passed,
 	       tests_run);
 	return tests_passed == tests_run ? 0 : 1;

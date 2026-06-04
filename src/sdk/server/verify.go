@@ -134,24 +134,31 @@ type Claims struct {
 
 // represents the parsed wire-format header
 type tokenWire struct {
-	magic                uint32
-	version              uint16
-	totalSize            uint16
-	validUntil           uint64
-	flags                uint32
-	nonce                [32]byte
-	sigAlg               uint16
-	hashAlg              uint16
-	pcrMask              uint32
-	policy               [32]byte
-	runtimeProtectDigest [32]byte
-	protectPIDCount      uint32
-	runtimeProtectEpoch  uint64
-	pidListSize          uint16
-	attestSize           uint16
-	sigSize              uint16
-	reserved             uint16
+	magic                 uint32
+	version               uint16
+	totalSize             uint16
+	validUntil            uint64
+	flags                 uint32
+	nonce                 [32]byte
+	sigAlg                uint16
+	hashAlg               uint16
+	pcrMask               uint32
+	policy                [32]byte
+	runtimeProtectDigest  [32]byte
+	protectPIDCount       uint32
+	runtimeProtectEpoch   uint64
+	pidListSize           uint16
+	attestSize            uint16
+	sigSize               uint16
+	runtimeProtectVersion uint16
 }
+
+// runtime_protect_version wire values.
+const (
+	runtimeProtectV1 = 1 // PID set identity only (0 also accepted as v1)
+	runtimeProtectV2 = 2 // PID set + per-PID kernel image digest
+	imageDigestSize  = 32
+)
 
 // Verifies a serialized LOTA token against an AIK public key
 //
@@ -180,15 +187,29 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, ErrNoSignature
 	}
 
-	pidListData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.pidListSize)]
-	attestData := tokenData[TokenHeaderSize+int(hdr.pidListSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)]
-	signature := tokenData[TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)+int(hdr.sigSize)]
+	imageListSize := 0
+	if hdr.runtimeProtectVersion == runtimeProtectV2 {
+		imageListSize = int(hdr.protectPIDCount) * imageDigestSize
+	}
+
+	pidListEnd := TokenHeaderSize + int(hdr.pidListSize)
+	imageListEnd := pidListEnd + imageListSize
+	pidListData := tokenData[TokenHeaderSize:pidListEnd]
+	imageListData := tokenData[pidListEnd:imageListEnd]
+	attestData := tokenData[imageListEnd : imageListEnd+int(hdr.attestSize)]
+	signature := tokenData[imageListEnd+int(hdr.attestSize) : imageListEnd+int(hdr.attestSize)+int(hdr.sigSize)]
 
 	protectedPIDs, err := parseProtectedPIDs(pidListData, hdr.protectPIDCount)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadToken, err)
 	}
-	runtimeDigest := computeRuntimeProtectDigest(protectedPIDs)
+
+	var runtimeDigest [32]byte
+	if hdr.runtimeProtectVersion == runtimeProtectV2 {
+		runtimeDigest = computeRuntimeProtectDigestV2(protectedPIDs, imageListData)
+	} else {
+		runtimeDigest = computeRuntimeProtectDigest(protectedPIDs)
+	}
 	if !bytes.Equal(runtimeDigest[:], hdr.runtimeProtectDigest[:]) {
 		return nil, fmt.Errorf("%w: runtime protected PID digest mismatch", ErrNonceFail)
 	}
@@ -281,7 +302,12 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 
 	// try to extract PCR digest from TPMS_ATTEST (best-effort)
 	if hdr.attestSize > 0 {
-		attestData := tokenData[TokenHeaderSize+int(hdr.pidListSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)]
+		imageListSize := 0
+		if hdr.runtimeProtectVersion == runtimeProtectV2 {
+			imageListSize = int(hdr.protectPIDCount) * imageDigestSize
+		}
+		attestStart := TokenHeaderSize + int(hdr.pidListSize) + imageListSize
+		attestData := tokenData[attestStart : attestStart+int(hdr.attestSize)]
 		_, _, pcrDigest, err := parseTPMSAttest(attestData)
 		if err == nil {
 			claims.PCRDigest = pcrDigest
@@ -354,6 +380,81 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	return buf, nil
 }
 
+// SerializeTokenV2 builds a v2 wire token that carries, after the PID list,
+// one 32-byte kernel-anchored image digest per protected PID, and sets
+// runtime_protect_version = 2. runtimeProtectDigest must already fold the
+// PID set and image digests (see computeRuntimeProtectDigestV2).
+func SerializeTokenV2(validUntil uint64, flags uint32, nonce [32]byte,
+	sigAlg, hashAlg uint16, pcrMask uint32, policyDigest [32]byte,
+	runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64,
+	protectedPIDs []uint32, imageDigests [][32]byte,
+	attestData, signature []byte,
+) ([]byte, error) {
+	if len(attestData) > MaxAttestSize {
+		return nil, fmt.Errorf("attest_data too large: %d > %d", len(attestData), MaxAttestSize)
+	}
+	if len(signature) > MaxSigSize {
+		return nil, fmt.Errorf("signature too large: %d > %d", len(signature), MaxSigSize)
+	}
+	if len(protectedPIDs) > MaxProtectPIDs {
+		return nil, fmt.Errorf("protected_pids too large: %d > %d", len(protectedPIDs), MaxProtectPIDs)
+	}
+	if len(imageDigests) != len(protectedPIDs) {
+		return nil, fmt.Errorf("image digest count %d != pid count %d", len(imageDigests), len(protectedPIDs))
+	}
+	if err := validateCanonicalPIDList(protectedPIDs); err != nil {
+		return nil, fmt.Errorf("invalid protected_pids: %w", err)
+	}
+
+	pidListSize := len(protectedPIDs) * 4
+	imageListSize := len(protectedPIDs) * imageDigestSize
+	totalSize := TokenHeaderSize + pidListSize + imageListSize + len(attestData) + len(signature)
+	buf := make([]byte, totalSize)
+
+	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
+	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize))
+	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
+	binary.LittleEndian.PutUint32(buf[16:20], flags)
+	copy(buf[20:52], nonce[:])
+	binary.LittleEndian.PutUint16(buf[52:54], sigAlg)
+	binary.LittleEndian.PutUint16(buf[54:56], hashAlg)
+	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
+	copy(buf[60:92], policyDigest[:])
+	copy(buf[92:124], runtimeProtectDigest[:])
+	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs)))
+	binary.LittleEndian.PutUint64(buf[128:136], runtimeProtectEpoch)
+	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))
+	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData)))
+	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))
+	binary.LittleEndian.PutUint16(buf[142:144], runtimeProtectV2)
+
+	off := TokenHeaderSize
+	for _, pid := range protectedPIDs {
+		binary.LittleEndian.PutUint32(buf[off:off+4], pid)
+		off += 4
+	}
+	for _, d := range imageDigests {
+		copy(buf[off:off+imageDigestSize], d[:])
+		off += imageDigestSize
+	}
+	copy(buf[off:], attestData)
+	off += len(attestData)
+	copy(buf[off:], signature)
+
+	return buf, nil
+}
+
+// ComputeRuntimeProtectDigestV2 exposes the v2 protect-digest fold so callers
+// that build v2 tokens can compute the value to bind under the quote.
+func ComputeRuntimeProtectDigestV2(pids []uint32, imageDigests [][32]byte) [32]byte {
+	imageList := make([]byte, len(imageDigests)*imageDigestSize)
+	for i, d := range imageDigests {
+		copy(imageList[i*imageDigestSize:], d[:])
+	}
+	return computeRuntimeProtectDigestV2(pids, imageList)
+}
+
 // parses the wire-format token header
 func parseWireHeader(data []byte) (*tokenWire, error) {
 	if len(data) < TokenHeaderSize {
@@ -389,9 +490,9 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	hdr.pidListSize = binary.LittleEndian.Uint16(data[136:138])
 	hdr.attestSize = binary.LittleEndian.Uint16(data[138:140])
 	hdr.sigSize = binary.LittleEndian.Uint16(data[140:142])
-	hdr.reserved = binary.LittleEndian.Uint16(data[142:144])
-	if hdr.reserved != 0 {
-		return nil, fmt.Errorf("%w: reserved field must be zero", ErrBadToken)
+	hdr.runtimeProtectVersion = binary.LittleEndian.Uint16(data[142:144])
+	if hdr.runtimeProtectVersion > runtimeProtectV2 {
+		return nil, fmt.Errorf("%w: unsupported runtime protect version", ErrBadToken)
 	}
 	if hdr.protectPIDCount > MaxProtectPIDs {
 		return nil, fmt.Errorf("%w: protect_pid_count too large", ErrBadToken)
@@ -400,8 +501,12 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 		return nil, fmt.Errorf("%w: pid list size mismatch", ErrBadToken)
 	}
 
-	// validate sizes
-	expected := int(TokenHeaderSize) + int(hdr.pidListSize) + int(hdr.attestSize) + int(hdr.sigSize)
+	// validate sizes (the v2 image-digest block sits after the PID list)
+	imageListSize := 0
+	if hdr.runtimeProtectVersion == runtimeProtectV2 {
+		imageListSize = int(hdr.protectPIDCount) * imageDigestSize
+	}
+	expected := int(TokenHeaderSize) + int(hdr.pidListSize) + imageListSize + int(hdr.attestSize) + int(hdr.sigSize)
 	if expected > int(hdr.totalSize) {
 		return nil, fmt.Errorf("%w: data sizes exceed total_size", ErrBadToken)
 	}
@@ -499,6 +604,26 @@ func computeRuntimeProtectDigest(pids []uint32) [32]byte {
 	for _, pid := range pids {
 		binary.LittleEndian.PutUint32(countLE[:], pid)
 		_, _ = h.Write(countLE[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// computeRuntimeProtectDigestV2 mirrors lota_compute_runtime_protect_digest_v2:
+// it folds the protected PID set together with each PID's kernel-anchored
+// runtime image digest. imageList is the concatenation of len(pids) 32-byte
+// digests, one per PID, in the same order.
+func computeRuntimeProtectDigestV2(pids []uint32, imageList []byte) [32]byte {
+	var le [4]byte
+	h := sha256.New()
+	_, _ = h.Write([]byte("lota-runtime-protect-pids:v2\x00"))
+	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
+	_, _ = h.Write(le[:])
+	for i, pid := range pids {
+		binary.LittleEndian.PutUint32(le[:], pid)
+		_, _ = h.Write(le[:])
+		_, _ = h.Write(imageList[i*imageDigestSize : (i+1)*imageDigestSize])
 	}
 	var out [32]byte
 	copy(out[:], h.Sum(nil))

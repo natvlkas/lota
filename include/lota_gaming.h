@@ -132,8 +132,16 @@ struct lota_token {
 	uint8_t runtime_protect_digest[32];
 	uint64_t
 	    runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
+	uint16_t
+	    runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
+
+	/*
+	 * v2 only: per-PID kernel-anchored runtime image digest, parallel to
+	 * protected_pids. NULL when runtime_protect_version < 2.
+	 */
+	uint8_t (*protected_image_digests)[32];
 
 	uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
 	size_t attest_size;   /* Size of attest_data */
