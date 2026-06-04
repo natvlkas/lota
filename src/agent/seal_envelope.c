@@ -35,7 +35,8 @@ int lota_envelope_aead_seal(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 		return -EINVAL;
 	if (aad_len > 0 && !aad)
 		return -EINVAL;
-	if (aad_len > INT_MAX || pt_len > INT_MAX)
+	/* pt_len is bounded above; only the caller-supplied aad_len is open */
+	if (aad_len > INT_MAX)
 		return -EINVAL;
 
 	ctx = EVP_CIPHER_CTX_new();
@@ -84,7 +85,8 @@ int lota_envelope_aead_open(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 		return -EINVAL;
 	if (aad_len > 0 && !aad)
 		return -EINVAL;
-	if (aad_len > INT_MAX || ct_len > INT_MAX)
+	/* ct_len is bounded above; only the caller-supplied aad_len is open */
+	if (aad_len > INT_MAX)
 		return -EINVAL;
 
 	/* EVP_CTRL_GCM_SET_TAG takes a non-const pointer. */

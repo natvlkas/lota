@@ -39,6 +39,15 @@
 #include "quote.h"
 #include "tpm.h"
 
+/*
+ * Single-bank PCR selection bitmap is three bytes (24 bits), so a PCR
+ * index loop bounded by LOTA_PCR_COUNT keeps pcrSelect[i / 8] in range only
+ * while LOTA_PCR_COUNT stays within those 24 bits. Enforce that at compile
+ * time instead of repeating a runtime guard at every loop.
+ */
+_Static_assert(LOTA_PCR_COUNT <= 24,
+	       "PCR selection bitmap holds 24 bits (3 bytes)");
+
 /* Read buffer size for file hashing */
 #define HASH_READ_BUF_SIZE (64 * 1024)
 
@@ -939,7 +948,7 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 	}
 
 	/* map returned digests to PCR indices in increasing order */
-	for (i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+	for (i = 0; i < LOTA_PCR_COUNT; i++) {
 		uint8_t sel =
 		    pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
 		if (!(sel & (1U << (i % 8))))
@@ -1378,7 +1387,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
 	pcr_selection.pcrSelections[0].sizeofSelect = 3;
 
-	for (i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+	for (i = 0; i < LOTA_PCR_COUNT; i++) {
 		if (pcr_mask & (1U << i))
 			pcr_selection.pcrSelections[0].pcrSelect[i / 8] |=
 			    (1 << (i % 8));
@@ -4196,7 +4205,7 @@ static void seal_mask_to_selection(uint32_t pcr_mask, TPML_PCR_SELECTION *sel)
 	sel->count = 1;
 	sel->pcrSelections[0].hash = TPM_HASH_ALG;
 	sel->pcrSelections[0].sizeofSelect = 3;
-	for (uint32_t i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
 		if (pcr_mask & (1U << i))
 			sel->pcrSelections[0].pcrSelect[i / 8] |=
 			    (uint8_t)(1U << (i % 8));
@@ -4331,7 +4340,7 @@ static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
 	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1)
 		goto out;
 
-	for (uint32_t i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
 		uint8_t value[LOTA_HASH_SIZE];
 		if (!(pcr_mask & (1U << i)))
 			continue;
