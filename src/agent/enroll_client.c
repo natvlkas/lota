@@ -112,51 +112,6 @@ static int store_cert(const char *path, const uint8_t *der, size_t len)
 	return write_file_atomic(path, der, len, 0644);
 }
 
-int enroll_state_save(const struct enroll_state *st)
-{
-	struct enroll_state on_disk;
-
-	if (!st)
-		return -EINVAL;
-	on_disk = *st;
-	on_disk.magic = LOTA_ENROLL_STATE_MAGIC;
-	on_disk.version = LOTA_ENROLL_STATE_VERSION;
-	/* endpoint, not a secret, but it pins the CA the host re-enrolls to;
-	 * keep it root-only */
-	return write_file_atomic(LOTA_ENROLL_STATE_PATH, &on_disk,
-				 sizeof(on_disk), 0600);
-}
-
-int enroll_state_load(struct enroll_state *out)
-{
-	struct enroll_state st;
-	ssize_t n;
-	int fd;
-
-	if (!out)
-		return -EINVAL;
-
-	fd = open(LOTA_ENROLL_STATE_PATH, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno; /* -ENOENT when the host has never enrolled */
-
-	n = read(fd, &st, sizeof(st));
-	close(fd);
-	if (n < 0)
-		return -errno;
-	if ((size_t)n != sizeof(st))
-		return -EINVAL;
-	if (st.magic != LOTA_ENROLL_STATE_MAGIC ||
-	    st.version != LOTA_ENROLL_STATE_VERSION)
-		return -EINVAL;
-
-	/* NUL-terminate the string fields defensively before use */
-	st.ca_server[sizeof(st.ca_server) - 1] = '\0';
-	st.ca_cert[sizeof(st.ca_cert) - 1] = '\0';
-	*out = st;
-	return 0;
-}
-
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
 		 const char *out_cert_path)

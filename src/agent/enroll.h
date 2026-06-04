@@ -52,6 +52,10 @@ struct enroll_state {
 int enroll_state_save(const struct enroll_state *st);
 int enroll_state_load(struct enroll_state *out); /* -ENOENT if never enrolled */
 
+/* Path-parameterized variants behind the fixed-path wrappers above. */
+int enroll_state_save_path(const char *path, const struct enroll_state *st);
+int enroll_state_load_path(const char *path, struct enroll_state *out);
+
 struct enroll_challenge {
 	uint16_t status;
 	char session_id[LOTA_ENROLL_MAX_SESSION_ID + 1];
