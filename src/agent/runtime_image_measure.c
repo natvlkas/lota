@@ -6,9 +6,15 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <linux/fsverity.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
 
 #include "runtime_image_measure.h"
 
@@ -136,5 +142,139 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 out:
 	free(line);
 	fclose(f);
+	return ret;
+}
+
+int lota_rt_measure_entry_verity(pid_t pid,
+				 const struct lota_rt_map_entry *entry,
+				 struct lota_verity_digest_key *out)
+{
+	char link[80];
+	struct stat st = {0};
+	int fd;
+	int ret = 0;
+
+	if (!entry || !out)
+		return -EINVAL;
+
+	/*
+	 * kernel resolves this magic symlink to the exact inode backing
+	 * the mapping, so following it cannot be redirected by a path swap
+	 */
+	snprintf(link, sizeof(link), "/proc/%d/map_files/%lx-%lx", (int)pid,
+		 entry->start, entry->end);
+	fd = open(link, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	if (fstat(fd, &st) != 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+
+	/* mapping must still resolve to the inode seen during enumeration */
+	if (!S_ISREG(st.st_mode) || major(st.st_dev) != entry->dev_major ||
+	    minor(st.st_dev) != entry->dev_minor ||
+	    (unsigned long long)st.st_ino != entry->ino) {
+		close(fd);
+		return -ESTALE;
+	}
+
+	{
+		union {
+			uint8_t buf[sizeof(struct fsverity_digest) +
+				    LOTA_VERITY_DIGEST_MAX_SIZE];
+			struct fsverity_digest hdr;
+		} d;
+
+		memset(&d, 0, sizeof(d));
+		d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
+
+		if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+			ret = -errno;
+			close(fd);
+			return ret;
+		}
+		if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+			close(fd);
+			return -EINVAL;
+		}
+
+		memset(out, 0, sizeof(*out));
+		out->len = d.hdr.digest_size;
+		memcpy(out->digest, d.hdr.digest, (size_t)out->len);
+	}
+
+	close(fd);
+	return 0;
+}
+
+/* qsort comparator over the canonical module order */
+static int rt_module_qsort_cmp(const void *a, const void *b)
+{
+	return lota__runtime_image_module_cmp(a, b);
+}
+
+int lota_runtime_measure_pid(pid_t pid,
+			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE])
+{
+	struct lota_rt_map_entry *entries = NULL;
+	struct lota_runtime_image_module *mods = NULL;
+	size_t n = 0;
+	size_t i, unique;
+	int ret;
+
+	if (!out_digest)
+		return -EINVAL;
+
+	entries = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*entries));
+	mods = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*mods));
+	if (!entries || !mods) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = lota_rt_collect_exec_maps(pid, entries,
+					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
+	if (ret != 0)
+		goto out;
+	if (n == 0) {
+		/* live process always maps at least its own executable */
+		ret = -ENOENT;
+		goto out;
+	}
+
+	for (i = 0; i < n; i++) {
+		snprintf(mods[i].soname, sizeof(mods[i].soname), "%s",
+			 entries[i].soname);
+		ret = lota_rt_measure_entry_verity(pid, &entries[i],
+						   &mods[i].verity);
+		if (ret != 0)
+			goto out;
+	}
+
+	qsort(mods, n, sizeof(*mods), rt_module_qsort_cmp);
+
+	/*
+	 * Two distinct inodes can share an soname and content digest (the same
+	 * library mounted at two paths); collapse such exact duplicates so the
+	 * strictly increasing canonical-order contract still holds
+	 */
+	unique = 1;
+	for (i = 1; i < n; i++) {
+		if (lota__runtime_image_module_cmp(&mods[unique - 1],
+						   &mods[i]) != 0)
+			mods[unique++] = mods[i];
+	}
+
+	ret = lota_compute_runtime_image_digest(mods, (uint32_t)unique,
+						out_digest);
+out:
+	free(entries);
+	if (mods)
+		OPENSSL_cleanse(mods,
+				LOTA_RUNTIME_IMAGE_MAX_MODULES * sizeof(*mods));
+	free(mods);
 	return ret;
 }

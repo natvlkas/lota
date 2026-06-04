@@ -60,4 +60,30 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 			      size_t max, size_t *n_out);
 
+/*
+ * Measure the kernel fs-verity digest of one enumerated mapping.
+ *
+ * Opens the exact backing inode through /proc/<pid>/map_files/<range> (a
+ * kernel magic symlink, so no attacker-controlled path is followed),
+ * confirms it still resolves to the dev/inode recorded during enumeration,
+ * and reads the kernel-computed fs-verity measurement. Fails closed if the
+ * object lacks fs-verity. Returns 0 on success, negative errno otherwise.
+ */
+int lota_rt_measure_entry_verity(pid_t pid,
+				 const struct lota_rt_map_entry *entry,
+				 struct lota_verity_digest_key *out);
+
+/*
+ * Compute the kernel-anchored runtime image digest of a live process.
+ *
+ * Enumerates the process's file-backed executable mappings, folds the
+ * kernel fs-verity digest of each backing object into the canonical image
+ * digest, and writes the 32-byte result. Fails closed (negative errno) if
+ * the process has no measurable executable object or if any object lacks
+ * fs-verity, so a missing measurement can never be mistaken for a trusted
+ * one. Returns 0 on success.
+ */
+int lota_runtime_measure_pid(
+    pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE]);
+
 #endif /* LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H */
