@@ -82,4 +82,6 @@ the script does not use `--no-verify-tls`.
   challenge. Run one per fleet (or per region); every verifier that should
   trust it gets `--aik-ca-cert ca.crt`.
 - AIK certificates are short-lived (`--aik-cert-ttl`, default 24h); a host
-  re-runs `lota-agent --enroll` to refresh before expiry.
+  refreshes before expiry. The first enrollment records the CA endpoint, so
+  a refresh is a single `lota-agent --reenroll` with no CA arguments -- the
+  same guided path the agent points operators to after an AIK rotation.

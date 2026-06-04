@@ -150,6 +150,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	if (opts->reenroll_flag)
+		return diagnostic_exit_code(do_reenroll());
+
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {
 			fprintf(stderr,

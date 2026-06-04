@@ -194,6 +194,15 @@ expires, default 24h):
 sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
     --ca-cert tls.crt
 # stores /var/lib/lota/aik_cert.der, sent in every attestation report
+# also records the CA endpoint for guided re-enrollment
+```
+
+The first enrollment records the CA endpoint, so a refresh -- before the
+certificate TTL expires, or after the agent rotates the AIK -- is a single
+guided command with no CA arguments and no manual CA steps:
+
+```sh
+sudo lota-agent --reenroll
 ```
 
 Point every verifier at the CA root:
