@@ -43,6 +43,7 @@ func main() {
 		caKeyPath    = flag.String("ca-key", "", "PEM PKCS#8 CA private key")
 		tlsCertPath  = flag.String("tls-cert", "", "PEM server TLS certificate")
 		tlsKeyPath   = flag.String("tls-key", "", "PEM server TLS private key")
+		ekRootBundle = flag.String("ek-root-bundle", "", "directory holding a pinned multi-vendor EK root bundle (see "+ca.EKBundleManifestName+")")
 		pseudonymKey = flag.String("pseudonym-key", "", "file holding the device-pseudonym secret (>=16 bytes)")
 		aikCertTTL   = flag.Duration("aik-cert-ttl", ca.DefaultAIKCertTTL, "lifetime of issued AIK certificates")
 		sessionTTL   = flag.Duration("session-ttl", enroll.DefaultSessionTTL, "pending enrollment lifetime")
@@ -60,6 +61,7 @@ func main() {
 		tlsCertPath:  *tlsCertPath,
 		tlsKeyPath:   *tlsKeyPath,
 		pseudonymKey: *pseudonymKey,
+		ekRootBundle: *ekRootBundle,
 		ekRoots:      ekRoots,
 		aikCertTTL:   *aikCertTTL,
 		sessionTTL:   *sessionTTL,
@@ -76,6 +78,7 @@ type runConfig struct {
 	tlsCertPath  string
 	tlsKeyPath   string
 	pseudonymKey string
+	ekRootBundle string
 	ekRoots      []string
 	aikCertTTL   time.Duration
 	sessionTTL   time.Duration
@@ -92,8 +95,8 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 			return fmt.Errorf("missing required -%s", name)
 		}
 	}
-	if len(cfg.ekRoots) == 0 {
-		return fmt.Errorf("at least one -ek-root is required")
+	if cfg.ekRootBundle == "" && len(cfg.ekRoots) == 0 {
+		return fmt.Errorf("at least one of -ek-root-bundle or -ek-root is required")
 	}
 
 	caCertPEM, err := os.ReadFile(cfg.caCertPath)
@@ -106,6 +109,15 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	}
 
 	var ekRootPEMs [][]byte
+	// shipped, pin-enforced bundle is the trust baseline
+	// -ek-root adds operator-supplied roots (e.g. a swtpm CA in the demo tor) on top
+	if cfg.ekRootBundle != "" {
+		bundlePEMs, err := ca.LoadEKRootBundle(cfg.ekRootBundle)
+		if err != nil {
+			return fmt.Errorf("load ek-root-bundle %s: %w", cfg.ekRootBundle, err)
+		}
+		ekRootPEMs = append(ekRootPEMs, bundlePEMs...)
+	}
 	for _, path := range cfg.ekRoots {
 		data, err := os.ReadFile(path)
 		if err != nil {

@@ -169,15 +169,23 @@ only to the CA; verifiers never see it.
 
 Stand up the CA with your CA key, the trusted manufacturer EK roots and a
 server TLS keypair (`examples/enrollment/gen-ca.sh` generates the CA
-material):
+material). Production fleets span several TPM manufacturers, so trust a
+pin-enforced multi-vendor bundle with `-ek-root-bundle`; the CA fails
+closed if any pinned root is missing, mismatched, or unpinned (see
+[`configs/ek-roots/README.md`](../configs/ek-roots/README.md) for how to
+materialize one):
 
 ```sh
 lota-attest-ca -listen :8444 \
     -ca-cert ca.crt -ca-key ca.key \
     -tls-cert tls.crt -tls-key tls.key \
     -pseudonym-key pseudonym.key \
-    -ek-root /path/to/tpm-vendor-root.pem
+    -ek-root-bundle /var/lib/lota/ek-roots
 ```
+
+`-ek-root <file>` is still accepted and adds operator-supplied roots (for
+example a swtpm CA in the enrollment demo) on top of the bundle; pass
+either or both.
 
 Enroll the agent once per host (repeat before the certificate TTL
 expires, default 24h):
