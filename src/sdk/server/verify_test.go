@@ -10,6 +10,7 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -597,5 +598,94 @@ func TestParseRSAPublicKey(t *testing.T) {
 	_, err = ParseRSAPublicKey(derPKCS1)
 	if err == nil {
 		t.Fatal("ParseRSAPublicKey should reject PKCS#1 format")
+	}
+}
+
+func TestVerifyToken_V2_Success(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{}
+	rand.Read(nonce[:])
+
+	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	pcrDigest := make([]byte, 32)
+	rand.Read(pcrDigest)
+
+	policyDigest := [32]byte{0x11, 0x22, 0x33}
+	pids := []uint32{4242}
+	images := [][32]byte{{0xAB, 0xCD, 0xEF}}
+	runtimeDigest := ComputeRuntimeProtectDigestV2(pids, images)
+
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
+	signature := signAttest(t, key, attestData)
+
+	tok, err := SerializeTokenV2(validUntil, flags, nonce, TPMAlgRSASSA, 0x000B,
+		pcrMask, policyDigest, runtimeDigest, 0, pids, images, attestData, signature)
+	if err != nil {
+		t.Fatalf("SerializeTokenV2: %v", err)
+	}
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
+	if err != nil {
+		t.Fatalf("VerifyToken (v2): %v", err)
+	}
+	if claims.ProtectPIDCount != 1 {
+		t.Errorf("ProtectPIDCount = %d, want 1", claims.ProtectPIDCount)
+	}
+}
+
+func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{}
+	rand.Read(nonce[:])
+	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	pcrDigest := make([]byte, 32)
+	rand.Read(pcrDigest)
+
+	policyDigest := [32]byte{0x11, 0x22, 0x33}
+	pids := []uint32{4242}
+	images := [][32]byte{{0xAB, 0xCD, 0xEF}}
+	runtimeDigest := ComputeRuntimeProtectDigestV2(pids, images)
+
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
+	signature := signAttest(t, key, attestData)
+
+	tok, err := SerializeTokenV2(validUntil, flags, nonce, TPMAlgRSASSA, 0x000B,
+		pcrMask, policyDigest, runtimeDigest, 0, pids, images, attestData, signature)
+	if err != nil {
+		t.Fatalf("SerializeTokenV2: %v", err)
+	}
+
+	// flip a byte inside the carried image digest (after the 144-byte header
+	// and the 4-byte PID list); the recomputed v2 digest must then diverge
+	// from the quote-bound value
+	tok[TokenHeaderSize+4] ^= 0xFF
+
+	if _, err := VerifyToken(tok, &key.PublicKey, nonce[:]); err == nil {
+		t.Fatalf("VerifyToken accepted a tampered image digest")
+	}
+}
+
+func TestRuntimeProtectDigestV2_KAT(t *testing.T) {
+	// cross-language known-answer vector shared with the C unit test
+	// test_runtime_protect_digest.c.
+	// pids {1,2}, image digests 0xAA*32, 0xBB*32
+	pids := []uint32{1, 2}
+	var a, b [32]byte
+	for i := range a {
+		a[i] = 0xAA
+		b[i] = 0xBB
+	}
+	got := ComputeRuntimeProtectDigestV2(pids, [][32]byte{a, b})
+	want := "8d451c6d0e1ea511dfc0a05c8be37f3502c73ffd7a06736a0affbce3dbd51e9d"
+	if hex.EncodeToString(got[:]) != want {
+		t.Fatalf("v2 KAT = %s, want %s", hex.EncodeToString(got[:]), want)
 	}
 }

@@ -13,6 +13,7 @@
 #include "tpm.h"
 
 #include "agent.h"
+#include "runtime_image_measure.h"
 #include "startup_policy.h"
 
 #include "../../include/lota_runtime_protect_digest.h"
@@ -733,6 +734,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint32_t *runtime_pids = NULL;
 	uint32_t runtime_pid_count = 0;
 	uint16_t pid_list_size = 0;
+	uint8_t (*image_digests)[32] = NULL;
+	size_t image_list_size = 0;
 	size_t total_size;
 	int ret;
 	bool fail = false;
@@ -815,8 +818,42 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		pid_list_size = (uint16_t)pid_bytes;
 	}
 
-	ret = lota_compute_runtime_protect_digest(
-	    runtime_pids, runtime_pid_count, runtime_protect_digest);
+	/*
+	 * Measure each protected process's live code from the kernel side and
+	 * fold the per-PID image digest into the protect digest. The
+	 * measurement is taken by the agent across the IPC boundary, never by
+	 * the measured process, so a process cannot forge its own measurement.
+	 * Fail closed if any protected PID cannot be measured (for example its
+	 * executable objects are not fs-verity protected): a missing
+	 * measurement must never be issued as a trusted one.
+	 */
+	if (runtime_pid_count > 0) {
+		image_list_size = (size_t)runtime_pid_count *
+				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
+		image_digests =
+		    calloc(runtime_pid_count, sizeof(*image_digests));
+		if (!image_digests) {
+			fail = true;
+			fail_code = LOTA_IPC_ERR_INTERNAL;
+			goto out;
+		}
+		for (uint32_t i = 0; i < runtime_pid_count; i++) {
+			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
+						       image_digests[i]);
+			if (ret < 0) {
+				lota_err("runtime image measurement failed for "
+					 "pid=%u: %s",
+					 runtime_pids[i], strerror(-ret));
+				fail = true;
+				fail_code = LOTA_IPC_ERR_INTERNAL;
+				goto out;
+			}
+		}
+	}
+
+	ret = lota_compute_runtime_protect_digest_v2(
+	    runtime_pids, image_digests, runtime_pid_count,
+	    runtime_protect_digest);
 	if (ret < 0) {
 		lota_err("runtime protected PID digest computation failed: %s",
 			 strerror(-ret));
@@ -830,7 +867,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	token->runtime_protect_epoch = g_agent.policy_protect_epoch;
 	token->protect_pid_count = runtime_pid_count;
 	token->pid_list_size = pid_list_size;
-	token->_reserved1 = 0;
+	token->runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V2;
 
 	if (has_req)
 		memcpy(token->client_nonce, req_local.nonce, 32);
@@ -884,7 +921,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	/* check buffer space */
 	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
-		     quote.attest_size + quote.signature_size;
+		     image_list_size + quote.attest_size + quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
 		lota_err("token too large (%zu bytes)", total_size);
 		fail = true;
@@ -913,6 +950,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		memcpy(data_ptr, pid_le, sizeof(pid_le));
 		data_ptr += sizeof(pid_le);
 	}
+	if (image_list_size > 0 && image_digests) {
+		memcpy(data_ptr, image_digests, image_list_size);
+		data_ptr += image_list_size;
+	}
 	memcpy(data_ptr, quote.attest_data, quote.attest_size);
 	data_ptr += quote.attest_size;
 	memcpy(data_ptr, quote.signature, quote.signature_size);
@@ -933,6 +974,10 @@ out:
 		OPENSSL_cleanse(runtime_pids,
 				(size_t)runtime_pid_count * sizeof(uint32_t));
 		free(runtime_pids);
+	}
+	if (image_digests) {
+		OPENSSL_cleanse(image_digests, image_list_size);
+		free(image_digests);
 	}
 	ipc_secure_bzero(&quote, sizeof(quote));
 	if (fail)

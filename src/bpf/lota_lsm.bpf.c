@@ -1376,6 +1376,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 		event->timestamp_ns = bpf_ktime_get_ns();
 		event->event_type =
 		    blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
+		if (is_protected_current_task())
+			event->flags |= LOTA_EVENT_FLAG_PROTECTED;
 		event->tgid = bpf_get_current_pid_tgid() >> 32;
 		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -1527,6 +1529,8 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 			event->timestamp_ns = bpf_ktime_get_ns();
 			event->event_type = blocked ? LOTA_EVENT_MMAP_BLOCKED
 						    : LOTA_EVENT_MMAP_EXEC;
+			if (is_protected_current_task())
+				event->flags |= LOTA_EVENT_FLAG_PROTECTED;
 			event->tgid = bpf_get_current_pid_tgid() >> 32;
 			event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 			event->uid =

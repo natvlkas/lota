@@ -40,19 +40,42 @@ extern "C" {
  *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
- *   142     2     reserved       (must be zero)
+ *   142     2     runtime_protect_version (0/1 = PID-set only,
+ *                                          2 = PID-set + kernel image digests)
  *   ---     ---   --------------------------------
  *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
- *   144+P   var   attest_data[attest_size]
- *   144+P+A var   signature[sig_size]
+ *   144+P   var   protected_image_digests[protect_pid_count][32]
+ *                         (present only when runtime_protect_version == 2)
+ *   144+P+I var   attest_data[attest_size]
+ *   ...     var   signature[sig_size]
  *
- * Maximum token size: 144 + (1024 * 4) + 1024 + 512 = 5776 bytes
+ * In v2 the runtime_protect_digest binds, per PID, the kernel-anchored
+ * runtime image digest carried in protected_image_digests, so the quote
+ * attests what code each protected process is running, not just its
+ * identity. The image digests are authenticated transitively: a verifier
+ * recomputes runtime_protect_digest from the PID list and the carried image
+ * digests and checks it against the quote-bound value.
+ *
+ * Maximum token size: 144 + (1024 * 4) + (1024 * 32) + 1024 + 512
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0003
 #define LOTA_TOKEN_HEADER_SIZE 144
 #define LOTA_TOKEN_MAX_PROTECT_PIDS 1024
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
+#define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
+
+/* runtime_protect_version values */
+#define LOTA_RUNTIME_PROTECT_V1                                                \
+	1			  /* PID set identity only (0 also accepted)   \
+				   */
+#define LOTA_RUNTIME_PROTECT_V2 2 /* PID set + per-PID kernel image digest */
+
+/*
+ * The optional v2 image-digest block is bounded at runtime by the carried
+ * pid count, not folded into this compile-time maximum; an oversized token
+ * is rejected during parsing.
+ */
 #define LOTA_TOKEN_MAX_SIZE                                                    \
 	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + 1024 + 512)
 
@@ -75,10 +98,11 @@ struct lota_token_wire {
 	/* 136   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
 	/* 138   2   attest_size  (TPMS_ATTEST blob size) */
 	/* 140   2   sig_size     (TPM signature size) */
-	/* 142   2   reserved     (must be zero) */
+	/* 142   2   runtime_protect_version (0/1 = PID set, 2 = + image) */
 	/* ---   --- ----------------------------------- */
 	/* 144   var protected_pids[protect_pid_count] */
-	/* 136+P var attest_data[attest_size] */
+	/* 144+P var protected_image_digests[protect_pid_count][32] (v2 only) */
+	/* ...   var attest_data[attest_size] */
 	/* ...   var signature[sig_size] */
 
 	uint32_t magic;
@@ -97,8 +121,11 @@ struct lota_token_wire {
 	uint16_t pid_list_size;
 	uint16_t attest_size;
 	uint16_t sig_size;
-	uint16_t reserved;
-	/* followed by attest_data[attest_size] and signature[sig_size] */
+	uint16_t runtime_protect_version;
+	/*
+	 * followed by protected_pids[], then (v2 only)
+	 * protected_image_digests[], then attest_data[] and signature[]
+	 */
 } __attribute__((packed));
 
 #ifdef __cplusplus

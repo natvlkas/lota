@@ -102,18 +102,16 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Live image measurement must match the registered binary.
-	// Mismatch means the running code pages diverged from the on-disk
-	// executable the server expects.
+	// Producer-reported runtime measurement (hdr.runtimeMeas) is
+	// advisory only: it is computed inside the game process, which an
+	// attacker with code in that process can forge, so it is logged on
+	// mismatch but never gates trust.
+	// Authoritative runtime measurement is taken by the agent from the
+	// kernel side and bound into the TPM-signed token verified below.
 	if hdr.runtimeMeas != game.runtimeMeasure {
-		s.recordVerdictWithLicense(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID)
-		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
-			sessionHex, hdr.sequence, "runtime measurement mismatch")
-		writeJSON(w, http.StatusOK, heartbeatResponse{
-			State: verdictUntrust, Reason: "runtime measurement mismatch",
-		})
-		return
+		logf("session=%s seq=%d advisory=%q",
+			sessionHex, hdr.sequence,
+			"producer runtime measurement differs from registered baseline")
 	}
 
 	if reason, ok := s.checkFreshness(hdr); !ok {

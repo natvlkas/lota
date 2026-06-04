@@ -162,11 +162,14 @@ struct lota_ipc_token {
 	uint64_t runtime_protect_epoch; /* Monotonic runtime protection mutation
 					   id */
 	uint16_t pid_list_size;		/* Bytes for protected_pids[] */
-	uint16_t _reserved1;
+	uint16_t
+	    runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
 
 	/*
 	 * Variable-length data follows:
 	 *   - protected_pids[protect_pid_count] (little-endian uint32)
+	 *   - protected_image_digests[protect_pid_count][32]
+	 *         (present only when runtime_protect_version == 2)
 	 *   - attest_data[attest_size]  (TPMS_ATTEST)
 	 *   - signature[sig_size]       (RSA signature)
 	 */
@@ -177,6 +180,20 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_MAX_SIG 512
 #define LOTA_IPC_TOKEN_MAX_PROTECT_PIDS 1024
 #define LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE (LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * 4)
+#define LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE 32
+
+/* runtime_protect_version values (mirror of lota_token.h) */
+#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only (0 = legacy) */
+#define LOTA_IPC_RUNTIME_PROTECT_V2                                            \
+	2 /* PID set + per-PID kernel image digest */
+
+/*
+ * The v1 maximum already saturates the IPC payload buffer, so the optional
+ * v2 image-digest block is not folded into this compile-time bound. A v2
+ * token whose pid set is large enough that header + pids + image digests +
+ * quote would overflow LOTA_IPC_MAX_PAYLOAD is rejected at runtime
+ * (fail closed); realistic protected sets are far below that point.
+ */
 #define LOTA_IPC_TOKEN_MAX_SIZE                                                \
 	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +       \
 	 LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG)

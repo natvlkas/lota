@@ -61,6 +61,17 @@ enum lota_event_type {
 };
 
 /*
+ * Event flags (struct lota_exec_event.flags).
+ *
+ * PROTECTED marks an executable-mapping event whose task is in the
+ * protected set, so the agent can trigger an event-driven re-measurement
+ * of that process instead of waiting for the next periodic heartbeat.
+ */
+enum lota_event_flag {
+	LOTA_EVENT_FLAG_PROTECTED = (1U << 0),
+};
+
+/*
  * LOTA enforcement modes
  * Controls whether LSM hooks block or just monitor
  */
@@ -124,7 +135,7 @@ struct lota_exec_event {
 		__u32 target_pid; /* ptrace: target process PID */
 		__u32 target_uid; /* setuid: new UID after transition */
 	};
-	__u32 _pad0;			  /* alignment */
+	__u32 flags;			  /* LOTA_EVENT_FLAG_* */
 	__u8 hash[LOTA_HASH_SIZE];	  /* inode metadata fingerprint (BPF) */
 	char comm[LOTA_MAX_COMM_LEN];	  /* Process name */
 	char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
