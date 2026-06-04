@@ -63,6 +63,43 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --dump-config     Print loaded configuration and exit\n");
 	printf("  --test-tpm        Test TPM operations and exit\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
+	printf("  --seal            Seal a secret read from stdin to the PCR "
+	       "state;\n");
+	printf("                    write the sealed blob to stdout and exit. "
+	       "Up to\n");
+	printf("                    128 bytes seal directly; larger payloads "
+	       "(<= 64\n");
+	printf("                    KiB) use a TPM-sealed-KEK + AES-256-GCM "
+	       "envelope\n");
+	printf("  --unseal          Unseal a blob read from stdin; write the "
+	       "secret\n");
+	printf("                    to stdout and exit (fails closed if the "
+	       "boot\n");
+	printf("                    state differs from seal time)\n");
+	printf("  --seal-pcrs MASK  PCR bitmask for --seal (e.g. 0x4001); "
+	       "default\n");
+	printf("                    is PCRs 0-7 plus PCR14\n");
+	printf("  --seal-aik-auth   Seal the AIK userAuth to the current boot "
+	       "state\n");
+	printf("                    (adopt at-rest sealing without "
+	       "re-enrolling)\n");
+	printf("  --reprovision-aik Rotate + re-seal the AIK auth after a "
+	       "boot-state\n");
+	printf(
+	    "                    change (strict recovery); then re-enroll\n");
+	printf("  --seal-persist-primary\n");
+	printf(
+	    "                    Persist the seal storage primary at a handle "
+	    "so\n");
+	printf(
+	    "                    seal/unseal skip per-op CreatePrimary (needs "
+	    "\n");
+	printf(
+	    "                    seal_persistent_primary=true in lota.conf)\n");
+	printf("  --seal-evict-primary\n");
+	printf("                    Remove the persistent seal storage primary "
+	       "(sealed\n");
+	printf("                    blobs stay valid)\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (unsigned tokens, for protocol testing)\n");

@@ -140,6 +140,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
               $(AGENT_DIR)/tpm.c \
+              $(AGENT_DIR)/seal_envelope.c \
               $(AGENT_DIR)/iommu.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
@@ -469,6 +470,10 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_runtime_measure \
+	$(TEST_BIN_DIR)/test_seal_blob \
+	$(TEST_BIN_DIR)/test_seal_envelope \
+	$(TEST_BIN_DIR)/test_seal_tpm \
+	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_SDK_BIN)
@@ -533,15 +538,15 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
@@ -575,6 +580,22 @@ $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat
 
 $(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
@@ -622,6 +643,10 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
 	@$(BUILD_DIR)/test_runtime_measure
+	@$(BUILD_DIR)/test_seal_blob
+	@$(BUILD_DIR)/test_seal_envelope
+	@$(BUILD_DIR)/test_seal_tpm
+	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_symbols
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="

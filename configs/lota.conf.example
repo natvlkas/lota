@@ -64,6 +64,32 @@ attest_interval = 0
 # AIK key lifetime in seconds before rotation (0 = default 30 days)
 aik_ttl = 0
 
+# ---- Sealed AIK auth (at-rest hardening) ---------------------------------
+# Keep a copy of the AIK userAuth sealed to the boot/PCR state (PCRs 0-7 +
+# PCR14) so it is only usable when the host booted as expected. Both keys
+# default to false, which preserves the plaintext-sidecar behaviour exactly.
+#
+#   seal_aik_auth         also write a sealed copy and prefer it on load;
+#                         falls back to the plaintext sidecar if the sealed
+#                         copy is missing or the boot state changed.
+#   seal_aik_auth_strict  store ONLY the sealed copy (no plaintext on disk)
+#                         and never fall back. A firmware/kernel/agent change
+#                         then forces AIK re-provisioning instead of exposing
+#                         the auth.
+# seal_aik_auth = false
+# seal_aik_auth_strict = false
+
+# ---- Seal storage primary (performance) ----------------------------------
+# By default --seal/--unseal derive their storage primary per operation with
+# CreatePrimary: stateless and consuming no persistent slot. A host that
+# seals/unseals frequently can persist the primary once with
+#   lota-agent --seal-persist-primary
+# and set the following to true so the seal path reuses it and skips the
+# per-op CreatePrimary. The derived and persisted primaries are identical,
+# so existing sealed blobs stay valid either way. Remove it with
+#   lota-agent --seal-evict-primary
+# seal_persistent_primary = false
+
 # Optional absolute path to currently booted kernel image.
 # Use this on distros that do not expose /boot/vmlinuz-<release>.
 # kernel_path = /efi/EFI/Linux/linux.efi

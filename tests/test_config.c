@@ -126,6 +126,14 @@ static void test_config_init_defaults(void)
 		FAIL("block_anon_exec != true");
 		return;
 	}
+	if (cfg.seal_aik_auth != false) {
+		FAIL("seal_aik_auth default != false");
+		return;
+	}
+	if (cfg.seal_aik_auth_strict != false) {
+		FAIL("seal_aik_auth_strict default != false");
+		return;
+	}
 	if (cfg.attest_interval != 0) {
 		FAIL("attest_interval != 0");
 		return;
@@ -273,6 +281,8 @@ static void test_config_load_basic_values(void)
 				   "attest_interval = 600\n"
 				   "aik_ttl = 7200\n"
 				   "aik_handle = 0x81010003\n"
+				   "seal_aik_auth = true\n"
+				   "seal_aik_auth_strict = true\n"
 				   "daemon = 1\n"
 				   "log_level = debug\n");
 	config_path("basic.conf", path, sizeof(path));
@@ -314,6 +324,14 @@ static void test_config_load_basic_values(void)
 	}
 	if (cfg.aik_handle != 0x81010003) {
 		FAIL("aik_handle != 0x81010003");
+		return;
+	}
+	if (cfg.seal_aik_auth != true) {
+		FAIL("seal_aik_auth != true");
+		return;
+	}
+	if (cfg.seal_aik_auth_strict != true) {
+		FAIL("seal_aik_auth_strict != true");
 		return;
 	}
 	if (cfg.daemon != true) {

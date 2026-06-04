@@ -66,6 +66,24 @@ struct lota_config {
 	uint32_t aik_handle; /* TPM persistent handle, 0 = default */
 	char kernel_path[PATH_MAX];
 
+	/*
+	 * At-rest hardening for the AIK userAuth. Default off keeps the
+	 * existing plaintext sidecar behaviour byte-for-byte. When on, the
+	 * agent also writes a copy sealed to the boot/PCR state and prefers
+	 * it on load. strict additionally drops the plaintext sidecar so the
+	 * auth only exists sealed -- a boot-state change then forces
+	 * re-provisioning.
+	 */
+	bool seal_aik_auth;
+	bool seal_aik_auth_strict;
+
+	/*
+	 * Reuse a persistent seal storage primary (TPM_SEAL_PRIMARY_HANDLE)
+	 * instead of deriving it per seal/unseal. Default off. Persist/evict
+	 * the object with --seal-persist-primary / --seal-evict-primary.
+	 */
+	bool seal_persistent_primary;
+
 	/* Daemon */
 	bool daemon;
 	char pid_file[PATH_MAX];

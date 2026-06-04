@@ -64,6 +64,15 @@ struct tpm_quote_response;
 #define LOTA_ERR_TPM_AUTH_FAIL 4098
 
 /*
+ * TPM2_RC_POLICY_FAIL / TPM2_RC_PCR_CHANGED. The authorization policy of a
+ * sealed object was not satisfied -- for PCR-bound seals this is the
+ * expected, benign "host is not in the sealed boot state" outcome, not an
+ * I/O fault. Surfaced as a dedicated code so the unseal path can report it
+ * clearly instead of the misleading -EIO.
+ */
+#define LOTA_ERR_TPM_POLICY_FAIL 4099
+
+/*
  * tpm_strerror - error-to-string helper that handles both POSIX
  *                errno values and LOTA-private codes.
  *
@@ -88,6 +97,21 @@ const char *tpm_strerror(int err);
  * (Windows Hello, BitLocker, etc. at 0x81010001).
  */
 #define TPM_AIK_HANDLE 0x81010002
+
+/*
+ * Optional persistent handle for the deterministic seal storage primary.
+ *
+ * By default seal/unseal derive the primary per operation with
+ * Esys_CreatePrimary: stateless, consuming no persistent slot, at the cost
+ * of one key derivation per call. An operator that seals/unseals frequently
+ * can persist the primary once with --seal-persist-primary and set
+ * seal_persistent_primary in lota.conf; the seal path then reuses the
+ * persistent object and skips the per-op CreatePrimary. The derived and the
+ * persisted primaries are byte-identical (same owner hierarchy, same fixed
+ * template, empty unique), so blobs sealed either way stay interchangeable.
+ * 0x81010003 avoids the EK (0x81010001) and the AIK (0x81010002).
+ */
+#define TPM_SEAL_PRIMARY_HANDLE 0x81010003
 
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
@@ -277,6 +301,35 @@ struct tpm_context {
 	 * single agent lifecycle.
 	 */
 	bool boot_commitment_locked;
+
+	/*
+	 * AIK userAuth at-rest hardening (default off). When seal_aik_auth is
+	 * set, the agent keeps a copy of the AIK userAuth sealed to the
+	 * boot/PCR state and prefers it on load. seal_aik_auth_strict drops
+	 * the plaintext sidecar entirely, so the auth exists only sealed.
+	 */
+	bool seal_aik_auth;
+	bool seal_aik_auth_strict;
+
+	/*
+	 * Reuse a persistent seal storage primary at TPM_SEAL_PRIMARY_HANDLE
+	 * instead of deriving it per op (default off). Only consulted by the
+	 * seal/unseal path; if set but no object is persisted, it falls back
+	 * to per-op CreatePrimary. Persist/evict the object with
+	 * --seal-persist-primary / --seal-evict-primary.
+	 */
+	bool seal_persistent_primary;
+
+	/*
+	 * Honor the LOTA_TCTI / LOTA_AIK_META_PATH environment overrides
+	 * (default off). These redirect the TPM endpoint and the AIK
+	 * identity/sealed-auth path; they are developer/demo hooks, not
+	 * production configuration. The persistent daemon leaves this false so
+	 * a stray environment cannot point its root of trust at a different
+	 * TPM or key store; interactive one-shots (--seal, --enroll, --test-*,
+	 * ...) set it so the swtpm demo and tests can redirect both.
+	 */
+	bool allow_env_tpm_overrides;
 };
 
 /*
@@ -762,9 +815,147 @@ bool tpm_is_locked_out(const struct tpm_context *ctx);
  */
 void tpm_reset_lockout_state(struct tpm_context *ctx);
 
+/*
+ * tpm_seal_secret - Seal a secret to the current PCR state.
+ * @ctx:        initialised TPM context
+ * @secret:     plaintext to seal (1..LOTA_SEAL_MAX_SECRET bytes)
+ * @secret_len: length of @secret
+ * @pcr_mask:   PCR selection to bind to; 0 selects LOTA_SEAL_DEFAULT_PCR_MASK
+ * @out:        buffer receiving the sealed blob (see include/lota_seal.h)
+ * @out_cap:    capacity of @out
+ * @out_len:    set to the sealed blob length on success
+ *
+ * Wraps the secret under a deterministic restricted storage primary in the
+ * owner hierarchy with a PolicyPCR authPolicy. The blob only loads on this
+ * TPM and only unseals when the selected PCRs reproduce their seal-time
+ * values. Returns 0 on success, -EINVAL on bad arguments, -ENOSPC if @out
+ * is too small, negative errno / LOTA_ERR_TPM_* on TPM failure.
+ */
+int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
+		    size_t secret_len, uint32_t pcr_mask, uint8_t *out,
+		    size_t out_cap, size_t *out_len);
+
+/*
+ * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret().
+ * @ctx:        initialised TPM context
+ * @blob:       sealed blob
+ * @blob_len:   length of @blob
+ * @out_secret: buffer receiving the plaintext
+ * @out_cap:    capacity of @out_secret
+ * @out_len:    set to the plaintext length on success
+ *
+ * Recreates the storage primary, loads the sealed object, and unseals it
+ * over a primary-salted, response-encrypted policy session that satisfies
+ * the blob's PolicyPCR. Fails (mapped TPM policy error) when the current
+ * PCRs differ from the seal-time state. Returns 0 on success, -EINVAL on a
+ * malformed blob or bad arguments, -ENOSPC if @out_secret is too small,
+ * negative errno / LOTA_ERR_TPM_* on TPM failure.
+ */
+int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
+		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
+		      size_t *out_len);
+
+/*
+ * tpm_seal_secret_envelope - Seal a large payload via a TPM-sealed KEK.
+ * @ctx:         initialised TPM context
+ * @payload:     plaintext to seal (1..LOTA_ENVELOPE_MAX_PAYLOAD bytes)
+ * @payload_len: length of @payload
+ * @pcr_mask:    PCR selection to bind to; 0 selects LOTA_SEAL_DEFAULT_PCR_MASK
+ * @out:         buffer receiving the envelope blob (see
+ * include/lota_envelope.h)
+ * @out_cap:     capacity of @out
+ * @out_len:     set to the envelope blob length on success
+ *
+ * For payloads beyond the direct-seal cap: a fresh random AES-256 KEK is
+ * sealed to the PCR state with tpm_seal_secret(), and the payload is
+ * encrypted under the KEK with AES-256-GCM (the header + sealed-KEK blob
+ * authenticated as AAD). The TPM still gates release of the KEK, so the
+ * envelope inherits the same boot/PCR binding.
+ * Returns 0 on success, EINVAL on bad arguments, -ENOSPC if @out is too small,
+ * negative errno / LOTA_ERR_TPM_* on TPM or crypto failure.
+ */
+int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
+			     size_t payload_len, uint32_t pcr_mask,
+			     uint8_t *out, size_t out_cap, size_t *out_len);
+
+/*
+ * tpm_unseal_secret_envelope - Recover a payload sealed by
+ * tpm_seal_secret_envelope().
+ * @ctx:      initialised TPM context
+ * @blob:     envelope blob
+ * @blob_len: length of @blob
+ * @out:      buffer receiving the plaintext
+ * @out_cap:  capacity of @out
+ * @out_len:  set to the plaintext length on success
+ *
+ * Unseals the embedded KEK over the PolicyPCR session, then AES-256-GCM
+ * decrypts and authenticates the payload. Fails closed when the host is not
+ * in the sealed PCR state (KEK unseal denied) or when the payload/KEK was
+ * tampered (-EBADMSG).
+ * Returns 0 on success, -EINVAL on a malformed blob or bad arguments,
+ * -ENOSPC if @out is too small, negative errno / LOTA_ERR_TPM_* on failure.
+ */
+int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
+			       size_t blob_len, uint8_t *out, size_t out_cap,
+			       size_t *out_len);
+
+/*
+ * tpm_seal_persist_primary - Persist the seal storage primary at
+ * TPM_SEAL_PRIMARY_HANDLE so subsequent seal/unseal can skip the per-op
+ * CreatePrimary. Idempotent: if an object is already persisted there it
+ * returns 0. Returns 0 on success (1 reported separately via @already if
+ * non-NULL), negative errno / LOTA_ERR_TPM_* on failure. Root-only operator
+ * tool.
+ */
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
+
+/*
+ * tpm_seal_evict_primary - Remove the persistent seal storage primary at
+ * TPM_SEAL_PRIMARY_HANDLE. Returns 0 on success, -ENOENT if nothing was
+ * persisted there, negative errno / LOTA_ERR_TPM_* on failure. Sealed blobs
+ * remain valid afterwards: the per-op derived primary is byte-identical.
+ */
+int tpm_seal_evict_primary(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_reseal_auth - re-seal the current AIK userAuth to the current PCR
+ * state so an already-enrolled host can adopt at-rest sealing without
+ * re-enrolling. Loads the auth if needed, writes aik_auth.sealed, and (in
+ * strict mode) drops the plaintext sidecar.
+ * Returns 0 / negative errno.
+ */
+int tpm_aik_reseal_auth(struct tpm_context *ctx);
+
+/*
+ * tpm_reprovision_aik - rotate the AIK and its userAuth, sealing the new
+ * auth to the current PCR state. Recovery for strict at-rest sealing after
+ * a boot-state change made the sealed auth unrecoverable. The previous AIK
+ * certificate becomes stale, so the caller must re-enroll.
+ * Returns 0 / negative errno.
+ */
+int tpm_reprovision_aik(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_strict_blocks_reprovision - pure recovery decision. Returns 1
+ * when a strict-mode AIK-auth load failure must NOT trigger a silent AIK
+ * rotation (i.e. strict and the failure was a PolicyPCR mismatch), else 0.
+ */
+int tpm_aik_strict_blocks_reprovision(int strict, int load_rc);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
+
+/* Pure helper: expose the PCR-mask -> selection bitmap for unit tests. */
+int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
+				   uint32_t *out_count);
+
+/* AIK-auth at-rest hardening test hooks (dispatch + path derivation). */
+int tpm_test_aik_save_auth(struct tpm_context *ctx,
+			   const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+int tpm_test_aik_load_auth(struct tpm_context *ctx);
+int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len);
+int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);

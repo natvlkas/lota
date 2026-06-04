@@ -82,6 +82,15 @@ static int diagnostic_exit_code(int ret)
 
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 {
+	/*
+	 * Interactive one-shots (seal/unseal, enroll, attest, test servers,
+	 * ...) may redirect the TPM endpoint and AIK key store via
+	 * LOTA_TCTI / LOTA_AIK_META_PATH for the swtpm demo and tests. The
+	 * persistent daemon must not: it is reached only when this function
+	 * falls through to "return -1" below, where the flag is cleared again.
+	 */
+	g_agent.tpm_ctx.allow_env_tpm_overrides = true;
+
 	if (opts->shutdown_flag) {
 		int sret = ipc_request_shutdown();
 		if (sret < 0) {
@@ -110,6 +119,24 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 
 	if (opts->test_tpm_flag)
 		return diagnostic_exit_code(test_tpm());
+
+	if (opts->seal_flag)
+		return diagnostic_exit_code(do_seal(opts->seal_pcrs));
+
+	if (opts->unseal_flag)
+		return diagnostic_exit_code(do_unseal());
+
+	if (opts->seal_aik_auth_migrate_flag)
+		return diagnostic_exit_code(do_seal_aik_auth());
+
+	if (opts->reprovision_aik_flag)
+		return diagnostic_exit_code(do_reprovision_aik());
+
+	if (opts->seal_persist_primary_flag)
+		return diagnostic_exit_code(do_seal_persist_primary());
+
+	if (opts->seal_evict_primary_flag)
+		return diagnostic_exit_code(do_seal_evict_primary());
 
 	if (opts->test_iommu_flag)
 		return diagnostic_exit_code(test_iommu());
@@ -170,5 +197,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			      opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
+	/* No one-shot matched: the caller will start the daemon.
+	 * Clear the override permission so the daemon ignores
+	 * LOTA_TCTI / LOTA_AIK_META_PATH. */
+	g_agent.tpm_ctx.allow_env_tpm_overrides = false;
 	return -1;
 }
