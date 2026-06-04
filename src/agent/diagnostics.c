@@ -123,6 +123,12 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->reprovision_aik_flag)
 		return diagnostic_exit_code(do_reprovision_aik());
 
+	if (opts->seal_persist_primary_flag)
+		return diagnostic_exit_code(do_seal_persist_primary());
+
+	if (opts->seal_evict_primary_flag)
+		return diagnostic_exit_code(do_seal_evict_primary());
+
 	if (opts->test_iommu_flag)
 		return diagnostic_exit_code(test_iommu());
 

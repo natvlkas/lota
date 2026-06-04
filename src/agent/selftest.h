@@ -25,4 +25,12 @@ int do_unseal(void);
 int do_seal_aik_auth(void);
 int do_reprovision_aik(void);
 
+/*
+ * Seal storage-primary persistence one-shots (root): persist the
+ * deterministic seal primary at its handle to skip per-op CreatePrimary, or
+ * evict it. Sealed blobs stay valid across both.
+ */
+int do_seal_persist_primary(void);
+int do_seal_evict_primary(void);
+
 #endif /* LOTA_SELFTEST_H */

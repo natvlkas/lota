@@ -87,6 +87,19 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "boot-state\n");
 	printf(
 	    "                    change (strict recovery); then re-enroll\n");
+	printf("  --seal-persist-primary\n");
+	printf(
+	    "                    Persist the seal storage primary at a handle "
+	    "so\n");
+	printf(
+	    "                    seal/unseal skip per-op CreatePrimary (needs "
+	    "\n");
+	printf(
+	    "                    seal_persistent_primary=true in lota.conf)\n");
+	printf("  --seal-evict-primary\n");
+	printf("                    Remove the persistent seal storage primary "
+	       "(sealed\n");
+	printf("                    blobs stay valid)\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (unsigned tokens, for protocol testing)\n");

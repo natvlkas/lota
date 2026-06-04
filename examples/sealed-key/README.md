@@ -74,6 +74,32 @@ can move the state without a reboot; production seals to the default
 0–7 + PCR14 set, where the equivalent "state change" is a firmware,
 kernel, or agent update.
 
+## Performance: persisting the storage primary
+
+By default each `--seal` / `--unseal` derives its TPM storage primary on the
+fly with `CreatePrimary`. That is stateless and consumes no persistent slot,
+but it costs one key derivation per call. A host that seals or unseals often
+can persist the primary once:
+
+```sh
+sudo lota-agent --seal-persist-primary
+```
+
+and set `seal_persistent_primary = true` in `lota.conf`. The seal path then
+reuses the persistent object at handle `0x81010003` and skips the per-op
+`CreatePrimary`. The derived and the persisted primaries are byte-identical
+(same owner hierarchy, same fixed template), so **blobs sealed either way
+stay interchangeable** - persisting or evicting never invalidates existing
+sealed data. Remove it with:
+
+```sh
+sudo lota-agent --seal-evict-primary
+```
+
+If you leave `seal_persistent_primary = false` (the default), seal/unseal
+ignore any persisted object and keep deriving per op — the intended
+behaviour for hosts that seal rarely.
+
 ## Hardening the agent's AIK auth
 
 The same primitive backs an opt-in at-rest hardening of the agent's own

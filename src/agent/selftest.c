@@ -580,3 +580,77 @@ int do_reprovision_aik(void)
 		"  lota-agent --enroll --ca-server <host> ...\n");
 	return 0;
 }
+
+/*
+ * do_seal_persist_primary - persist the seal storage primary at its
+ * persistent handle so subsequent seal/unseal skip the per-op CreatePrimary.
+ * Idempotent. Requires seal_persistent_primary=true in lota.conf for the
+ * seal/unseal path to actually reuse it.
+ */
+int do_seal_persist_primary(void)
+{
+	bool already = false;
+	int ret;
+
+	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	ret = tpm_seal_persist_primary(&g_agent.tpm_ctx, &already);
+	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Could not persist the seal primary: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	if (already)
+		fprintf(stderr, "Seal storage primary already persisted.\n");
+	else
+		fprintf(stderr, "Seal storage primary persisted.\n");
+	if (!g_agent.tpm_ctx.seal_persistent_primary)
+		fprintf(stderr,
+			"Set seal_persistent_primary=true in lota.conf for "
+			"seal/unseal to reuse it.\n");
+	return 0;
+}
+
+/*
+ * do_seal_evict_primary - remove the persistent seal storage primary. Sealed
+ * blobs remain valid: the per-op derived primary is byte-identical.
+ */
+int do_seal_evict_primary(void)
+{
+	int ret;
+
+	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	ret = tpm_seal_evict_primary(&g_agent.tpm_ctx);
+	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret == -ENOENT) {
+		fprintf(stderr,
+			"No persistent seal storage primary to evict.\n");
+		return 1;
+	}
+	if (ret < 0) {
+		fprintf(stderr, "Could not evict the seal primary: %s\n",
+			tpm_strerror(ret));
+		return 1;
+	}
+
+	fprintf(stderr, "Seal storage primary evicted (sealed blobs stay "
+			"valid).\n");
+	return 0;
+}

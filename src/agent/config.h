@@ -77,6 +77,13 @@ struct lota_config {
 	bool seal_aik_auth;
 	bool seal_aik_auth_strict;
 
+	/*
+	 * Reuse a persistent seal storage primary (TPM_SEAL_PRIMARY_HANDLE)
+	 * instead of deriving it per seal/unseal. Default off. Persist/evict
+	 * the object with --seal-persist-primary / --seal-evict-primary.
+	 */
+	bool seal_persistent_primary;
+
 	/* Daemon */
 	bool daemon;
 	char pid_file[PATH_MAX];

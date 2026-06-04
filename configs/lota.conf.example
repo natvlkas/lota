@@ -79,6 +79,17 @@ aik_ttl = 0
 # seal_aik_auth = false
 # seal_aik_auth_strict = false
 
+# ---- Seal storage primary (performance) ----------------------------------
+# By default --seal/--unseal derive their storage primary per operation with
+# CreatePrimary: stateless and consuming no persistent slot. A host that
+# seals/unseals frequently can persist the primary once with
+#   lota-agent --seal-persist-primary
+# and set the following to true so the seal path reuses it and skips the
+# per-op CreatePrimary. The derived and persisted primaries are identical,
+# so existing sealed blobs stay valid either way. Remove it with
+#   lota-agent --seal-evict-primary
+# seal_persistent_primary = false
+
 # Optional absolute path to currently booted kernel image.
 # Use this on distros that do not expose /boot/vmlinuz-<release>.
 # kernel_path = /efi/EFI/Linux/linux.efi

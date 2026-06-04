@@ -216,6 +216,7 @@ void config_init(struct lota_config *cfg)
 	cfg->block_anon_exec = true;
 	cfg->seal_aik_auth = false;
 	cfg->seal_aik_auth_strict = false;
+	cfg->seal_persistent_primary = false;
 
 	cfg->attest_interval = 0;
 	cfg->aik_ttl = 0;
@@ -405,6 +406,19 @@ static int apply_key(struct lota_config *cfg, const char *key,
 			return -1;
 		}
 		cfg->seal_aik_auth_strict = parsed;
+		return 0;
+	}
+	if (strcmp(key, "seal_persistent_primary") == 0 ||
+	    strcmp(key, "seal-persistent-primary") == 0) {
+		bool parsed;
+		if (parse_bool_strict(value, &parsed) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid seal_persistent_primary '%s' "
+				"(use true/false)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		cfg->seal_persistent_primary = parsed;
 		return 0;
 	}
 

@@ -4083,7 +4083,8 @@ static void seal_primary_template(TPM2B_PUBLIC *pub)
 	pub->publicArea.unique.rsa.size = 0;
 }
 
-static int seal_create_primary(struct tpm_context *ctx, ESYS_TR *out_handle)
+static int seal_create_primary_derive(struct tpm_context *ctx,
+				      ESYS_TR *out_handle)
 {
 	TPM2B_PUBLIC in_public;
 	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
@@ -4121,6 +4122,71 @@ static int seal_create_primary(struct tpm_context *ctx, ESYS_TR *out_handle)
 	Esys_Free(creation_hash);
 	Esys_Free(creation_ticket);
 	return ret;
+}
+
+/*
+ * Resolve the persistent seal storage primary at TPM_SEAL_PRIMARY_HANDLE.
+ * Returns 1 and sets *out_handle when present, 0 when absent, negative errno
+ * on error.
+ */
+static int seal_primary_lookup_persistent(struct tpm_context *ctx,
+					  ESYS_TR *out_handle)
+{
+	ESYS_TR handle = ESYS_TR_NONE;
+	TSS2_RC rc;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TR_FromTPMPublic(
+			   ctx->esys_ctx, TPM_SEAL_PRIMARY_HANDLE, ESYS_TR_NONE,
+			   ESYS_TR_NONE, ESYS_TR_NONE, &handle));
+	if (rc == TSS2_RC_SUCCESS) {
+		*out_handle = handle;
+		return 1;
+	}
+	/* TPM2_RC_HANDLE means nothing is persisted at that handle */
+	if (tpm_rc_layer_is_tpm(rc) && tpm_rc_decode(rc) == TPM2_RC_HANDLE)
+		return 0;
+	return tss2_rc_to_errno(rc);
+}
+
+/*
+ * Acquire a seal storage primary. When the operator opted into a persistent
+ * primary and one exists, reuse it (no CreatePrimary); otherwise derive it
+ * per op. *persistent records which, so the caller releases it correctly.
+ */
+static int seal_acquire_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
+				bool *persistent)
+{
+	*persistent = false;
+
+	if (ctx->seal_persistent_primary) {
+		int ret = seal_primary_lookup_persistent(ctx, out_handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1) {
+			*persistent = true;
+			return 0;
+		}
+		/* configured but not yet persisted: fall back to deriving */
+	}
+	return seal_create_primary_derive(ctx, out_handle);
+}
+
+/*
+ * Release a primary obtained from seal_acquire_primary().
+ * A derived (transient) primary is flushed; a persistent one is only detached
+ * from the ESYS context (Esys_TR_Close) -- flushing a persistent object is an
+ * error and would not evict it anyway.
+ */
+static void seal_release_primary(struct tpm_context *ctx, ESYS_TR handle,
+				 bool persistent)
+{
+	if (handle == ESYS_TR_NONE)
+		return;
+	if (persistent)
+		Esys_TR_Close(ctx->esys_ctx, &handle);
+	else
+		Esys_FlushContext(ctx->esys_ctx, handle);
 }
 
 /* Build a single-bank SHA-256 PCR selection from a LOTA PCR mask. */
@@ -4293,6 +4359,7 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 		    size_t out_cap, size_t *out_len)
 {
 	ESYS_TR primary = ESYS_TR_NONE;
+	bool primary_persistent = false;
 	TPM2B_PUBLIC in_public = {.size = 0};
 	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
 	TPM2B_DATA outside_info = {.size = 0};
@@ -4323,7 +4390,7 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 
 	seal_mask_to_selection(pcr_mask, &sel);
 
-	ret = seal_create_primary(ctx, &primary);
+	ret = seal_acquire_primary(ctx, &primary, &primary_persistent);
 	if (ret < 0)
 		return ret;
 
@@ -4418,8 +4485,7 @@ out:
 	Esys_Free(creation_data);
 	Esys_Free(creation_hash);
 	Esys_Free(creation_ticket);
-	if (primary != ESYS_TR_NONE)
-		Esys_FlushContext(ctx->esys_ctx, primary);
+	seal_release_primary(ctx, primary, primary_persistent);
 	return ret;
 }
 
@@ -4433,6 +4499,7 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	TPM2B_PRIVATE sealed_private = {.size = 0};
 	TPML_PCR_SELECTION sel;
 	ESYS_TR primary = ESYS_TR_NONE;
+	bool primary_persistent = false;
 	ESYS_TR sealed = ESYS_TR_NONE;
 	ESYS_TR session = ESYS_TR_NONE;
 	TPM2B_SENSITIVE_DATA *data = NULL;
@@ -4465,7 +4532,7 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 
 	seal_mask_to_selection(meta.pcr_mask, &sel);
 
-	ret = seal_create_primary(ctx, &primary);
+	ret = seal_acquire_primary(ctx, &primary, &primary_persistent);
 	if (ret < 0)
 		return ret;
 
@@ -4541,8 +4608,7 @@ out:
 		Esys_FlushContext(ctx->esys_ctx, session);
 	if (sealed != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, sealed);
-	if (primary != ESYS_TR_NONE)
-		Esys_FlushContext(ctx->esys_ctx, primary);
+	seal_release_primary(ctx, primary, primary_persistent);
 	return ret;
 }
 
@@ -4676,6 +4742,76 @@ int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 out_kek:
 	secure_bzero(kek, sizeof(kek));
 	return ret;
+}
+
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
+{
+	ESYS_TR primary = ESYS_TR_NONE;
+	ESYS_TR existing = ESYS_TR_NONE;
+	ESYS_TR persistent = ESYS_TR_NONE;
+	TSS2_RC rc;
+	int ret;
+
+	if (already)
+		*already = false;
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized)
+		return -EINVAL;
+
+	/* idempotent: leave an already-persisted object in place */
+	ret = seal_primary_lookup_persistent(ctx, &existing);
+	if (ret < 0)
+		return ret;
+	if (ret == 1) {
+		Esys_TR_Close(ctx->esys_ctx, &existing);
+		if (already)
+			*already = true;
+		return 0;
+	}
+
+	ret = seal_create_primary_derive(ctx, &primary);
+	if (ret < 0)
+		return ret;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					 primary, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE,
+					 TPM_SEAL_PRIMARY_HANDLE, &persistent));
+	Esys_FlushContext(ctx->esys_ctx, primary);
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	return 0;
+}
+
+int tpm_seal_evict_primary(struct tpm_context *ctx)
+{
+	ESYS_TR existing = ESYS_TR_NONE;
+	ESYS_TR persistent = ESYS_TR_NONE;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized)
+		return -EINVAL;
+
+	ret = seal_primary_lookup_persistent(ctx, &existing);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					 existing, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE,
+					 TPM_SEAL_PRIMARY_HANDLE, &persistent));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	/* eviction returns ESYS_TR_NONE; close detaches the ESYS metadata */
+	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	return 0;
 }
 
 #ifdef LOTA_TPM_TESTING

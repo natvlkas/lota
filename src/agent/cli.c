@@ -149,6 +149,7 @@ static int load_config_into_options(struct cli_options *opts,
 	g_agent.tpm_ctx.aik_handle = cfg->aik_handle;
 	g_agent.tpm_ctx.seal_aik_auth = cfg->seal_aik_auth;
 	g_agent.tpm_ctx.seal_aik_auth_strict = cfg->seal_aik_auth_strict;
+	g_agent.tpm_ctx.seal_persistent_primary = cfg->seal_persistent_primary;
 	agent_globals_unlock(&g_agent);
 
 	int kret = tpm_set_kernel_path(
@@ -224,6 +225,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"seal-pcrs", required_argument, 0, 1009},
 	    {"seal-aik-auth", no_argument, 0, 1010},
 	    {"reprovision-aik", no_argument, 0, 1011},
+	    {"seal-persist-primary", no_argument, 0, 1012},
+	    {"seal-evict-primary", no_argument, 0, 1013},
 	    {"ca-server", required_argument, 0, 1005},
 	    {"ca-port", required_argument, 0, 1006},
 	    {"server", required_argument, 0, 's'},
@@ -359,6 +362,12 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1011:
 			opts->reprovision_aik_flag = 1;
+			break;
+		case 1012:
+			opts->seal_persist_primary_flag = 1;
+			break;
+		case 1013:
+			opts->seal_evict_primary_flag = 1;
 			break;
 		case 1005:
 			opts->ca_server = optarg;

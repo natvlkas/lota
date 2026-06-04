@@ -98,6 +98,21 @@ const char *tpm_strerror(int err);
  */
 #define TPM_AIK_HANDLE 0x81010002
 
+/*
+ * Optional persistent handle for the deterministic seal storage primary.
+ *
+ * By default seal/unseal derive the primary per operation with
+ * Esys_CreatePrimary: stateless, consuming no persistent slot, at the cost
+ * of one key derivation per call. An operator that seals/unseals frequently
+ * can persist the primary once with --seal-persist-primary and set
+ * seal_persistent_primary in lota.conf; the seal path then reuses the
+ * persistent object and skips the per-op CreatePrimary. The derived and the
+ * persisted primaries are byte-identical (same owner hierarchy, same fixed
+ * template, empty unique), so blobs sealed either way stay interchangeable.
+ * 0x81010003 avoids the EK (0x81010001) and the AIK (0x81010002).
+ */
+#define TPM_SEAL_PRIMARY_HANDLE 0x81010003
+
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
 
@@ -295,6 +310,15 @@ struct tpm_context {
 	 */
 	bool seal_aik_auth;
 	bool seal_aik_auth_strict;
+
+	/*
+	 * Reuse a persistent seal storage primary at TPM_SEAL_PRIMARY_HANDLE
+	 * instead of deriving it per op (default off). Only consulted by the
+	 * seal/unseal path; if set but no object is persisted, it falls back
+	 * to per-op CreatePrimary. Persist/evict the object with
+	 * --seal-persist-primary / --seal-evict-primary.
+	 */
+	bool seal_persistent_primary;
 };
 
 /*
@@ -863,6 +887,24 @@ int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
 int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 			       size_t blob_len, uint8_t *out, size_t out_cap,
 			       size_t *out_len);
+
+/*
+ * tpm_seal_persist_primary - Persist the seal storage primary at
+ * TPM_SEAL_PRIMARY_HANDLE so subsequent seal/unseal can skip the per-op
+ * CreatePrimary. Idempotent: if an object is already persisted there it
+ * returns 0. Returns 0 on success (1 reported separately via @already if
+ * non-NULL), negative errno / LOTA_ERR_TPM_* on failure. Root-only operator
+ * tool.
+ */
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
+
+/*
+ * tpm_seal_evict_primary - Remove the persistent seal storage primary at
+ * TPM_SEAL_PRIMARY_HANDLE. Returns 0 on success, -ENOENT if nothing was
+ * persisted there, negative errno / LOTA_ERR_TPM_* on failure. Sealed blobs
+ * remain valid afterwards: the per-op derived primary is byte-identical.
+ */
+int tpm_seal_evict_primary(struct tpm_context *ctx);
 
 /*
  * tpm_aik_reseal_auth - re-seal the current AIK userAuth to the current PCR
