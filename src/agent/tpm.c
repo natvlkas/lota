@@ -710,7 +710,14 @@ int tpm_init(struct tpm_context *ctx)
 	ctx->self_hash_ready = false;
 	ctx->boot_commitment_locked = false;
 
-	aik_meta_path = getenv("LOTA_AIK_META_PATH");
+	/*
+	 * LOTA_AIK_META_PATH / LOTA_TCTI are developer/demo overrides only;
+	 * the persistent daemon ignores them (allow_env_tpm_overrides stays
+	 * false) so a stray environment cannot redirect the AIK key store or
+	 * the TPM endpoint. Interactive one-shots opt in.
+	 */
+	aik_meta_path =
+	    ctx->allow_env_tpm_overrides ? getenv("LOTA_AIK_META_PATH") : NULL;
 	if (aik_meta_path && aik_meta_path[0]) {
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
@@ -720,7 +727,7 @@ int tpm_init(struct tpm_context *ctx)
 			return -ENAMETOOLONG;
 	}
 
-	tcti_conf = getenv("LOTA_TCTI");
+	tcti_conf = ctx->allow_env_tpm_overrides ? getenv("LOTA_TCTI") : NULL;
 	if (tcti_conf && tcti_conf[0]) {
 		rc = Tss2_TctiLdr_Initialize(tcti_conf, &ctx->tcti_ctx);
 		if (rc != TSS2_RC_SUCCESS)

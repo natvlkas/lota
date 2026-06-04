@@ -128,6 +128,13 @@ not a promise that libtss2 itself reads `LOTA_TCTI`. AIK metadata
 and AIK auth are redirected with `LOTA_AIK_META_PATH` into the same
 temporary demo directory.
 
+`LOTA_TCTI` and `LOTA_AIK_META_PATH` are developer/demo hooks only.
+They are honored on the agent's interactive one-shot commands (the
+demo drives `--test-signed`), but the **persistent daemon ignores
+them**, so a stray environment cannot point the production root of
+trust at a different TPM or AIK key store. Production selects the TPM
+through `/dev/tpmrm0` and the compiled-in AIK paths.
+
 ## setup.sh reference
 
 | Flag                  | Meaning                                       |

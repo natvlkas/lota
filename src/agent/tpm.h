@@ -319,6 +319,17 @@ struct tpm_context {
 	 * --seal-persist-primary / --seal-evict-primary.
 	 */
 	bool seal_persistent_primary;
+
+	/*
+	 * Honor the LOTA_TCTI / LOTA_AIK_META_PATH environment overrides
+	 * (default off). These redirect the TPM endpoint and the AIK
+	 * identity/sealed-auth path; they are developer/demo hooks, not
+	 * production configuration. The persistent daemon leaves this false so
+	 * a stray environment cannot point its root of trust at a different
+	 * TPM or key store; interactive one-shots (--seal, --enroll, --test-*,
+	 * ...) set it so the swtpm demo and tests can redirect both.
+	 */
+	bool allow_env_tpm_overrides;
 };
 
 /*

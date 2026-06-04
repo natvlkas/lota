@@ -82,6 +82,15 @@ static int diagnostic_exit_code(int ret)
 
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 {
+	/*
+	 * Interactive one-shots (seal/unseal, enroll, attest, test servers,
+	 * ...) may redirect the TPM endpoint and AIK key store via
+	 * LOTA_TCTI / LOTA_AIK_META_PATH for the swtpm demo and tests. The
+	 * persistent daemon must not: it is reached only when this function
+	 * falls through to "return -1" below, where the flag is cleared again.
+	 */
+	g_agent.tpm_ctx.allow_env_tpm_overrides = true;
+
 	if (opts->shutdown_flag) {
 		int sret = ipc_request_shutdown();
 		if (sret < 0) {
@@ -188,5 +197,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			      opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
+	/* No one-shot matched: the caller will start the daemon.
+	 * Clear the override permission so the daemon ignores
+	 * LOTA_TCTI / LOTA_AIK_META_PATH. */
+	g_agent.tpm_ctx.allow_env_tpm_overrides = false;
 	return -1;
 }
