@@ -136,9 +136,14 @@ struct lota_ac_config {
  *   74      4      domain_version  LOTA_AC_DOMAIN_VERSION_*; selects the
  *                                  game-binding/heartbeat domain pair and
  *                                  is itself bound into the heartbeat nonce
- *   78      32     runtime_measure live re-measurement of the executable
- *                                  image; nonce-bound and checked against
- *                                  the verifier's expected value
+ *   78      32     runtime_measure advisory producer-side re-measurement of
+ *                                  the executable image. Computed inside the
+ *                                  game process and therefore forgeable, so
+ *                                  it is nonce-bound for tamper-evidence but
+ *                                  is NOT a trust signal. The authoritative
+ *                                  runtime measurement is taken by the agent
+ *                                  from the kernel side and bound into the
+ *                                  embedded token's runtime_protect_digest.
  *   110     var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {

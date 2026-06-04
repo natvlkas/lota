@@ -235,21 +235,25 @@ func TestHeartbeat_UntrustedOnUnknownGameHash(t *testing.T) {
 	}
 }
 
-func TestHeartbeat_UntrustedOnRuntimeMeasureMismatch(t *testing.T) {
+func TestHeartbeat_ProducerRuntimeMeasureIsAdvisory(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	s := newTestServer(t, key)
 
-	// heartbeat whose runtime measurement differs from the registered
-	// binary: the live code pages no longer match
+	// A producer is free to report any runtime measurement and sign it
+	// into the heartbeat nonce: the value is computed inside the game
+	// process and cannot be trusted. Here the producer reports a measure
+	// that does not match the registered baseline yet remains internally
+	// consistent with its signed token. The server must not treat this
+	// as a trust signal (the authoritative measurement is the
+	// kernel-anchored one bound in the token); the heartbeat stays trusted.
 	pkt := newSignedHeartbeat(t, key, func(h *lachHeader) {
 		for i := range h.runtimeMeas {
 			h.runtimeMeas[i] ^= 0xFF
 		}
 	})
 	resp := decodeVerdict(t, postHeartbeat(s, pkt))
-	if resp.State != verdictUntrust ||
-		resp.Reason != "runtime measurement mismatch" {
-		t.Fatalf("state=%s reason=%q", resp.State, resp.Reason)
+	if resp.State != verdictTrusted {
+		t.Fatalf("state=%s reason=%q, want trusted", resp.State, resp.Reason)
 	}
 }
 
