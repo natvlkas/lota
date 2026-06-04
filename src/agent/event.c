@@ -36,6 +36,56 @@ static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE])
 }
 
 /*
+ * Per-PID debounce for event-driven re-measurement.
+ *
+ * A protected process loading code (lazy dlopen at startup) emits one
+ * executable-mapping event per object, and re-measuring the full image on
+ * each one is O(objects^2) and floods the log. The re-measure is a
+ * monitor/forensic complement to in-kernel enforcement, so coalescing a
+ * burst behind a short cooldown loses no enforcement and still reports
+ * drift promptly. The event timestamp is the kernel's CLOCK_MONOTONIC
+ * reading, so it is the time source and no extra clock read is needed.
+ */
+#define LOTA_RT_REMEASURE_COOLDOWN_NS (1000ULL * 1000 * 1000)
+
+static struct rt_remeasure_slot {
+	uint32_t pid;
+	uint64_t last_ns;
+	bool used;
+} rt_remeasure_seen[LOTA_MAX_PROTECTED_PIDS];
+
+/*
+ * Record that pid is about to be re-measured at now_ns and report whether
+ * the cooldown has elapsed since its last re-measure. An untracked pid
+ * claims a free slot, or evicts the least-recently-measured one when the
+ * table is full (which also reclaims slots left by exited PIDs).
+ */
+static bool rt_remeasure_due(uint32_t pid, uint64_t now_ns)
+{
+	struct rt_remeasure_slot *victim = &rt_remeasure_seen[0];
+
+	for (size_t i = 0; i < LOTA_MAX_PROTECTED_PIDS; i++) {
+		struct rt_remeasure_slot *s = &rt_remeasure_seen[i];
+
+		if (s->used && s->pid == pid) {
+			if (now_ns - s->last_ns < LOTA_RT_REMEASURE_COOLDOWN_NS)
+				return false;
+			s->last_ns = now_ns;
+			return true;
+		}
+		if (!victim->used)
+			continue; /* already holding a free slot */
+		if (!s->used || s->last_ns < victim->last_ns)
+			victim = s;
+	}
+
+	victim->used = true;
+	victim->pid = pid;
+	victim->last_ns = now_ns;
+	return true;
+}
+
+/*
  * Event-driven re-measurement.
  *
  * When a protected process changes its executable mappings (mmap or
@@ -52,6 +102,9 @@ static void remeasure_protected_image(const struct lota_exec_event *event)
 	uint8_t digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
 	char hex[LOTA_RUNTIME_IMAGE_DIGEST_SIZE * 2 + 1];
 	int ret;
+
+	if (!rt_remeasure_due(event->tgid, event->timestamp_ns))
+		return;
 
 	ret = lota_runtime_measure_pid((pid_t)event->tgid, digest);
 	if (ret < 0) {

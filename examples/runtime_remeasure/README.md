@@ -137,10 +137,13 @@ the kernel.
 
 Measurement is not limited to periodic beats. The BPF LSM flags executable
 `mmap`/`mprotect` events from a protected process, and the agent re-measures
-that process's image immediately on such an event, narrowing the window in
-which image drift between heartbeats goes unobserved. In enforce mode an
-untrusted mapping is already blocked at the source, so this is the
-monitor-mode and forensic complement to that enforcement.
+that process's image on such an event, narrowing the window in which image
+drift between heartbeats goes unobserved. A burst of events from one process
+(lazy `dlopen` at startup emits one per object) is coalesced behind a short
+per-process cooldown, so a re-measure stays O(objects) rather than
+O(objects squared). In enforce mode an untrusted mapping is already blocked
+at the source, so this is the monitor-mode and forensic complement to that
+enforcement.
 
 ## Scope and honest limits
 
