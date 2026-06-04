@@ -19,7 +19,27 @@ The binary lands at `build/examples/demo_anticheat` and links against the gaming
 | `--once`         | off                                | fire a single heartbeat, exit with the server-reported state  |
 | `--tamper-marker PATH` | (none)                       | flip a token byte when PATH exists; also `$LOTA_DEMO_TAMPER_MARKER` |
 | `--print-runtime-objects` | off                       | print the runtime manifest (loaded object paths) and exit |
+| `--ca-cert PATH` | (none)                             | provisioning CA that signs the server cert (mTLS, `https://` server) |
+| `--client-cert PATH` | (none)                         | producer mTLS certificate; set with `--client-key`           |
+| `--client-key PATH` | (none)                          | producer mTLS private key; set with `--client-cert`          |
 | `--help`         | n/a                                | print usage and exit                                          |
+
+## Mutual TLS
+
+When the demo server runs with TLS (`https://` `--server` URL), point the
+producer at the provisioning CA so it verifies the server, and present the
+producer certificate so the server can require a provisioned client:
+
+```sh
+demo_anticheat --server https://127.0.0.1:7443/heartbeat \
+               --ca-cert mtls/ca.crt \
+               --client-cert mtls/producer.crt \
+               --client-key mtls/producer.key
+```
+
+Peer and hostname verification stay on, so the producer refuses to ship a
+heartbeat to an unauthenticated server. `examples/mtls/gen-certs.sh`
+provisions the keypairs; see [`examples/mtls/README.md`](../mtls/README.md).
 
 ## Re-measurement runtime manifest
 
