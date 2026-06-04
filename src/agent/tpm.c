@@ -721,6 +721,24 @@ int tpm_init(struct tpm_context *ctx)
 	if (aik_meta_path && aik_meta_path[0]) {
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
+		/*
+		 * Constrain the override to an absolute path with no traversal
+		 * and a conservative character set, so it can only ever name a
+		 * file under a fixed location and never escape it.
+		 * This keeps untrusted bytes out of the later open()
+		 * of the AIK key store.
+		 */
+		if (strstr(aik_meta_path, ".."))
+			return -EINVAL;
+		for (const char *p = aik_meta_path; *p; p++) {
+			char c = *p;
+			bool ok = (c >= 'A' && c <= 'Z') ||
+				  (c >= 'a' && c <= 'z') ||
+				  (c >= '0' && c <= '9') || c == '/' ||
+				  c == '.' || c == '_' || c == '-';
+			if (!ok)
+				return -EINVAL;
+		}
 		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
 			     "%s",
 			     aik_meta_path) >= (int)sizeof(ctx->aik_meta_path))
