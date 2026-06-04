@@ -255,8 +255,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 out:
 	if (fd >= 0)
 		close(fd);
-	if (dirfd >= 0)
-		close(dirfd);
+	close(dirfd);
 	return ret;
 }
 
