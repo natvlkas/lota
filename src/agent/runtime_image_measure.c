@@ -35,6 +35,35 @@ static void rt_strip_deleted_suffix(char *path)
 		path[len - slen] = '\0';
 }
 
+static int rt_map_files_leaf_is_safe(const char *leaf)
+{
+	int saw_dash = 0;
+	size_t left = 0;
+	size_t right = 0;
+
+	if (!leaf)
+		return 0;
+
+	for (const char *p = leaf; *p; p++) {
+		if (*p == '-') {
+			if (saw_dash || left == 0)
+				return 0;
+			saw_dash = 1;
+			continue;
+		}
+		if ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')) {
+			if (saw_dash)
+				right++;
+			else
+				left++;
+			continue;
+		}
+		return 0;
+	}
+
+	return saw_dash && right > 0;
+}
+
 int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 {
 	unsigned long start, end, off;
@@ -107,7 +136,6 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 	char *line = NULL;
 	size_t line_cap = 0;
 	size_t count = 0;
-	ssize_t nread;
 	FILE *f;
 	int ret = 0;
 
@@ -119,7 +147,7 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 	if (!f)
 		return -errno;
 
-	while ((nread = getline(&line, &line_cap, f)) != -1) {
+	while (getline(&line, &line_cap, f) != -1) {
 		struct lota_rt_map_entry e;
 		int rc = lota_rt_parse_maps_line(line, &e);
 
@@ -149,36 +177,55 @@ int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
 				 struct lota_verity_digest_key *out)
 {
-	char link[80];
+	char map_files_dir[64];
+	char map_files_leaf[40];
 	struct stat st = {0};
-	int fd;
+	int dirfd = -1;
+	int fd = -1;
 	int ret = 0;
+	int n;
 
 	if (!entry || !out)
 		return -EINVAL;
+	if (entry->start >= entry->end)
+		return -EINVAL;
 
 	/*
-	 * kernel resolves this magic symlink to the exact inode backing
-	 * the mapping, so following it cannot be redirected by a path swap
+	 * keep the untrusted /proc/<pid>/maps pathname out of the file access:
+	 * map_files is keyed only by the numeric range, under a trusted procfs
+	 * directory, and the range leaf cannot contain path separators
 	 */
-	snprintf(link, sizeof(link), "/proc/%d/map_files/%lx-%lx", (int)pid,
-		 entry->start, entry->end);
-	fd = open(link, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
+	n = snprintf(map_files_dir, sizeof(map_files_dir), "/proc/%d/map_files",
+		     (int)pid);
+	if (n < 0 || (size_t)n >= sizeof(map_files_dir))
+		return -ENAMETOOLONG;
+	n = snprintf(map_files_leaf, sizeof(map_files_leaf), "%lx-%lx",
+		     entry->start, entry->end);
+	if (n < 0 || (size_t)n >= sizeof(map_files_leaf) ||
+	    !rt_map_files_leaf_is_safe(map_files_leaf))
+		return -EINVAL;
+
+	dirfd = open(map_files_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (dirfd < 0)
 		return -errno;
+
+	fd = openat(dirfd, map_files_leaf, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		goto out;
+	}
 
 	if (fstat(fd, &st) != 0) {
 		ret = -errno;
-		close(fd);
-		return ret;
+		goto out;
 	}
 
 	/* mapping must still resolve to the inode seen during enumeration */
 	if (!S_ISREG(st.st_mode) || major(st.st_dev) != entry->dev_major ||
 	    minor(st.st_dev) != entry->dev_minor ||
 	    (unsigned long long)st.st_ino != entry->ino) {
-		close(fd);
-		return -ESTALE;
+		ret = -ESTALE;
+		goto out;
 	}
 
 	{
@@ -193,12 +240,11 @@ int lota_rt_measure_entry_verity(pid_t pid,
 
 		if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
 			ret = -errno;
-			close(fd);
-			return ret;
+			goto out;
 		}
 		if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
-			close(fd);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 
 		memset(out, 0, sizeof(*out));
@@ -206,8 +252,12 @@ int lota_rt_measure_entry_verity(pid_t pid,
 		memcpy(out->digest, d.hdr.digest, (size_t)out->len);
 	}
 
-	close(fd);
-	return 0;
+out:
+	if (fd >= 0)
+		close(fd);
+	if (dirfd >= 0)
+		close(dirfd);
+	return ret;
 }
 
 /* qsort comparator over the canonical module order */

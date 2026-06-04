@@ -125,6 +125,16 @@ int main(void)
 	else
 		FAIL("deleted suffix not stripped");
 
+	TEST("basename keeps embedded spaces");
+	rc = lota_rt_parse_maps_line(
+	    "55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+	    "/opt/game dir/game bin\n",
+	    &e);
+	if (rc == 1 && strcmp(e.soname, "game bin") == 0)
+		PASS();
+	else
+		FAIL("basename with spaces not preserved");
+
 	TEST("malformed line is rejected");
 	rc = lota_rt_parse_maps_line("not a maps line\n", &e);
 	if (rc < 0)
