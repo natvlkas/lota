@@ -1,5 +1,14 @@
 # Runtime re-measurement demo
 
+> **Trust model note.** The measurement this demo computes runs **inside
+> the game process** and is therefore forgeable by an attacker with code
+> in that process. It is now **advisory only**: the heartbeat still carries
+> it for tamper-evidence, but it no longer gates trust. The **authoritative**
+> runtime measurement is taken by the agent from the **kernel side** and
+> bound into the TPM-signed token; see *Kernel-side measurement
+> (authoritative)* below. This demo remains useful for understanding what a
+> per-object image measurement is and why an in-process one is insufficient.
+
 `runtime_remeasure` is a TPM-free reference for the runtime measurement
 that the LOTA anti-cheat heartbeat binds into every beat. The
 session-start game-binding hash only pins the main executable **on disk**;
@@ -78,3 +87,73 @@ side, `lota_ac_compute_expected_runtime_measure_set()`, which the demo
 server runs over the trusted runtime manifest (captured with
 `demo_anticheat --print-runtime-objects`) to obtain the value an honest
 producer must report.
+
+## Kernel-side measurement (authoritative)
+
+The in-process measurement above can be forged: a process can report any
+digest about itself. The authoritative measurement is therefore taken by
+the **agent**, on the far side of the IPC boundary, and bound under the
+TPM quote so the measured process cannot influence it:
+
+1. When a protected process requests a token, the agent enumerates that
+   process's file-backed executable mappings from `/proc/<pid>/maps`
+   (kernel-maintained, so the process cannot forge the list) and opens the
+   exact backing inode of each through `/proc/<pid>/map_files/<range>` (a
+   kernel magic symlink, so no path swap can redirect it).
+2. For each backing object the agent reads the kernel-computed **fs-verity**
+   digest (`FS_IOC_MEASURE_VERITY`). No process memory is hashed; under W^X
+   a file-backed executable mapping equals its on-disk file, which the
+   kernel has already measured.
+3. The per-object digests are folded into a per-process image digest, and
+   the per-PID image digests are folded into the token's
+   `runtime_protect_digest` (version 2), which is bound into the TPM quote.
+   A verifier recomputes that digest from the PID list and the per-PID image
+   digests carried in the token and checks it against the quote-bound value.
+
+If any protected process's objects cannot be measured (for example they
+are not fs-verity protected) the token **fails closed** instead of being
+issued without a measurement.
+
+### Trust argument across an untrusted root
+
+Measured boot -> `lockdown=integrity` -> `module.sig_enforce` -> the signed
+BPF LSM loaded -> the BPF LSM constrains what a protected process may map ->
+the agent's kernel-side measurement bound under the AIK quote. LOTA already
+gates every one of those rungs, so root cannot silently swap the measuring
+code without breaking a signature, lockdown, or the measured-boot chain.
+
+## Per-module known-good set
+
+Robustness across lazy `dlopen` and cross-distribution library drift comes
+from a **per-module** known-good set, not a single combined digest: the BPF
+LSM's fs-verity allow-list (`allow_verity`, loaded from the game's module
+manifest via `--allow-verity`) admits an executable mapping only if its
+backing file's fs-verity digest is known-good. Any allowed module may load
+in any order; an unknown module is refused at `mmap` time. The combined
+image digest is bound for attestation, but per-module trust is enforced in
+the kernel.
+
+## Event-driven re-measurement
+
+Measurement is not limited to periodic beats. The BPF LSM flags executable
+`mmap`/`mprotect` events from a protected process, and the agent re-measures
+that process's image immediately on such an event, narrowing the window in
+which image drift between heartbeats goes unobserved. In enforce mode an
+untrusted mapping is already blocked at the source, so this is the
+monitor-mode and forensic complement to that enforcement.
+
+## Scope and honest limits
+
+- **JIT / self-modifying code is out of scope.** Engines that generate
+  executable code at runtime (.NET, V8, some anti-cheats) produce anonymous
+  or `RWX` executable pages that have no file-backed, fs-verity-measurable
+  origin. The kernel-side measurement deliberately covers only file-backed
+  executable mappings; anonymous executable mappings are reported (and, in
+  enforce mode with the anonymous-exec gate, blocked) but not measured. A
+  game that relies on JIT must either run it under a measured AOT image or
+  accept that its JIT regions are outside the measured set.
+- **Completeness is bounded by W^X.** The equivalence "file-backed
+  executable mapping == on-disk file" holds only while write and execute
+  are kept separate. A determined `RWX`/self-modifying mapping is not fully
+  covered, which is why this measurement is complementary to W^X
+  enforcement and the anonymous-exec gate rather than a replacement.
