@@ -821,6 +821,50 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t *out_len);
 
 /*
+ * tpm_seal_secret_envelope - Seal a large payload via a TPM-sealed KEK.
+ * @ctx:         initialised TPM context
+ * @payload:     plaintext to seal (1..LOTA_ENVELOPE_MAX_PAYLOAD bytes)
+ * @payload_len: length of @payload
+ * @pcr_mask:    PCR selection to bind to; 0 selects LOTA_SEAL_DEFAULT_PCR_MASK
+ * @out:         buffer receiving the envelope blob (see
+ * include/lota_envelope.h)
+ * @out_cap:     capacity of @out
+ * @out_len:     set to the envelope blob length on success
+ *
+ * For payloads beyond the direct-seal cap: a fresh random AES-256 KEK is
+ * sealed to the PCR state with tpm_seal_secret(), and the payload is
+ * encrypted under the KEK with AES-256-GCM (the header + sealed-KEK blob
+ * authenticated as AAD). The TPM still gates release of the KEK, so the
+ * envelope inherits the same boot/PCR binding.
+ * Returns 0 on success, EINVAL on bad arguments, -ENOSPC if @out is too small,
+ * negative errno / LOTA_ERR_TPM_* on TPM or crypto failure.
+ */
+int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
+			     size_t payload_len, uint32_t pcr_mask,
+			     uint8_t *out, size_t out_cap, size_t *out_len);
+
+/*
+ * tpm_unseal_secret_envelope - Recover a payload sealed by
+ * tpm_seal_secret_envelope().
+ * @ctx:      initialised TPM context
+ * @blob:     envelope blob
+ * @blob_len: length of @blob
+ * @out:      buffer receiving the plaintext
+ * @out_cap:  capacity of @out
+ * @out_len:  set to the plaintext length on success
+ *
+ * Unseals the embedded KEK over the PolicyPCR session, then AES-256-GCM
+ * decrypts and authenticates the payload. Fails closed when the host is not
+ * in the sealed PCR state (KEK unseal denied) or when the payload/KEK was
+ * tampered (-EBADMSG).
+ * Returns 0 on success, -EINVAL on a malformed blob or bad arguments,
+ * -ENOSPC if @out is too small, negative errno / LOTA_ERR_TPM_* on failure.
+ */
+int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
+			       size_t blob_len, uint8_t *out, size_t out_cap,
+			       size_t *out_len);
+
+/*
  * tpm_aik_reseal_auth - re-seal the current AIK userAuth to the current PCR
  * state so an already-enrolled host can adopt at-rest sealing without
  * re-enrolling. Loads the auth if needed, writes aik_auth.sealed, and (in

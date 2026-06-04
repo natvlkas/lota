@@ -61,5 +61,37 @@ if "$AGENT" --unseal <"$WORK/title-pcr16.sealed" >/dev/null 2>&1; then
 fi
 echo "    RESULT: SEALED SHUT - unseal failed closed after the state changed"
 
+echo "==> 4. Seal a large payload (> 128 B) via the AES-256-GCM envelope"
+# Direct TPM2_Seal caps the sensitive data at 128 bytes.
+# A larger payload -- an asset blob, a bundle of per-title keys,
+# a small save file -- is sealed by wrapping a random KEK in the
+# TPM and encrypting the payload under it.
+# The unseal path auto-detects the envelope from its magic.
+head -c 4096 /dev/urandom >"$WORK/asset.bin"
+"$AGENT" --seal <"$WORK/asset.bin" >"$WORK/asset.sealed"
+echo "    sealed $(wc -c <"$WORK/asset.bin")-byte payload into a \
+$(wc -c <"$WORK/asset.sealed")-byte envelope"
+"$AGENT" --unseal <"$WORK/asset.sealed" >"$WORK/asset.out"
+if cmp -s "$WORK/asset.bin" "$WORK/asset.out"; then
+	echo "    RESULT: OK - large payload round-trips through the envelope"
+else
+	die "RESULT: MISMATCH - large payload differs after unseal"
+fi
+
+# An envelope is authenticated: a single flipped ciphertext bit must fail the
+# GCM tag, not silently return corrupt data.
+# Flip the last byte (XOR 0xFF) so the change is deterministic regardless of
+# its original value.
+cp "$WORK/asset.sealed" "$WORK/asset.tampered"
+last_off=$(($(wc -c <"$WORK/asset.tampered") - 1))
+orig=$(tail -c1 "$WORK/asset.tampered" | od -An -tu1 | tr -d ' ')
+flipped=$((orig ^ 0xFF))
+printf "$(printf '\\%03o' "$flipped")" |
+	dd of="$WORK/asset.tampered" bs=1 seek="$last_off" conv=notrunc status=none
+if "$AGENT" --unseal <"$WORK/asset.tampered" >/dev/null 2>&1; then
+	die "RESULT: LEAK - tampered envelope unsealed"
+fi
+echo "    RESULT: AUTHENTICATED - tampered envelope rejected (GCM tag)"
+
 echo
 echo "All steps passed: the key only unseals in the sealed boot state."

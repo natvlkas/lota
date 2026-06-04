@@ -22,6 +22,19 @@ salted, response-encrypted policy session. If the current PCRs differ
 from the seal-time values, the policy no longer matches and the unseal
 fails closed.
 
+### Large payloads (envelope mode)
+
+`TPM2_Seal` bounds the sensitive data it can wrap, so a direct seal caps
+at 128 bytes. For a larger payload (<= 64 KiB) - an asset blob, a bundle
+of per-title keys, a small save file - `--seal` automatically switches to
+an **envelope**: it seals a fresh random AES-256 key (the KEK) to the PCR
+state through the same PolicyPCR path, then encrypts the payload under the
+KEK with AES-256-GCM. The TPM still gates release of the KEK, so the
+envelope inherits the exact same boot/PCR binding. The header and the
+sealed-KEK blob are bound in as additional authenticated data, so a
+tampered envelope fails the GCM tag instead of returning corrupt data.
+`--unseal` detects the envelope from its magic; no extra flag is needed.
+
 The default PCR set is the firmware/kernel boot PCRs 0–7 plus LOTA's
 PCR14 boot-commitment, so a firmware, kernel, or agent change invalidates
 the seal. Override it with `--seal-pcrs MASK`.
@@ -51,6 +64,9 @@ Expected output ends with:
     RESULT: OK - recovered the key
 ==> 3. Bind to a single PCR, then change it -> unseal must fail
     RESULT: SEALED SHUT - unseal failed closed after the state changed
+==> 4. Seal a large payload (> 128 B) via the AES-256-GCM envelope
+    RESULT: OK - large payload round-trips through the envelope
+    RESULT: AUTHENTICATED - tampered envelope rejected (GCM tag)
 ```
 
 The script seals step 3 to PCR 16 (the resettable debug PCR) only so it

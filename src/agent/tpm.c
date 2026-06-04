@@ -34,6 +34,7 @@
 #include <tss2/tss2_tcti_device.h>
 #include <tss2/tss2_tctildr.h>
 
+#include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "quote.h"
 #include "tpm.h"
@@ -4542,6 +4543,138 @@ out:
 		Esys_FlushContext(ctx->esys_ctx, sealed);
 	if (primary != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, primary);
+	return ret;
+}
+
+int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
+			     size_t payload_len, uint32_t pcr_mask,
+			     uint8_t *out, size_t out_cap, size_t *out_len)
+{
+	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE];
+	uint8_t kek_blob[LOTA_SEAL_MAX_BLOB];
+	size_t kek_blob_len = 0;
+	struct lota_envelope_meta meta;
+	const size_t header_off = LOTA_ENVELOPE_HEADER_SIZE;
+	size_t total;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !payload || !out ||
+	    !out_len)
+		return -EINVAL;
+	if (payload_len == 0 || payload_len > LOTA_ENVELOPE_MAX_PAYLOAD)
+		return -EINVAL;
+	if (pcr_mask == 0)
+		pcr_mask = LOTA_SEAL_DEFAULT_PCR_MASK;
+	if (lota_seal_validate_pcr_mask(pcr_mask) != 0)
+		return -EINVAL;
+
+	memset(&meta, 0, sizeof(meta));
+	if (RAND_bytes(kek, sizeof(kek)) != 1)
+		return -EIO;
+	if (RAND_bytes(meta.nonce, sizeof(meta.nonce)) != 1) {
+		ret = -EIO;
+		goto out_kek;
+	}
+
+	/* The KEK (32 bytes) seals through the ordinary PCR-bound path. */
+	ret = tpm_seal_secret(ctx, kek, sizeof(kek), pcr_mask, kek_blob,
+			      sizeof(kek_blob), &kek_blob_len);
+	if (ret < 0)
+		goto out_kek;
+	if (kek_blob_len == 0 || kek_blob_len > LOTA_SEAL_MAX_BLOB) {
+		ret = -EIO;
+		goto out_kek;
+	}
+
+	meta.kek_blob_len = (uint16_t)kek_blob_len;
+	meta.payload_len = (uint32_t)payload_len;
+
+	total = header_off + kek_blob_len + payload_len;
+	if (total > out_cap) {
+		ret = -ENOSPC;
+		goto out_kek;
+	}
+
+	/*
+	 * Lay out header (tag still zero) then the sealed-KEK blob, then feed
+	 * both as AEAD additional data so neither the framing nor the bound
+	 * KEK can be swapped without failing the tag check at open time.
+	 */
+	ret = lota_envelope_serialize_header(out, &meta);
+	if (ret < 0)
+		goto out_kek;
+	memcpy(out + header_off, kek_blob, kek_blob_len);
+
+	ret = lota_envelope_aead_seal(
+	    kek, meta.nonce, out, header_off + kek_blob_len, payload,
+	    payload_len, out + header_off + kek_blob_len, meta.tag);
+	if (ret < 0)
+		goto out_kek;
+
+	/* patch the now-computed tag into the header (offset 28) */
+	memcpy(out + 28, meta.tag, LOTA_ENVELOPE_TAG_SIZE);
+	*out_len = total;
+	ret = 0;
+
+out_kek:
+	secure_bzero(kek, sizeof(kek));
+	return ret;
+}
+
+int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
+			       size_t blob_len, uint8_t *out, size_t out_cap,
+			       size_t *out_len)
+{
+	struct lota_envelope_meta meta;
+	size_t body_off = 0;
+	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE];
+	size_t kek_len = 0;
+	uint8_t aad[LOTA_ENVELOPE_HEADER_SIZE + LOTA_SEAL_MAX_BLOB];
+	size_t aad_len;
+	const uint8_t *kek_blob;
+	const uint8_t *ct;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !blob || !out ||
+	    !out_len)
+		return -EINVAL;
+
+	ret = lota_envelope_parse_header(blob, blob_len, &meta, &body_off);
+	if (ret < 0)
+		return ret;
+	if (meta.payload_len > out_cap)
+		return -ENOSPC;
+
+	kek_blob = blob + body_off;
+	ct = blob + body_off + meta.kek_blob_len;
+
+	ret = tpm_unseal_secret(ctx, kek_blob, meta.kek_blob_len, kek,
+				sizeof(kek), &kek_len);
+	if (ret < 0)
+		return ret;
+	if (kek_len != LOTA_ENVELOPE_KEK_SIZE) {
+		ret = -EINVAL;
+		goto out_kek;
+	}
+
+	/*
+	 * Rebuild the AAD exactly as the seal path authenticated it: the
+	 * header with its tag field zeroed, followed by the sealed-KEK blob.
+	 */
+	aad_len = body_off + meta.kek_blob_len;
+	memcpy(aad, blob, aad_len);
+	memset(aad + 28, 0, LOTA_ENVELOPE_TAG_SIZE);
+
+	ret = lota_envelope_aead_open(kek, meta.nonce, aad, aad_len, ct,
+				      meta.payload_len, meta.tag, out);
+	if (ret < 0)
+		goto out_kek;
+
+	*out_len = meta.payload_len;
+	ret = 0;
+
+out_kek:
+	secure_bzero(kek, sizeof(kek));
 	return ret;
 }
 

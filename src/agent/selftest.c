@@ -14,6 +14,7 @@
 #include <stdlib.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "agent.h"
 #include "iommu.h"
@@ -340,27 +341,39 @@ static int parse_seal_mask(const char *str, uint32_t *out_mask)
  */
 int do_seal(const char *pcr_str)
 {
-	uint8_t secret[LOTA_SEAL_MAX_SECRET];
-	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	uint8_t *secret = NULL;
+	uint8_t *blob = NULL;
 	size_t secret_len = 0, blob_len = 0;
 	uint32_t pcr_mask = 0;
 	int ret;
+	int rc = 1;
 
 	if (parse_seal_mask(pcr_str, &pcr_mask) < 0) {
 		fprintf(stderr, "Invalid --seal-pcrs value\n");
 		return 1;
 	}
 
-	ret = read_all_stdin(secret, sizeof(secret), &secret_len);
+	/*
+	 * Heap buffers: an envelope payload reaches LOTA_ENVELOPE_MAX_PAYLOAD
+	 * (64 KiB), too large for the stack.
+	 */
+	secret = malloc(LOTA_ENVELOPE_MAX_PAYLOAD);
+	blob = malloc(LOTA_ENVELOPE_MAX_BLOB);
+	if (!secret || !blob) {
+		fprintf(stderr, "Out of memory\n");
+		goto out;
+	}
+
+	ret = read_all_stdin(secret, LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read secret from stdin: %s\n",
-			ret == -E2BIG ? "too large (max 128 bytes)"
+			ret == -E2BIG ? "too large (max 65536 bytes)"
 				      : strerror(-ret));
-		return 1;
+		goto out;
 	}
 	if (secret_len == 0) {
 		fprintf(stderr, "Refusing to seal an empty secret\n");
-		return 1;
+		goto out;
 	}
 
 	/*
@@ -374,27 +387,43 @@ int do_seal(const char *pcr_str)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		explicit_bzero(secret, sizeof(secret));
-		return 1;
+		goto out;
 	}
 
-	ret = tpm_seal_secret(&g_agent.tpm_ctx, secret, secret_len, pcr_mask,
-			      blob, sizeof(blob), &blob_len);
-	explicit_bzero(secret, sizeof(secret));
+	/*
+	 * Direct TPM2_Seal up to its sensitive-data cap; beyond that an
+	 * envelope (TPM-sealed KEK + AES-256-GCM payload) carries the bulk.
+	 */
+	if (secret_len <= LOTA_SEAL_MAX_SECRET)
+		ret = tpm_seal_secret(&g_agent.tpm_ctx, secret, secret_len,
+				      pcr_mask, blob, LOTA_ENVELOPE_MAX_BLOB,
+				      &blob_len);
+	else
+		ret = tpm_seal_secret_envelope(
+		    &g_agent.tpm_ctx, secret, secret_len, pcr_mask, blob,
+		    LOTA_ENVELOPE_MAX_BLOB, &blob_len);
+	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Seal failed: %s\n", tpm_strerror(ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		return 1;
+		goto out;
 	}
-	tpm_cleanup(&g_agent.tpm_ctx);
 
 	if (write_all_stdout(blob, blob_len) < 0) {
 		fprintf(stderr, "Failed to write sealed blob to stdout\n");
-		return 1;
+		goto out;
 	}
-	fprintf(stderr, "Sealed %zu-byte secret to a %zu-byte blob.\n",
-		secret_len, blob_len);
-	return 0;
+	fprintf(stderr, "Sealed %zu-byte secret to a %zu-byte blob%s.\n",
+		secret_len, blob_len,
+		secret_len > LOTA_SEAL_MAX_SECRET ? " (envelope)" : "");
+	rc = 0;
+
+out:
+	if (secret) {
+		explicit_bzero(secret, LOTA_ENVELOPE_MAX_PAYLOAD);
+		free(secret);
+	}
+	free(blob);
+	return rc;
 }
 
 /*
@@ -403,21 +432,33 @@ int do_seal(const char *pcr_str)
  */
 int do_unseal(void)
 {
-	uint8_t blob[LOTA_SEAL_MAX_BLOB];
-	uint8_t secret[LOTA_SEAL_MAX_SECRET];
+	uint8_t *blob = NULL;
+	uint8_t *secret = NULL;
 	size_t blob_len = 0, secret_len = 0;
+	bool envelope = false;
 	int ret;
+	int rc = 1;
 
-	ret = read_all_stdin(blob, sizeof(blob), &blob_len);
+	blob = malloc(LOTA_ENVELOPE_MAX_BLOB);
+	secret = malloc(LOTA_ENVELOPE_MAX_PAYLOAD);
+	if (!blob || !secret) {
+		fprintf(stderr, "Out of memory\n");
+		goto out;
+	}
+
+	ret = read_all_stdin(blob, LOTA_ENVELOPE_MAX_BLOB, &blob_len);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read blob from stdin: %s\n",
 			ret == -E2BIG ? "too large" : strerror(-ret));
-		return 1;
+		goto out;
 	}
 	if (blob_len == 0) {
 		fprintf(stderr, "No sealed blob on stdin\n");
-		return 1;
+		goto out;
 	}
+
+	/* leading magic selects the decoder: envelope vs direct seal */
+	envelope = lota_envelope_is_envelope(blob, blob_len) != 0;
 
 	/* PCR-policy mismatch is the expected unseal failure.
 	 * Keep its report clean by silencing the TSS library's own error
@@ -428,30 +469,43 @@ int do_unseal(void)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		return 1;
+		goto out;
 	}
 
-	ret = tpm_unseal_secret(&g_agent.tpm_ctx, blob, blob_len, secret,
-				sizeof(secret), &secret_len);
+	if (envelope)
+		ret = tpm_unseal_secret_envelope(
+		    &g_agent.tpm_ctx, blob, blob_len, secret,
+		    LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
+	else
+		ret =
+		    tpm_unseal_secret(&g_agent.tpm_ctx, blob, blob_len, secret,
+				      LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Unseal failed: %s\n", tpm_strerror(ret));
-		if (ret != -LOTA_ERR_TPM_POLICY_FAIL)
+		/* -EBADMSG is an envelope tamper, not a boot-state mismatch */
+		if (ret != -LOTA_ERR_TPM_POLICY_FAIL && ret != -EBADMSG)
 			fprintf(stderr,
 				"(the host may not be in the sealed boot "
 				"state)\n");
-		explicit_bzero(secret, sizeof(secret));
-		return 1;
+		goto out;
 	}
 
-	ret = write_all_stdout(secret, secret_len);
-	explicit_bzero(secret, sizeof(secret));
-	if (ret < 0) {
+	if (write_all_stdout(secret, secret_len) < 0) {
 		fprintf(stderr, "Failed to write secret to stdout\n");
-		return 1;
+		goto out;
 	}
-	fprintf(stderr, "Unsealed %zu-byte secret.\n", secret_len);
-	return 0;
+	fprintf(stderr, "Unsealed %zu-byte secret%s.\n", secret_len,
+		envelope ? " (envelope)" : "");
+	rc = 0;
+
+out:
+	if (secret) {
+		explicit_bzero(secret, LOTA_ENVELOPE_MAX_PAYLOAD);
+		free(secret);
+	}
+	free(blob);
+	return rc;
 }
 
 /*
