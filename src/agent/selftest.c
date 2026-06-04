@@ -363,6 +363,13 @@ int do_seal(const char *pcr_str)
 		return 1;
 	}
 
+	/*
+	 * Silence the TSS library's own WARNING/ERROR spam: seal/unseal print
+	 * their own clear diagnostics via tpm_strerror().
+	 * overwrite=0 leaves an operator-set TSS2_LOG untouched for debugging.
+	 */
+	setenv("TSS2_LOG", "all+none", 0);
+
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
@@ -412,6 +419,11 @@ int do_unseal(void)
 		return 1;
 	}
 
+	/* PCR-policy mismatch is the expected unseal failure.
+	 * Keep its report clean by silencing the TSS library's own error
+	 * logging (overwrite=0 respects an operator-set TSS2_LOG). */
+	setenv("TSS2_LOG", "all+none", 0);
+
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
@@ -423,10 +435,11 @@ int do_unseal(void)
 				sizeof(secret), &secret_len);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Unseal failed: %s\n"
-			"(the host may not be in the sealed boot state)\n",
-			tpm_strerror(ret));
+		fprintf(stderr, "Unseal failed: %s\n", tpm_strerror(ret));
+		if (ret != -LOTA_ERR_TPM_POLICY_FAIL)
+			fprintf(stderr,
+				"(the host may not be in the sealed boot "
+				"state)\n");
 		explicit_bzero(secret, sizeof(secret));
 		return 1;
 	}

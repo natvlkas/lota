@@ -64,6 +64,15 @@ struct tpm_quote_response;
 #define LOTA_ERR_TPM_AUTH_FAIL 4098
 
 /*
+ * TPM2_RC_POLICY_FAIL / TPM2_RC_PCR_CHANGED. The authorization policy of a
+ * sealed object was not satisfied -- for PCR-bound seals this is the
+ * expected, benign "host is not in the sealed boot state" outcome, not an
+ * I/O fault. Surfaced as a dedicated code so the unseal path can report it
+ * clearly instead of the misleading -EIO.
+ */
+#define LOTA_ERR_TPM_POLICY_FAIL 4099
+
+/*
  * tpm_strerror - error-to-string helper that handles both POSIX
  *                errno values and LOTA-private codes.
  *
@@ -823,8 +832,7 @@ int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
 int tpm_test_aik_save_auth(struct tpm_context *ctx,
 			   const uint8_t auth[TPM_AIK_AUTH_SIZE]);
 int tpm_test_aik_load_auth(struct tpm_context *ctx);
-int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf,
-				size_t len);
+int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len);
 int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);

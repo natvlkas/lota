@@ -219,6 +219,15 @@ static int tss2_rc_to_errno(TSS2_RC rc)
 	case TPM2_RC_VALUE:
 	case TPM2_RC_SIZE:
 		return -EINVAL;
+	case TPM2_RC_POLICY_FAIL:
+	case TPM2_RC_PCR_CHANGED:
+		/*
+		 * Authorization policy not satisfied.
+		 * For a PCR-bound sealed object this is the expected
+		 * fail-closed outcome when the host is no longer in the sealed
+		 * boot state -- report it as such.
+		 */
+		return -LOTA_ERR_TPM_POLICY_FAIL;
 	default:
 		return -EIO;
 	}
@@ -235,6 +244,9 @@ const char *tpm_strerror(int err)
 	case LOTA_ERR_TPM_AUTH_FAIL:
 		return "TPM authorization failed (increments DA lockout "
 		       "counter)";
+	case LOTA_ERR_TPM_POLICY_FAIL:
+		return "TPM policy not satisfied (host not in the sealed "
+		       "boot/PCR state)";
 	default:
 		return strerror(code);
 	}

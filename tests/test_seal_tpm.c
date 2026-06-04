@@ -181,6 +181,26 @@ static void test_unseal_arg_validation(void)
 	PASS();
 }
 
+static void test_policy_fail_maps_clean(void)
+{
+	TEST("PolicyPCR mismatch maps to the dedicated policy-fail code");
+	/*
+	 * PCR-bound unseal in the wrong boot state returns TPM2_RC_POLICY_FAIL.
+	 * It must surface as the dedicated LOTA code, not -EIO.
+	 */
+	if (tpm_test_rc_to_errno(TPM2_RC_POLICY_FAIL) !=
+	    -LOTA_ERR_TPM_POLICY_FAIL) {
+		FAIL("POLICY_FAIL not mapped");
+		return;
+	}
+	if (tpm_test_rc_to_errno(TPM2_RC_PCR_CHANGED) !=
+	    -LOTA_ERR_TPM_POLICY_FAIL) {
+		FAIL("PCR_CHANGED not mapped");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("Running LOTA sealed-keys TPM-side tests...\n\n");
@@ -191,6 +211,7 @@ int main(void)
 	test_mask_selection_null_args();
 	test_seal_arg_validation();
 	test_unseal_arg_validation();
+	test_policy_fail_maps_clean();
 
 	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
