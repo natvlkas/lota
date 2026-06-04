@@ -234,10 +234,25 @@ seal_aik_auth_strict = true   # store ONLY sealed; no plaintext on disk
 
 `strict` removes the plaintext sidecar, so a captured disk no longer
 yields the AIK auth even to an attacker with the same TPM in a different
-boot state. The trade-off: a legitimate firmware/kernel/agent change
-makes the sealed auth unrecoverable and forces AIK re-provisioning (and
-re-enrollment). Leave both keys at their default `false` to keep the
-existing plaintext-sidecar behaviour.
+boot state. Leave both keys at their default `false` to keep the existing
+plaintext-sidecar behaviour.
+
+An already-enrolled host adopts sealing without re-enrolling:
+
+```sh
+# Set the keys in lota.conf, then seal the current auth in place:
+sudo lota-agent --seal-aik-auth
+```
+
+The trade-off of `strict`: a legitimate firmware/kernel/agent change
+makes the sealed auth unrecoverable. The agent will then **not** silently
+rotate the enrolled AIK; it reports the PolicyPCR mismatch and waits for
+an explicit recovery. Rotate and re-seal deliberately, then re-enroll:
+
+```sh
+sudo lota-agent --reprovision-aik
+sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert tls.crt
+```
 
 ## What still fails after bring-up
 
