@@ -140,6 +140,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    env:
+      SHARDS: 5
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
@@ -148,27 +150,36 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: List fuzz targets
+      - name: List and shard fuzz targets
         id: list
         run: |
           set -eu
-          items=()
+          targets=()
           for mod in src/verifier src/sdk/server src/attestca; do
             while IFS= read -r file; do
               pkg="./$(dirname "$file")"
               while IFS= read -r fn; do
-                items+=("$(jq -nc \
-                  --arg m "$mod" --arg p "$pkg" --arg f "$fn" \
-                  '{module:$m,pkg:$p,fn:$f}')")
+                targets+=("$mod|$pkg|$fn")
               done < <(grep -oE '^func Fuzz[A-Za-z0-9_]+' "$mod/$file" \
                        | awk '{print $2}')
             done < <(cd "$mod" \
                      && grep -rlE '^func Fuzz' --include='*_test.go' . \
                      | sed 's#^\./##')
           done
-          matrix="$(printf '%s\n' "${items[@]}" | jq -sc .)"
-          echo "discovered $(printf '%s\n' "${items[@]}" | wc -l) targets"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          n=${#targets[@]}
+          json='[]'
+          for ((s = 0; s < SHARDS; s++)); do
+            bucket=""
+            for ((i = s; i < n; i += SHARDS)); do
+              bucket="$bucket ${targets[i]}"
+            done
+            bucket="$(echo "$bucket" | xargs)"
+            [ -z "$bucket" ] && continue
+            json="$(jq -c --arg name "shard-$((s + 1))" --arg t "$bucket" \
+              '. + [{name: $name, targets: $t}]' <<<"$json")"
+          done
+          echo "discovered $n targets across $(jq length <<<"$json") shards"
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
 
   go-fuzz:
     name: go-fuzz
@@ -177,10 +188,10 @@ jobs:
     permissions:
       contents: read
     strategy:
-      # one runner per target; a crash in one must not cancel the others
+      # a crash in one shard must not cancel the others
       fail-fast: false
       matrix:
-        target: ${{ fromJson(needs.go-fuzz-discover.outputs.matrix) }}
+        shard: ${{ fromJson(needs.go-fuzz-discover.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -190,27 +201,39 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ matrix.target.module }}/go.mod
-          cache-dependency-path: ${{ matrix.target.module }}/go.sum
+          # every module is on the same go directive; one toolchain serves the
+          # whole shard regardless of which modules its targets come from
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: |
+            src/verifier/go.sum
+            src/sdk/server/go.sum
+            src/attestca/go.sum
 
-      - name: Fuzz ${{ matrix.target.fn }}
-        # Runs one fuzz target for a bounded time against random input on top
-        # of its seed corpus. The targets cover the code that parses untrusted
-        # bytes -- attestation tokens, TPM quote/attest blobs, event logs,
-        # certificates, signed policies and the enrollment wire/AIK areas -- so
-        # a panic or unhandled input is shaken out before it reaches a live
-        # verifier or CA. A crash leaves a reproducer under testdata/fuzz and
-        # fails this target.
+      - name: Fuzz ${{ matrix.shard.name }}
+        # Runs each fuzz target in the shard for a bounded time against random
+        # input on top of its seed corpus. The targets cover the code that
+        # parses untrusted bytes -- attestation tokens, TPM quote/attest blobs,
+        # event logs, certificates, signed policies and the enrollment wire/AIK
+        # areas -- so a panic or unhandled input is shaken out before it reaches
+        # a live verifier or CA. Crash leaves a reproducer under testdata/fuzz
+        # and fails the shard.
         # syzkaller fuzzes the BPF/kernel surface out of band;
         # this is the in-tree parser coverage on every pull request.
-        # Matrix values are passed through env, not the shell, to keep them
-        # out of the command line.
+        # The shard's "module|pkg|fn" list is passed through env, not the shell.
         env:
           FUZZTIME: 60s
-          T_MODULE: ${{ matrix.target.module }}
-          T_PKG: ${{ matrix.target.pkg }}
-          T_FN: ${{ matrix.target.fn }}
+          SHARD_TARGETS: ${{ matrix.shard.targets }}
         run: |
           set -eu
-          cd "$T_MODULE"
-          go test -run='^$' -fuzz="^${T_FN}\$" -fuzztime="$FUZZTIME" "$T_PKG"
+          rc=0
+          for entry in $SHARD_TARGETS; do
+            mod="${entry%%|*}"
+            rest="${entry#*|}"
+            pkg="${rest%%|*}"
+            fn="${rest##*|}"
+            echo "::group::fuzz $mod $pkg $fn"
+            (cd "$mod" && go test -run='^$' -fuzz="^${fn}\$" \
+              -fuzztime="$FUZZTIME" "$pkg") || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
