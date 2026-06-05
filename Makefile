@@ -49,13 +49,26 @@ SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
 SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 
+# Detect target architecture (overridable)
+ifndef ARCH
+	HOST_ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
+	ARCH := $(HOST_ARCH)
+endif
+
 # Compiler flags
 CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong
 CFLAGS += -fstack-clash-protection
+# Control-flow integrity is architecture-specific: Intel CET
+# (-fcf-protection) on x86_64, branch protection (BTI/PAC) on aarch64.
+# -fcf-protection is an x86-only option and errors out on other targets.
+ifeq ($(ARCH),x86_64)
 CFLAGS += -fcf-protection=full
+else ifeq ($(ARCH),aarch64)
+CFLAGS += -mbranch-protection=standard
+endif
 CFLAGS += -D_FORTIFY_SOURCE=2
 CFLAGS += -fPIE
 CFLAGS += -Wformat -Wformat-security
@@ -87,12 +100,6 @@ LDFLAGS += -lbpf -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypt
 
 ifdef SANITIZE
 LDFLAGS += -fsanitize=$(SANITIZE)
-endif
-
-# Detect architecture from compiler if not specified
-ifndef ARCH
-	HOST_ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
-	ARCH := $(HOST_ARCH)
 endif
 
 # BPF target architecture mapping
