@@ -370,12 +370,22 @@ jobs:
         # veristat pushes each program through the real in-kernel verifier
         # (instruction limit, pointer checks, loop bounds, ...). A program the
         # kernel would reject gets a 'failure' verdict and fails the job here,
-        # before the rejection surfaces on a live host.
+        # before the rejection surfaces on a live host. On a rejection the full
+        # verifier log for each failed program is dumped so the reason is
+        # visible in the run; the runner kernel is printed for context because
+        # the verifier's behaviour is kernel-version dependent.
         run: |
           set -eu
+          echo "runner kernel: $(uname -r)"
           veristat build-bpf/lota_lsm.bpf.o | tee veristat.out
-          if grep -qw failure veristat.out; then
-            echo "::error::veristat: the BPF verifier rejected at least one program"
+          failed="$(awk '$3 == "failure" { print $2 }' veristat.out)"
+          if [ -n "$failed" ]; then
+            for prog in $failed; do
+              echo "::group::verifier log: $prog"
+              veristat -vl2 -f "$prog" build-bpf/lota_lsm.bpf.o 2>&1 | tail -80 || true
+              echo "::endgroup::"
+            done
+            echo "::error::veristat: the BPF verifier rejected: $failed"
             exit 1
           fi
           echo "veristat: all programs pass the kernel verifier"
