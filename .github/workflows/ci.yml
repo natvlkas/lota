@@ -467,7 +467,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [41, 44]
+        version: [43, 44]
     container:
       image: fedora:${{ matrix.version }}
     steps:
@@ -645,7 +645,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [41, 44]
+        version: [43, 44]
     container:
       image: fedora:${{ matrix.version }}
     steps:
