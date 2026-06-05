@@ -257,6 +257,13 @@ static int run_daemon(const struct run_daemon_params *params)
 			    "AIK generation: %lu, age: %ld seconds",
 			    (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
 			    (long)age);
+
+			/*
+			 * surface the rotation state over D-Bus from
+			 * the loaded metadata
+			 */
+			publish_rotation_state(
+			    params->cfg ? params->cfg->aik_ttl : 0);
 		}
 
 		lota_info("Performing self-measurement");

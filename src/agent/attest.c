@@ -878,7 +878,7 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
  * (the enrolled generation no longer matching the live one), which an
  * operator clears with a guided lota-agent --reenroll.
  */
-static void publish_rotation_state(uint32_t aik_ttl)
+void publish_rotation_state(uint32_t aik_ttl)
 {
 	struct tpm_context *tpm = &g_agent.tpm_ctx;
 	struct enroll_state st;
