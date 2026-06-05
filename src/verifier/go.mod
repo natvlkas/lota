@@ -1,8 +1,6 @@
 module github.com/szymonwilczek/lota/verifier
 
-go 1.24.0
-
-toolchain go1.25.11
+go 1.25
 
 require (
 	gopkg.in/yaml.v3 v3.0.1
