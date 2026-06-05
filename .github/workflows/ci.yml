@@ -357,6 +357,58 @@ jobs:
           fi
           echo "veristat: all programs pass the kernel verifier"
 
+  bpf-elf-inspect:
+    name: bpf-elf-inspect
+    runs-on: ubuntu-24.04
+    # static inspection of the compiled BPF object: ELF architecture, the
+    # SEC()-derived program sections, and the generated BTF
+    # it loads nothing into the kernel, so it needs no privileges
+    # (veristat is the dynamic verifier pass)
+    container:
+      image: fedora:44
+    steps:
+      - name: Install BPF toolchain
+        run: |
+          dnf -y install \
+            git make clang llvm bpftool binutils \
+            libbpf-devel elfutils-libelf-devel zlib-devel pkgconf-pkg-config
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build the BPF object
+        run: make BUILD_DIR=build-bpf bpf
+
+      - name: Verify ELF arch, program sections and BTF
+        run: |
+          set -eu
+          obj=build-bpf/lota_lsm.bpf.o
+
+          # object must be a BPF-machine ELF
+          readelf -h "$obj" | grep -q 'Linux BPF' \
+            || { echo "::error::$obj is not a BPF ELF"; exit 1; }
+
+          # SEC()-derived program sections plus the license and maps
+          sections="$(llvm-objdump -h "$obj")"
+          echo "$sections"
+          echo "$sections" | grep -qE '[[:space:]]lsm/' \
+            || { echo "::error::no lsm/ program sections -- SEC() mapping broke"; exit 1; }
+          echo "$sections" | grep -qE '[[:space:]]license([[:space:]]|$)' \
+            || { echo "::error::missing license section"; exit 1; }
+          echo "$sections" | grep -qE '\.maps([[:space:]]|$)' \
+            || { echo "::error::missing .maps section"; exit 1; }
+
+          # BTF must dump into valid C type signatures
+          bpftool btf dump file "$obj" format c > btf.h
+          test -s btf.h || { echo "::error::BTF dump is empty"; exit 1; }
+          echo "BPF ELF OK: arch=BPF, lsm sections present," \
+               "BTF valid ($(wc -l < btf.h) lines)"
+
   fedora-build:
     name: build-fedora-${{ matrix.version }}
     runs-on: ubuntu-24.04
