@@ -47,7 +47,8 @@ jobs:
               echo "arch: $(uname -m), gcc: $(gcc -dumpmachine)"
               # build from a writable copy; the source mount is read-only
               cp -a /src /tmp/w && cd /tmp/w
-              export GOCACHE=/tmp/gocache GOTOOLCHAIN=auto
+              export GOCACHE=/tmp/gocache GOTOOLCHAIN=auto \
+                     GOFLAGS=-buildvcs=false
               make BUILD_DIR=/tmp/bld all
               make BUILD_DIR=/tmp/bld bpf
               make BUILD_DIR=/tmp/bld test-unit
