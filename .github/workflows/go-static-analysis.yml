@@ -135,11 +135,52 @@ jobs:
           done
           exit "$rc"
 
-  go-fuzz:
-    name: go-fuzz
+  go-fuzz-discover:
+    name: go-fuzz (discover)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: List fuzz targets
+        id: list
+        run: |
+          set -eu
+          items=()
+          for mod in src/verifier src/sdk/server src/attestca; do
+            while IFS= read -r file; do
+              pkg="./$(dirname "$file")"
+              while IFS= read -r fn; do
+                items+=("$(jq -nc \
+                  --arg m "$mod" --arg p "$pkg" --arg f "$fn" \
+                  '{module:$m,pkg:$p,fn:$f}')")
+              done < <(grep -oE '^func Fuzz[A-Za-z0-9_]+' "$mod/$file" \
+                       | awk '{print $2}')
+            done < <(cd "$mod" \
+                     && grep -rlE '^func Fuzz' --include='*_test.go' . \
+                     | sed 's#^\./##')
+          done
+          matrix="$(printf '%s\n' "${items[@]}" | jq -sc .)"
+          echo "discovered $(printf '%s\n' "${items[@]}" | wc -l) targets"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  go-fuzz:
+    name: go-fuzz
+    needs: go-fuzz-discover
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      # one runner per target; a crash in one must not cancel the others
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.go-fuzz-discover.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -149,36 +190,27 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
-          cache-dependency-path: |
-            src/verifier/go.sum
-            src/sdk/server/go.sum
+          go-version-file: ${{ matrix.target.module }}/go.mod
+          cache-dependency-path: ${{ matrix.target.module }}/go.sum
 
-      - name: Fuzz the network and attestation parsers
-        # Every Go fuzz target is run for a bounded time against random input
-        # on top of its seed corpus. These targets cover the code that parses
-        # untrusted bytes -- attestation tokens, TPM quote/attest blobs, event
-        # logs, certificates and signed policies -- so a panic or unhandled
-        # input is shaken out before it reaches a live verifier.
-        # A crash leaves a reproducer under testdata/fuzz and fails the job.
-        # syzkaller cluster fuzzes the BPF/kernel surface out of band;
+      - name: Fuzz ${{ matrix.target.fn }}
+        # Runs one fuzz target for a bounded time against random input on top
+        # of its seed corpus. The targets cover the code that parses untrusted
+        # bytes -- attestation tokens, TPM quote/attest blobs, event logs,
+        # certificates, signed policies and the enrollment wire/AIK areas -- so
+        # a panic or unhandled input is shaken out before it reaches a live
+        # verifier or CA. A crash leaves a reproducer under testdata/fuzz and
+        # fails this target.
+        # syzkaller fuzzes the BPF/kernel surface out of band;
         # this is the in-tree parser coverage on every pull request.
+        # Matrix values are passed through env, not the shell, to keep them
+        # out of the command line.
         env:
           FUZZTIME: 60s
+          T_MODULE: ${{ matrix.target.module }}
+          T_PKG: ${{ matrix.target.pkg }}
+          T_FN: ${{ matrix.target.fn }}
         run: |
           set -eu
-          rc=0
-          for mod in src/verifier src/sdk/server; do
-            while IFS= read -r file; do
-              pkg="./$(dirname "$file")"
-              while IFS= read -r fn; do
-                echo "::group::fuzz $mod $pkg $fn"
-                (cd "$mod" && go test -run='^$' -fuzz="^${fn}\$" \
-                  -fuzztime="$FUZZTIME" "$pkg") || rc=1
-                echo "::endgroup::"
-              done < <(grep -oE '^func Fuzz[A-Za-z0-9_]+' "$mod/$file" \
-                       | awk '{print $2}')
-            done < <(cd "$mod" && grep -rlE '^func Fuzz' --include='*_test.go' . \
-                     | sed 's#^\./##')
-          done
-          exit "$rc"
+          cd "$T_MODULE"
+          go test -run='^$' -fuzz="^${T_FN}\$" -fuzztime="$FUZZTIME" "$T_PKG"
