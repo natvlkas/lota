@@ -698,38 +698,38 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		// TPML_PCR_SELECTION: count(4) + array
 		var pcrSelCount uint32
 		if err := binary.Read(r, binary.BigEndian, &pcrSelCount); err != nil {
-			return extraData, 0, nil, fmt.Errorf("read pcr selection count: %w", err)
+			return nil, 0, nil, fmt.Errorf("read pcr selection count: %w", err)
 		}
 
 		if pcrSelCount > 16 {
-			return extraData, 0, nil, fmt.Errorf("pcr selection count too large: %d", pcrSelCount)
+			return nil, 0, nil, fmt.Errorf("pcr selection count too large: %d", pcrSelCount)
 		}
 
 		for i := uint32(0); i < pcrSelCount; i++ {
 			var hashAlg uint16
 			var selectSize uint8
 			if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
-				return extraData, 0, nil, fmt.Errorf("read pcr selection hash alg: %w", err)
+				return nil, 0, nil, fmt.Errorf("read pcr selection hash alg: %w", err)
 			}
 			if hashAlg != TPMAlgSHA256 {
-				return extraData, 0, nil, fmt.Errorf("unsupported/mixed PCR bank hash alg: 0x%04X", hashAlg)
+				return nil, 0, nil, fmt.Errorf("unsupported/mixed PCR bank hash alg: 0x%04X", hashAlg)
 			}
 			if err := binary.Read(r, binary.BigEndian, &selectSize); err != nil {
-				return extraData, 0, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
+				return nil, 0, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
 			}
 			if int(selectSize) > r.Len() {
-				return extraData, 0, nil, fmt.Errorf("pcr selection truncated: need %d bytes, have %d", selectSize, r.Len())
+				return nil, 0, nil, fmt.Errorf("pcr selection truncated: need %d bytes, have %d", selectSize, r.Len())
 			}
 			selectBuf := make([]byte, selectSize)
 			if _, err := io.ReadFull(r, selectBuf); err != nil {
-				return extraData, 0, nil, fmt.Errorf("read pcr selection: %w", err)
+				return nil, 0, nil, fmt.Errorf("read pcr selection: %w", err)
 			}
 
 			for j, sel := range selectBuf {
 				if j < 3 {
 					pcrMask |= uint32(sel) << (8 * j)
 				} else if sel != 0 {
-					return extraData, 0, nil, fmt.Errorf("pcr selection contains unsupported PCR index >= 24")
+					return nil, 0, nil, fmt.Errorf("pcr selection contains unsupported PCR index >= 24")
 				}
 			}
 		}
@@ -737,14 +737,14 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		// pcrDigest (TPM2B_DIGEST: 2-byte size + data)
 		var digestSize uint16
 		if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
-			return extraData, 0, nil, fmt.Errorf("read pcrDigest size: %w", err)
+			return nil, 0, nil, fmt.Errorf("read pcrDigest size: %w", err)
 		}
 		if int(digestSize) > r.Len() {
-			return extraData, 0, nil, fmt.Errorf("pcrDigest truncated: need %d bytes, have %d", digestSize, r.Len())
+			return nil, 0, nil, fmt.Errorf("pcrDigest truncated: need %d bytes, have %d", digestSize, r.Len())
 		}
 		pcrDigest = make([]byte, digestSize)
 		if _, err := io.ReadFull(r, pcrDigest); err != nil {
-			return extraData, 0, nil, fmt.Errorf("read pcrDigest: %w", err)
+			return nil, 0, nil, fmt.Errorf("read pcrDigest: %w", err)
 		}
 	}
 
