@@ -2,12 +2,6 @@ run:
   timeout: 5m
   tests: false
   modules-download-mode: readonly
-  # analyze against 1.24 semantics:
-  # Go directive is 1.25 (pulls a patched stdlib for govulncheck),
-  # but golangci-lint v1.64.8 is itself built with Go 1.24
-  # and refuses a target newer than its own build.
-  # Code uses no 1.25 language features, so 1.24 is the correct lint target.
-  go: "1.24"
 
 linters:
   disable-all: true
