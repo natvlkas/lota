@@ -1,0 +1,18 @@
+---
+# yamllint configuration for LOTA policy and CI YAML.
+#
+# Built on the relaxed preset: structural problems (bad indentation,
+# duplicate keys, unparsable YAML, trailing-space drift) are errors and
+# fail CI, while line length is only a warning -- a long PCR allowlist line
+# is not a defect. The point is to catch a policy file that will not parse
+# or silently changes meaning before it ships, not to enforce cosmetics.
+extends: relaxed
+
+rules:
+  line-length:
+    max: 120
+    level: warning
+  # duplicate keys in a policy file silently drop the earlier value;
+  # treat it as an error instead of the relaxed-preset warning
+  key-duplicates:
+    level: error

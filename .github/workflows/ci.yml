@@ -257,6 +257,29 @@ jobs:
             tests/integration/test_bpf_gates.sh \
             src/initramfs/90lota/module-setup.sh
 
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install yamllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends yamllint
+
+      - name: Lint policy and CI YAML
+        # Policy files (policies/*.yaml) drive enforcement, so a bad
+        # indentation or a duplicate key that silently changes their meaning
+        # must fail before it ships. Structural problems are errors; line
+        # length is only a warning. See .yamllint.
+        run: |
+          yamllint -c .yamllint -f github \
+            policies/ .github/ .golangci.yml .yamllint
+
   clang-analyzer:
     name: clang-analyzer
     runs-on: ubuntu-24.04
