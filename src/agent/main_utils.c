@@ -117,6 +117,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf(
 	    "                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
+	printf(
+	    "  --reenroll        Re-enroll using the endpoint saved by the\n");
+	printf("                    last --enroll (no CA arguments needed), "
+	       "then exit\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",

@@ -37,6 +37,8 @@ struct cli_options {
 	int export_policy_flag;
 	int attest_flag;
 	int enroll_flag;
+	int reenroll_flag; /* --reenroll: guided re-enroll, reuse saved endpoint
+			    */
 	int seal_flag;
 	int unseal_flag;
 	int seal_aik_auth_migrate_flag; /* --seal-aik-auth: adopt sealing */

@@ -46,6 +46,9 @@ struct demo_options {
 	const char *game_id;
 	const char *socket_path;
 	const char *tamper_marker;
+	const char *ca_cert; /* provisioning CA that signs the server cert */
+	const char *client_cert; /* producer mTLS certificate */
+	const char *client_key;	 /* producer mTLS private key */
 	enum lota_ac_provider provider;
 	unsigned int interval_sec;
 	bool once;
@@ -72,11 +75,17 @@ static void print_usage(const char *argv0)
 	    "Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 	    "          [--provider eac|battleye] [--interval SEC] [--once]\n"
 	    "          [--tamper-marker PATH] [--print-runtime-objects]\n"
+	    "          [--ca-cert PATH] [--client-cert PATH] [--client-key "
+	    "PATH]\n"
 	    "\n"
 	    "Opens an lota_ac_session against the local LOTA agent and\n"
 	    "POSTs heartbeats to the demo server. Exit code in --once mode\n"
 	    "matches the server verdict: 0=TRUSTED, 1=UNTRUSTED, 2=REJECT,\n"
 	    "3=transport error, 64=usage error.\n"
+	    "\n"
+	    "For a mutual-TLS server (https:// URL) pass --ca-cert to verify\n"
+	    "the server against the provisioning CA and --client-cert /\n"
+	    "--client-key to present the producer's certificate."
 	    "\n"
 	    "--print-runtime-objects prints, one path per line, the\n"
 	    "file-backed objects (main binary + shared libraries) this\n"
@@ -140,6 +149,9 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->game_id = DEMO_DEFAULT_GAME_ID;
 	opt->socket_path = NULL;
 	opt->tamper_marker = NULL;
+	opt->ca_cert = NULL;
+	opt->client_cert = NULL;
+	opt->client_key = NULL;
 	opt->provider = LOTA_AC_PROVIDER_EAC;
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
@@ -165,12 +177,15 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	    {"once", no_argument, NULL, '1'},
 	    {"tamper-marker", required_argument, NULL, 'T'},
 	    {"print-runtime-objects", no_argument, NULL, 'O'},
+	    {"ca-cert", required_argument, NULL, 'A'},
+	    {"client-cert", required_argument, NULL, 'E'},
+	    {"client-key", required_argument, NULL, 'K'},
 	    {"help", no_argument, NULL, 'h'},
 	    {0, 0, 0, 0},
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:Oh", long_opts,
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OA:E:K:h", long_opts,
 				NULL)) != -1) {
 		switch (c) {
 		case 's':
@@ -203,6 +218,15 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		case 'O':
 			opt->print_runtime_objects = true;
 			break;
+		case 'A':
+			opt->ca_cert = optarg;
+			break;
+		case 'E':
+			opt->client_cert = optarg;
+			break;
+		case 'K':
+			opt->client_key = optarg;
+			break;
 		case 'T':
 			if (!optarg || !*optarg) {
 				fprintf(stderr,
@@ -218,7 +242,32 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 			return -EINVAL;
 		}
 	}
+
+	if ((opt->client_cert != NULL) != (opt->client_key != NULL)) {
+		fprintf(
+		    stderr,
+		    "--client-cert and --client-key must be set together\n");
+		return -EINVAL;
+	}
 	return 0;
+}
+
+/*
+ * Apply mutual-TLS material to the curl handle. Peer and hostname
+ * verification stay on (curl's default) so the producer never ships a
+ * heartbeat to an unauthenticated server; --ca-cert pins the provisioning
+ * CA and the client cert/key present the producer's identity.
+ */
+static void configure_tls(CURL *curl, const struct demo_options *opt)
+{
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+	if (opt->ca_cert)
+		curl_easy_setopt(curl, CURLOPT_CAINFO, opt->ca_cert);
+	if (opt->client_cert) {
+		curl_easy_setopt(curl, CURLOPT_SSLCERT, opt->client_cert);
+		curl_easy_setopt(curl, CURLOPT_SSLKEY, opt->client_key);
+	}
 }
 
 static size_t response_writer(void *ptr, size_t size, size_t nmemb, void *user)
@@ -449,6 +498,7 @@ int main(int argc, char **argv)
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
+	configure_tls(curl, &opt);
 
 	fprintf(stderr,
 		"demo_anticheat: producer up (server=%s game=%s provider=%s "

@@ -169,15 +169,23 @@ only to the CA; verifiers never see it.
 
 Stand up the CA with your CA key, the trusted manufacturer EK roots and a
 server TLS keypair (`examples/enrollment/gen-ca.sh` generates the CA
-material):
+material). Production fleets span several TPM manufacturers, so trust a
+pin-enforced multi-vendor bundle with `-ek-root-bundle`; the CA fails
+closed if any pinned root is missing, mismatched, or unpinned (see
+[`configs/ek-roots/README.md`](../configs/ek-roots/README.md) for how to
+materialize one):
 
 ```sh
 lota-attest-ca -listen :8444 \
     -ca-cert ca.crt -ca-key ca.key \
     -tls-cert tls.crt -tls-key tls.key \
     -pseudonym-key pseudonym.key \
-    -ek-root /path/to/tpm-vendor-root.pem
+    -ek-root-bundle /var/lib/lota/ek-roots
 ```
+
+`-ek-root <file>` is still accepted and adds operator-supplied roots (for
+example a swtpm CA in the enrollment demo) on top of the bundle; pass
+either or both.
 
 Enroll the agent once per host (repeat before the certificate TTL
 expires, default 24h):
@@ -186,6 +194,15 @@ expires, default 24h):
 sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
     --ca-cert tls.crt
 # stores /var/lib/lota/aik_cert.der, sent in every attestation report
+# also records the CA endpoint for guided re-enrollment
+```
+
+The first enrollment records the CA endpoint, so a refresh -- before the
+certificate TTL expires, or after the agent rotates the AIK -- is a single
+guided command with no CA arguments and no manual CA steps:
+
+```sh
+sudo lota-agent --reenroll
 ```
 
 Point every verifier at the CA root:
@@ -198,6 +215,27 @@ A host that has not enrolled (no AIK certificate) is refused under the
 production `--require-cert` default. See
 [`examples/enrollment/README.md`](../examples/enrollment/README.md) for
 the full end-to-end walk-through.
+
+The agent rotates the AIK on its own schedule (`--aik-ttl`, default 30d).
+It surfaces the rotation state over D-Bus so an operator -- or a fleet
+monitor -- can see when a rotation is due and when a re-enrollment is
+needed. `GetRotationStatus` returns the generation, the AIK creation time,
+the next-rotation deadline, any open grace window, and whether the stored
+certificate has been outdated by a rotation:
+
+```sh
+busctl call org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
+    GetRotationStatus
+# (tttttb) generation provisioned_at rotation_deadline ... reenroll_required
+
+busctl get-property org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
+    ReenrollRequired
+```
+
+When `ReenrollRequired` is true, the host rotated its AIK and the issued
+certificate is stale; clear it with the guided `sudo lota-agent --reenroll`
+above. The same properties emit `PropertiesChanged`, so a subscriber is
+notified the moment a rotation happens rather than having to poll.
 
 ### 7. Sealed keys (offline local attestation)
 

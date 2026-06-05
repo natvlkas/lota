@@ -162,6 +162,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/hardening.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
+              $(AGENT_DIR)/enroll_state.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -462,6 +463,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_signed_clockinfo \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
+	$(TEST_BIN_DIR)/test_enroll_state \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
@@ -556,6 +558,10 @@ $(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
@@ -658,6 +664,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_signed_clockinfo
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
+	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_hardening
@@ -737,7 +744,7 @@ VALGRIND_UNIT_BINS := \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_server_sdk test_anticheat test_loader_symbols
+	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="

@@ -60,22 +60,24 @@ static int recv_frame(struct net_context *net, uint8_t *buf, size_t buf_max,
 	return 0;
 }
 
-/* Persist the DER certificate atomically: write a temp file, then rename. */
-static int store_cert(const char *path, const uint8_t *der, size_t len)
+/* Write a file atomically: write a temp file, fsync, then rename. */
+static int write_file_atomic(const char *path, const void *data, size_t len,
+			     mode_t mode)
 {
 	char tmp[PATH_MAX];
+	const uint8_t *p = data;
 	size_t off = 0;
 	int fd, ret;
 
 	if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp))
 		return -ENAMETOOLONG;
 
-	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (fd < 0)
 		return -errno;
 
 	while (off < len) {
-		ssize_t w = write(fd, der + off, len - off);
+		ssize_t w = write(fd, p + off, len - off);
 		if (w < 0) {
 			ret = -errno;
 			close(fd);
@@ -102,6 +104,12 @@ static int store_cert(const char *path, const uint8_t *der, size_t len)
 		return ret;
 	}
 	return 0;
+}
+
+/* Persist the DER certificate atomically. */
+static int store_cert(const char *path, const uint8_t *der, size_t len)
+{
+	return write_file_atomic(path, der, len, 0644);
 }
 
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
@@ -230,6 +238,86 @@ out:
 	return ret;
 }
 
+/*
+ * Persist the endpoint a successful enrollment used together with the AIK
+ * generation the issued certificate is bound to, so --reenroll can reuse
+ * the endpoint and the daemon can detect when a local AIK rotation has
+ * outdated the certificate. A persistence failure does not fail the
+ * enrollment: the certificate is already stored.
+ */
+static void persist_enroll_state(const char *server, int port,
+				 const char *ca_cert, int skip_verify,
+				 const uint8_t *pin)
+{
+	struct enroll_state st;
+
+	memset(&st, 0, sizeof(st));
+	st.ca_port = port;
+	st.no_verify_tls = skip_verify ? 1 : 0;
+	if (server)
+		snprintf(st.ca_server, sizeof(st.ca_server), "%s", server);
+	if (ca_cert)
+		snprintf(st.ca_cert, sizeof(st.ca_cert), "%s", ca_cert);
+	if (pin) {
+		memcpy(st.pin_sha256, pin, sizeof(st.pin_sha256));
+		st.has_pin = 1;
+	}
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0)
+		st.aik_generation = g_agent.tpm_ctx.aik_meta.generation;
+
+	if (enroll_state_save(&st) < 0)
+		fprintf(stderr,
+			"Warning: could not record enrollment state at %s; "
+			"--reenroll will need the CA endpoint again\n",
+			LOTA_ENROLL_STATE_PATH);
+}
+
+/*
+ * Bring up the TPM, provision the AIK, run one enrollment against the CA,
+ * store the certificate, and record the endpoint. Returns 0 on success,
+ * negative errno on failure.
+ */
+static int run_enrollment(const char *server, int port, const char *ca_cert,
+			  int skip_verify, const uint8_t *pin)
+{
+	int ret;
+
+	ret = net_init();
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize network: %s\n",
+			strerror(-ret));
+		return ret;
+	}
+
+	printf("Initializing TPM...\n");
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		net_cleanup();
+		return ret;
+	}
+
+	printf("Checking AIK...\n");
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to provision AIK: %s\n",
+			tpm_strerror(ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		return ret;
+	}
+
+	ret = enroll_to_ca(&g_agent.tpm_ctx, server, port, ca_cert, skip_verify,
+			   pin, LOTA_AIK_CERT_PATH);
+	if (ret == 0)
+		persist_enroll_state(server, port, ca_cert, skip_verify, pin);
+
+	tpm_cleanup(&g_agent.tpm_ctx);
+	net_cleanup();
+	return ret;
+}
+
 int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin)
 {
@@ -243,38 +331,39 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	 * return as "not a diagnostic, fall through to the daemon", so a
 	 * failed enrollment must not leak a negative errno upward.
 	 */
-	ret = net_init();
+	ret = run_enrollment(server, port, ca_cert, skip_verify, pin);
+
+	printf("\n=== Enrollment %s ===\n", ret == 0 ? "Successful" : "Failed");
+	return ret == 0 ? 0 : 1;
+}
+
+int do_reenroll(void)
+{
+	struct enroll_state st;
+	int ret;
+
+	ret = enroll_state_load(&st);
+	if (ret == -ENOENT) {
+		fprintf(stderr,
+			"No saved enrollment endpoint at %s.\n"
+			"Run --enroll once with --ca-server first; --reenroll "
+			"then reuses that endpoint.\n",
+			LOTA_ENROLL_STATE_PATH);
+		return 1;
+	}
 	if (ret < 0) {
-		fprintf(stderr, "Failed to initialize network: %s\n",
+		fprintf(stderr, "Failed to read enrollment state: %s\n",
 			strerror(-ret));
 		return 1;
 	}
 
-	printf("Initializing TPM...\n");
-	ret = tpm_init(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			tpm_strerror(ret));
-		net_cleanup();
-		return 1;
-	}
+	printf("=== Re-enrolling with %s:%d ===\n\n", st.ca_server, st.ca_port);
 
-	printf("Checking AIK...\n");
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to provision AIK: %s\n",
-			tpm_strerror(ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		net_cleanup();
-		return 1;
-	}
+	ret = run_enrollment(
+	    st.ca_server, st.ca_port, st.ca_cert[0] ? st.ca_cert : NULL,
+	    st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL);
 
-	ret = enroll_to_ca(&g_agent.tpm_ctx, server, port, ca_cert, skip_verify,
-			   pin, LOTA_AIK_CERT_PATH);
-
-	printf("\n=== Enrollment %s ===\n", ret == 0 ? "Successful" : "Failed");
-
-	tpm_cleanup(&g_agent.tpm_ctx);
-	net_cleanup();
+	printf("\n=== Re-enrollment %s ===\n",
+	       ret == 0 ? "Successful" : "Failed");
 	return ret == 0 ? 0 : 1;
 }

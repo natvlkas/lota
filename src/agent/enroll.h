@@ -10,16 +10,51 @@
 #ifndef LOTA_AGENT_ENROLL_H
 #define LOTA_AGENT_ENROLL_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
 #include "../../include/lota_enroll.h"
+#include "net.h"
 
 struct tpm_context;
 
 /* On-disk location of the CA-issued AIK certificate (DER). */
 #define LOTA_AIK_CERT_PATH "/var/lib/lota/aik_cert.der"
+
+/* On-disk record of the endpoint a host last enrolled against. */
+#define LOTA_ENROLL_STATE_PATH "/var/lib/lota/enroll_state.dat"
+#define LOTA_ENROLL_STATE_MAGIC 0x4C455354 /* "LEST" */
+#define LOTA_ENROLL_STATE_VERSION 1
+
+/*
+ * Enrollment state: the CA endpoint a successful enrollment used plus the
+ * AIK generation the issued certificate is bound to. Same-host state, so it
+ * is stored in native byte order behind a magic/version guard. It lets
+ * --reenroll reuse the endpoint with no re-typed CA arguments, and lets the
+ * daemon tell when a local AIK rotation has outdated the stored certificate.
+ */
+struct enroll_state {
+	uint32_t magic;
+	uint32_t version;
+	uint64_t
+	    aik_generation; /* AIK generation the stored cert was issued for */
+	int32_t ca_port;
+	int32_t no_verify_tls;
+	int32_t has_pin;
+	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	char ca_server[256];
+	char ca_cert[PATH_MAX];
+	uint8_t _reserved[64];
+} __attribute__((packed));
+
+int enroll_state_save(const struct enroll_state *st);
+int enroll_state_load(struct enroll_state *out); /* -ENOENT if never enrolled */
+
+/* Path-parameterized variants behind the fixed-path wrappers above. */
+int enroll_state_save_path(const char *path, const struct enroll_state *st);
+int enroll_state_load_path(const char *path, struct enroll_state *out);
 
 struct enroll_challenge {
 	uint16_t status;
@@ -69,5 +104,13 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
  */
 int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin);
+
+/*
+ * Guided re-enrollment: reuse the endpoint recorded by the last successful
+ * --enroll, run a fresh credential activation, and refresh the certificate
+ * and recorded state. Needs no CA arguments and no manual CA steps.
+ * Returns 0 on success, 1 on failure.
+ */
+int do_reenroll(void);
 
 #endif /* LOTA_AGENT_ENROLL_H */
