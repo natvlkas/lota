@@ -228,3 +228,45 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: |
+            src/verifier/go.sum
+            src/attestca/go.sum
+            src/sdk/server/go.sum
+            examples/demo_server/go.sum
+
+      - name: Install govulncheck
+        env:
+          GOTOOLCHAIN: auto
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Run govulncheck on every Go module
+        # govulncheck is call-graph aware: unlike a manifest scanner it fails
+        # only when the code actually reaches a vulnerable symbol, not merely
+        # when a flagged module is required. It complements Trivy with far
+        # fewer false positives from unreachable advisories.
+        run: |
+          set -eu
+          govulncheck="$(go env GOPATH)/bin/govulncheck"
+          rc=0
+          for mod in src/verifier src/attestca src/sdk/server examples/demo_server; do
+            echo "::group::govulncheck $mod"
+            (cd "$mod" && "$govulncheck" ./...) || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
