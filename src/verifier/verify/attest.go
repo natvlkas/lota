@@ -135,6 +135,15 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 		return nil, fmt.Errorf("failed to read PCR selection count: %w", err)
 	}
 
+	// TPM 2.0: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS.
+	// Without a bound an attacker-controlled count from untrusted attestation
+	// data drives an O(count) parse loop and pcrSelectBuf growth -- a
+	// denial-of-service the fuzzer reaches as inputs grow.
+	// Reject oversized selections up front, matching the server SDK's bound.
+	if count > 16 {
+		return nil, fmt.Errorf("PCR selection count too large: %d", count)
+	}
+
 	// reconstruct the raw TPML_PCR_SELECTION bytes for signature verification
 	var pcrSelectBuf bytes.Buffer
 	if err := binary.Write(&pcrSelectBuf, binary.BigEndian, count); err != nil {
