@@ -1,0 +1,51 @@
+name: systemd and udev validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage; let pushes to main run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  units:
+    name: systemd-analyze + udevadm verify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install systemd and udev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends systemd udev
+
+      - name: Stub the unit's ExecStart binary
+        # systemd-analyze verify checks that ExecStart is executable;
+        # the agent binary is not installed in this job, so a stub keeps the
+        # findings focused on the unit directives
+        # (sandboxing, capabilities, ordering)
+        run: sudo install -m 755 /dev/stdin /usr/bin/lota-agent <<<'#!/bin/sh'
+
+      - name: systemd-analyze verify
+        # Catches typos in the hardening directives (ProtectSystem,
+        # CapabilityBoundingSet, PrivateTmp, ...) and bad unit ordering before
+        # the units reach the system
+        run: |
+          systemd-analyze verify \
+            systemd/lota-agent.service \
+            systemd/lota-agent.socket
+
+      - name: udevadm verify
+        # Validates the TPM udev rule syntax that labels /dev/tpm* for the
+        # agent's SELinux gate.
+        run: udevadm verify configs/udev/99-lota-tpm.rules
