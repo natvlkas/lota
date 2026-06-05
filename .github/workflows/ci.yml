@@ -340,7 +340,7 @@ jobs:
     # a Fedora container (which packages veristat) running privileged so
     # veristat can push each program through the host kernel's BPF verifier.
     container:
-      image: fedora:44
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
       options: --privileged
     steps:
       - name: Install BPF toolchain
@@ -388,7 +388,7 @@ jobs:
     # it loads nothing into the kernel, so it needs no privileges
     # (veristat is the dynamic verifier pass)
     container:
-      image: fedora:44
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
     steps:
       - name: Install BPF toolchain
         run: |
