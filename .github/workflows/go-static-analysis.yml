@@ -86,3 +86,51 @@ jobs:
         # .github/go-coverage-baseline. Raise the floors as tests land;
         # the target is 100%.
         run: ./scripts/check-go-coverage.sh
+
+  go-licenses:
+    name: go-licenses
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: |
+            src/verifier/go.sum
+            src/attestca/go.sum
+            src/sdk/server/go.sum
+            examples/demo_server/go.sum
+
+      - name: Install go-licenses
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/google/go-licenses@v1.6.0
+
+      - name: Check dependency licenses against the permissive allowlist
+        # Fail if any dependency carries a license outside the permissive
+        # allowlist. A copyleft license (GPL/AGPL/...) pulled in transitively
+        # would force opening proprietary integrations, so the build blocks
+        # before it lands. The project's own packages are ignored, and
+        # modernc.org/mathutil is ignored because go-licenses cannot classify
+        # its license file even though it is BSD-3-Clause (permissive).
+        run: |
+          set -eu
+          go_licenses="$(go env GOPATH)/bin/go-licenses"
+          allow="MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC,MPL-2.0"
+          rc=0
+          for mod in src/verifier src/attestca src/sdk/server examples/demo_server; do
+            echo "::group::go-licenses $mod"
+            (cd "$mod" && "$go_licenses" check ./... \
+              --allowed_licenses="$allow" \
+              --ignore github.com/szymonwilczek/lota \
+              --ignore modernc.org/mathutil) || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
