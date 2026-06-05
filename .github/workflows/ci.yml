@@ -309,6 +309,54 @@ jobs:
             make BUILD_DIR=build-clang-analyzer \
             test-unit examples build-clang-analyzer/bench_sdk syzkaller-fuzz-loader
 
+  bpf-veristat:
+    name: bpf-veristat
+    runs-on: ubuntu-24.04
+    # clang-analyzer and the other static C tools exclude src/bpf because the
+    # BPF target trips x86 assumptions. This job is the dedicated BPF analysis:
+    # a Fedora container (which packages veristat) running privileged so
+    # veristat can push each program through the host kernel's BPF verifier.
+    container:
+      image: fedora:44
+      options: --privileged
+    steps:
+      - name: Install BPF toolchain
+        run: |
+          dnf -y install \
+            git make clang llvm pkgconf-pkg-config \
+            libbpf-devel bpftool veristat \
+            elfutils-libelf-devel zlib-devel
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build the BPF object
+        run: make BUILD_DIR=build-bpf bpf
+
+      - name: Static link / BTF check (bpftool gen object)
+        # Resolves relocations and validates the BTF without loading into the
+        # kernel; catches a malformed object independent of runner privileges.
+        run: bpftool gen object /tmp/lota_lsm.linked.o build-bpf/lota_lsm.bpf.o
+
+      - name: Kernel verifier simulation (veristat)
+        # veristat pushes each program through the real in-kernel verifier
+        # (instruction limit, pointer checks, loop bounds, ...). A program the
+        # kernel would reject gets a 'failure' verdict and fails the job here,
+        # before the rejection surfaces on a live host.
+        run: |
+          set -eu
+          veristat build-bpf/lota_lsm.bpf.o | tee veristat.out
+          if grep -qw failure veristat.out; then
+            echo "::error::veristat: the BPF verifier rejected at least one program"
+            exit 1
+          fi
+          echo "veristat: all programs pass the kernel verifier"
+
   fedora-build:
     name: build-fedora-${{ matrix.version }}
     runs-on: ubuntu-24.04
