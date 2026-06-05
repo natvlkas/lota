@@ -186,3 +186,45 @@ jobs:
             echo "::endgroup::"
           done
           exit "$rc"
+
+  trivy:
+    name: trivy-deps
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # read the dependency manifests being scanned
+      security-events: write # upload Trivy SARIF results to code scanning
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Report pass: every severity to code scanning, never fails the job, so
+      # MEDIUM/LOW advisories are visible without blocking the build
+      - name: Trivy dependency scan (SARIF report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          format: sarif
+          output: trivy-results.sarif
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-deps
+
+      # Gate pass: known HIGH or CRITICAL vulnerability in a Go
+      # dependency fails the build
+      - name: Trivy gate (HIGH, CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
