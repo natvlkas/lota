@@ -336,19 +336,34 @@ jobs:
     name: bpf-veristat
     runs-on: ubuntu-24.04
     # clang-analyzer and the other static C tools exclude src/bpf because the
-    # BPF target trips x86 assumptions. This job is the dedicated BPF analysis:
-    # a Fedora container (which packages veristat) running privileged so
-    # veristat can push each program through the host kernel's BPF verifier.
+    # BPF target trips x86 assumptions. This job is the dedicated BPF analysis.
+    # It runs veristat inside a VM booted on the Fedora kernel, not against the
+    # GitHub host kernel: the host runner trails the deployment kernel, and on
+    # that older verifier lota_file_mprotect is wrongly rejected (vma->vm_file
+    # is treated as untrusted for the fs-verity kfunc). Booting the same kernel
+    # family the agent runs on makes the gate match production, so every
+    # program -- file_mprotect included -- is hard-gated with no exemption.
+    # The Fedora container packages veristat, virtme-ng and the kernel;
+    # --privileged exposes /dev/kvm for a fast boot
     container:
       image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
       options: --privileged
     steps:
-      - name: Install BPF toolchain
+      - name: Install BPF toolchain and VM tools
         run: |
+          set -eu
           dnf -y install \
             git make clang llvm pkgconf-pkg-config \
             libbpf-devel bpftool veristat \
-            elfutils-libelf-devel zlib-devel
+            elfutils-libelf-devel zlib-devel \
+            qemu-kvm kernel-core file
+          # virtme-ng boots the installed kernel in a throwaway VM;
+          # prefer the distro package,
+          # fall back to pip if the repo lacks it
+          dnf -y install virtme-ng || {
+            dnf -y install python3-pip
+            pip3 install virtme-ng
+          }
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -366,48 +381,31 @@ jobs:
         # kernel; catches a malformed object independent of runner privileges.
         run: bpftool gen object /tmp/lota_lsm.linked.o build-bpf/lota_lsm.bpf.o
 
-      - name: Kernel verifier simulation (veristat)
-        # veristat pushes each program through the real in-kernel verifier
-        # (instruction limit, pointer checks, loop bounds, ...). A program the
-        # kernel would reject gets a 'failure' verdict and fails the job here,
-        # before the rejection surfaces on a live host. On a rejection the full
-        # verifier log for each failed program is dumped so the reason is
-        # visible in the run; the runner kernel is printed for context because
-        # the verifier's behaviour is kernel-version dependent.
-        #
-        # KERNEL_GATED lists programs whose acceptance needs a newer verifier
-        # than the GitHub runner ships. lota_file_mprotect passes a
-        # security_file_mprotect file* to an fs-verity kfunc; only kernels that
-        # propagate KF_TRUSTED_ARGS through the LSM hook accept it, so older
-        # runner kernels reject it with "R1 must be referenced or trusted".
-        # These programs are loaded and verified at runtime on the target
-        # kernel by the agent, so here a rejection limited to that set is a
-        # warning, not a build failure. Any other rejection still fails.
-        env:
-          KERNEL_GATED: lota_file_mprotect
+      - name: Kernel verifier simulation (veristat in a VM)
+        # Boot the installed Fedora kernel in a throwaway virtme-ng VM and run
+        # the veristat gate inside it. veristat pushes every program through
+        # that kernel's real verifier (instruction limit, pointer checks,
+        # trusted-pointer rules, ...).
+        # Any rejection fails the job and the full verifier log for the program
+        # is dumped. VM shares this checkout over 9p, so the object built above
+        # and scripts/veristat-gate.sh are visible inside.
+        # lsm=bpf is required on the guest command line so the BPF_PROG_TYPE_LSM
+        # programs are loadable.
+        # KVM is used when /dev/kvm is exposed (privileged container) and TCG is
+        # the slow fallback.
         run: |
           set -eu
-          echo "runner kernel: $(uname -r)"
-          veristat build-bpf/lota_lsm.bpf.o | tee veristat.out
-          failed="$(awk '$3 == "failure" { print $2 }' veristat.out)"
-          unexpected=""
-          for prog in $failed; do
-            echo "::group::verifier log: $prog"
-            veristat -vl2 -f "$prog" build-bpf/lota_lsm.bpf.o 2>&1 | tail -80 || true
-            echo "::endgroup::"
-            case " $KERNEL_GATED " in
-              *" $prog "*)
-                echo "::warning::veristat: $prog rejected on the runner kernel" \
-                     "(needs KF_TRUSTED_ARGS through the LSM hook); verified at" \
-                     "runtime on the target kernel" ;;
-              *) unexpected="$unexpected $prog" ;;
-            esac
-          done
-          if [ -n "$unexpected" ]; then
-            echo "::error::veristat: the BPF verifier rejected:$unexpected"
-            exit 1
+          kver="$(for d in /usr/lib/modules/*/; do basename "$d"; done \
+                  | sort -V | tail -n1)"
+          echo "host runner kernel: $(uname -r)"
+          echo "VM kernel:          $kver"
+          set -- --run "$kver" --append "lsm=bpf"
+          if [ ! -e /dev/kvm ]; then
+            echo "no /dev/kvm -- falling back to TCG"
+            set -- "$@" --disable-kvm
           fi
-          echo "veristat: all non-kernel-gated programs pass the kernel verifier"
+          vng "$@" \
+            --exec "cd '$PWD' && sh scripts/veristat-gate.sh build-bpf/lota_lsm.bpf.o"
 
   bpf-elf-inspect:
     name: bpf-elf-inspect
