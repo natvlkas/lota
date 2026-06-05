@@ -110,6 +110,14 @@ allow lota_agent_t lota_etc_t:file read_file_perms;
 allow lota_agent_t lota_var_t:dir manage_dir_perms;
 allow lota_agent_t lota_var_t:file manage_file_perms;
 
+# The IPC listening socket (/run/lota/lota.sock, lota_var_t) is a sock_file,
+# a class manage_file_perms does not cover. The daemon binds it on the
+# non-socket-activated path, and lota_agent_t one-shots (e.g. --shutdown)
+# connect to it as clients. Without these the client write/connect is
+# denied and a graceful shutdown fails under enforcing.
+allow lota_agent_t lota_var_t:sock_file manage_sock_file_perms;
+allow lota_agent_t self:unix_stream_socket connectto;
+
 # /usr/lib/lota/*.bpf.o
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
@@ -219,13 +227,12 @@ kernel_read_kernel_sysctls(lota_agent_t)
 # lines from test_iommu() with no context, and the operator has
 # no way to attribute the failure.
 #
-# dbus_system_bus_client() grants connect+write on the system D-Bus
-# socket (system_dbusd_var_run_t). The agent registers
-# org.lota.Agent1 there for the policy reload + status RPC paths;
-# without this rule dbus_init() succeeds (libdbus connects via
-# autolaunch fallback) but every method dispatch is denied at the
-# kernel and the verifier sees no D-Bus surface from inside the
-# guest.
+# dbus_system_bus_client() grants the agent send_msg on the system bus,
+# but on this refpolicy it does NOT grant acquire_svc -- owning the
+# well-known name org.lota.Agent1 needs an explicit rule. Without it
+# dbus-broker denies RequestName (USER_AVC acquire_svc, not a kernel AVC),
+# dbus_init() logs "failed to claim org.lota.Agent1: Permission denied",
+# and the agent falls back to socket IPC only with no D-Bus surface.
 #
 # pidfs_t arrived with kernel 6.9+ (Fedora 44 ships 6.19+). libsystemd
 # 259 calls fstatfs() on the pidfd dirfd it opens internally during
@@ -237,6 +244,10 @@ logging_send_syslog_msg(lota_agent_t)
 logging_send_audit_msgs(lota_agent_t)
 
 dbus_system_bus_client(lota_agent_t)
+gen_require(`
+	class dbus acquire_svc;
+')
+allow lota_agent_t system_dbusd_t:dbus acquire_svc;
 
 gen_require(`
 	type pidfs_t;
