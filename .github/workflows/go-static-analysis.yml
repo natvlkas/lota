@@ -134,3 +134,51 @@ jobs:
             echo "::endgroup::"
           done
           exit "$rc"
+
+  go-fuzz:
+    name: go-fuzz
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: |
+            src/verifier/go.sum
+            src/sdk/server/go.sum
+
+      - name: Fuzz the network and attestation parsers
+        # Every Go fuzz target is run for a bounded time against random input
+        # on top of its seed corpus. These targets cover the code that parses
+        # untrusted bytes -- attestation tokens, TPM quote/attest blobs, event
+        # logs, certificates and signed policies -- so a panic or unhandled
+        # input is shaken out before it reaches a live verifier.
+        # A crash leaves a reproducer under testdata/fuzz and fails the job.
+        # syzkaller cluster fuzzes the BPF/kernel surface out of band;
+        # this is the in-tree parser coverage on every pull request.
+        env:
+          FUZZTIME: 60s
+        run: |
+          set -eu
+          rc=0
+          for mod in src/verifier src/sdk/server; do
+            while IFS= read -r file; do
+              pkg="./$(dirname "$file")"
+              while IFS= read -r fn; do
+                echo "::group::fuzz $mod $pkg $fn"
+                (cd "$mod" && go test -run='^$' -fuzz="^${fn}\$" \
+                  -fuzztime="$FUZZTIME" "$pkg") || rc=1
+                echo "::endgroup::"
+              done < <(grep -oE '^func Fuzz[A-Za-z0-9_]+' "$mod/$file" \
+                       | awk '{print $2}')
+            done < <(cd "$mod" && grep -rlE '^func Fuzz' --include='*_test.go' . \
+                     | sed 's#^\./##')
+          done
+          exit "$rc"
