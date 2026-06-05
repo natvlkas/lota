@@ -395,6 +395,53 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         run: make SANITIZE=address,undefined test-unit
 
+  sanitizers-thread:
+    name: tsan-unit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Build and run unit tests under ThreadSanitizer
+        # TSan gets its own job because it cannot be combined with ASan in a
+        # single build. The agent runs asynchronous loops (D-Bus, IPC, the
+        # telemetry path, TPM access), so a data race here is a real risk;
+        # halt_on_error turns the first race into a non-zero exit
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: make SANITIZE=thread test-unit
+
   valgrind:
     name: valgrind-unit
     runs-on: ubuntu-24.04
