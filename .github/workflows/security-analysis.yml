@@ -137,3 +137,52 @@ jobs:
           inputs: .
           persona: auditor
           version: v1.25.2
+
+  gosec:
+    name: gosec
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: |
+            src/verifier/go.sum
+            src/attestca/go.sum
+            src/sdk/server/go.sum
+            examples/demo_server/go.sum
+
+      - name: Install gosec
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+
+      - name: Run gosec on every Go module
+        # G104, G304 and G115 are excluded -- the same three classes
+        # golangci-lint excludes by default.
+        # G104 (unhandled errors) is already enforced by errcheck in golangci-lint;
+        # G304 flags file opens from operator-supplied paths that are validated before use;
+        # G115 flags integer conversions in the bounds-checked wire parsers.
+        #
+        # Enforcing them here would drown the crypto/TLS/rand signal
+        # in noise without catching a real defect.
+        #
+        # go.work does not make gosec traverse the member modules, so each is
+        # scanned in its own module context.
+        run: |
+          set -eu
+          gosec="$(go env GOPATH)/bin/gosec"
+          rc=0
+          for mod in src/verifier src/attestca src/sdk/server examples/demo_server; do
+            echo "::group::gosec $mod"
+            (cd "$mod" && "$gosec" -exclude=G104,G304,G115 -severity=low ./...) || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
