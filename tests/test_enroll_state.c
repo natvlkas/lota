@@ -10,9 +10,11 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/agent/enroll.h"
@@ -105,13 +107,14 @@ static void test_rejects_truncated(void)
 {
 	const char *path = tmp_path();
 	struct enroll_state out;
-	FILE *f = fopen(path, "wb");
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 
-	CHECK(f != NULL, "open truncated");
-	if (f) {
+	CHECK(fd >= 0, "open truncated");
+	if (fd >= 0) {
 		uint8_t half[8] = {0};
-		fwrite(half, sizeof(half), 1, f);
-		fclose(f);
+		CHECK(write(fd, half, sizeof(half)) == (ssize_t)sizeof(half),
+		      "write truncated");
+		close(fd);
 	}
 	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
 	      "short file rejected");
