@@ -1,0 +1,54 @@
+name: Cross-architecture build (arm64)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage; let pushes to main run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  arm64:
+    name: build-test-arm64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          platforms: arm64
+
+      - name: Build and unit-test under linux/arm64
+        # emulates aarch64 and runs the full build, the BPF object
+        # and the unit suite so a wrong-endian parser or a layout
+        # assumption fails here instead of on an ARM host
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/src:ro -w /src \
+            fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898 \
+            bash -c '
+              set -eu
+              dnf -y install \
+                make gcc clang llvm pkgconf-pkg-config \
+                libbpf-devel elfutils-libelf-devel zlib-devel \
+                tpm2-tss-devel openssl-devel systemd-devel \
+                libseccomp-devel dbus-devel golang
+              echo "arch: $(uname -m), gcc: $(gcc -dumpmachine)"
+              # build from a writable copy; the source mount is read-only
+              cp -a /src /tmp/w && cd /tmp/w
+              export GOCACHE=/tmp/gocache GOTOOLCHAIN=auto
+              make BUILD_DIR=/tmp/bld all
+              make BUILD_DIR=/tmp/bld bpf
+              make BUILD_DIR=/tmp/bld test-unit
+            '
