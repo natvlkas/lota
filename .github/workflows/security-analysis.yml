@@ -244,6 +244,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: src/verifier/go.mod
+          check-latest: true
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
