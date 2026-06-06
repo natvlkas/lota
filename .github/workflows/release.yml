@@ -13,6 +13,11 @@ on:
     tags:
       - 'v*'
 
+# one release run per tag; never cancel a release that is already publishing
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -56,7 +61,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: src/verifier/go.mod
-          cache-dependency-path: src/verifier/go.sum
+          # a release builds the shipped artifacts; disable the module cache so
+          # a poisoned cache entry cannot influence the signed output
+          cache: false
 
       - name: Confirm the tag matches VERSION
         # check-version-tag fails when the annotated tag (vX.Y.Z) does not
@@ -82,7 +89,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
 
       - name: Sign the manifest (keyless)
         # Keyless: GitHub's OIDC token mints an ephemeral Sigstore certificate

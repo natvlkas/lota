@@ -4,6 +4,12 @@
 # github/*) are allowed to stay on readable version tags (ref-pin), which
 # is the repository policy for reviewability and Dependabot tracking. Every
 # other (third-party) action must be pinned to a full commit SHA (hash-pin).
+#
+# dangerous-triggers: pr-router.yml must use pull_request_target -- it needs a
+# write-capable token to retarget a fork PR's base branch, which the read-only
+# pull_request token cannot do. It never checks out or runs PR-controlled code
+# (API calls only), so the elevated token is not exposed to untrusted input.
+# Ignored by filename so the policy survives line shifts.
 rules:
   unpinned-uses:
     config:
@@ -11,3 +17,6 @@ rules:
         "actions/*": ref-pin
         "github/*": ref-pin
         "*": hash-pin
+  dangerous-triggers:
+    ignore:
+      - pr-router.yml

@@ -13,13 +13,20 @@ on:
   pull_request_target:
     types: [opened, reopened]
 
-permissions:
-  pull-requests: write
+# one router run per PR; supersede an earlier run on reopen
+concurrency:
+  group: pr-router-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# no token at the workflow level; the single job requests exactly what it needs
+permissions: {}
 
 jobs:
   retarget:
     name: redirect main PRs to lota-next
     runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write   # retarget the PR base branch and post one comment
     # only act on PRs aimed at main, opened by someone other than the
     # maintainer, and not by a bot (dependabot et al. are left alone)
     if: >-
