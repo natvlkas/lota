@@ -2,7 +2,7 @@ name: Reproducible build
 
 on:
   push:
-    branches: [main]
+    branches: [main, lota-next]
   pull_request:
 
 permissions:

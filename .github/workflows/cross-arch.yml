@@ -2,7 +2,7 @@ name: Cross-architecture build (arm64)
 
 on:
   push:
-    branches: [main]
+    branches: [main, lota-next]
   pull_request:
 
 permissions:
