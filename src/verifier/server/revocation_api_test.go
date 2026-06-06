@@ -171,7 +171,7 @@ func TestAPI_ListRevocations(t *testing.T) {
 	}
 
 	// list revocations
-	req := httptest.NewRequest("GET", "/api/v1/revocations", nil)
+	req := adminRequest("GET", "/api/v1/revocations", "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -328,7 +328,7 @@ func TestAPI_ListBans(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest("GET", "/api/v1/bans", nil)
+	req := adminRequest("GET", "/api/v1/bans", "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -354,7 +354,7 @@ func TestAPI_ListBans(t *testing.T) {
 func TestAPI_ListBans_RejectsOffsetPagination(t *testing.T) {
 	mux, _ := setupTestAPIListening(t)
 
-	req := httptest.NewRequest("GET", "/api/v1/bans?offset=999999999", nil)
+	req := adminRequest("GET", "/api/v1/bans?offset=999999999", "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -386,7 +386,7 @@ func TestAPI_ListBans_CursorPagination(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	req1 := httptest.NewRequest("GET", "/api/v1/bans?limit=2", nil)
+	req1 := adminRequest("GET", "/api/v1/bans?limit=2", "")
 	rec1 := httptest.NewRecorder()
 	mux.ServeHTTP(rec1, req1)
 	if rec1.Code != http.StatusOK {
@@ -408,7 +408,7 @@ func TestAPI_ListBans_CursorPagination(t *testing.T) {
 		t.Fatal("expected next_id on non-final page")
 	}
 
-	req2 := httptest.NewRequest("GET", "/api/v1/bans?limit=2&next_id="+page1.NextID, nil)
+	req2 := adminRequest("GET", "/api/v1/bans?limit=2&next_id="+page1.NextID, "")
 	rec2 := httptest.NewRecorder()
 	mux.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusOK {
@@ -460,7 +460,7 @@ func TestAPI_AuditLog(t *testing.T) {
 	}
 
 	// query audit log
-	req = httptest.NewRequest("GET", "/api/v1/audit?limit=10", nil)
+	req = adminRequest("GET", "/api/v1/audit?limit=10", "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -505,7 +505,7 @@ func TestAPI_StatsIncludeRevocationCounters(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	// check stats
-	req = httptest.NewRequest("GET", "/api/v1/stats", nil)
+	req = adminRequest("GET", "/api/v1/stats", "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -556,7 +556,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 	})
 
 	// client info should show revoked
-	req = httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
+	req = adminRequest("GET", "/api/v1/clients/"+persistentID, "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -632,7 +632,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 	}
 
 	// get hardware ID from client info
-	req := httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
+	req := adminRequest("GET", "/api/v1/clients/"+persistentID, "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -671,7 +671,7 @@ func TestIntegrationAPI_PrometheusRevocationMetrics(t *testing.T) {
 
 	mux, _ := setupTestAPIListening(t)
 
-	req := httptest.NewRequest("GET", "/metrics", nil)
+	req := adminRequest("GET", "/metrics", "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -791,32 +791,41 @@ func TestAuth_NoKeyConfiguredReturns403(t *testing.T) {
 	t.Log("✓ Admin endpoints correctly disabled without key")
 }
 
-func TestAuth_ReadOnlyEndpointsNoAuthRequired(t *testing.T) {
-	t.Log("TEST: Public endpoints work without any authentication")
-	t.Log("Public endpoints: health, stats, metrics (no secrets exposed)")
+func TestAuth_OnlyHealthIsUnconditionallyPublic(t *testing.T) {
+	t.Log("SECURITY TEST: only /health is public once a key is configured")
+	t.Log("stats and metrics are operational intelligence and must be gated")
 
 	mux, _ := setupTestAPIListeningWithKey(t, "secret-key")
 
-	publicEndpoints := []string{
-		"/health",
+	t.Run("GET /health public", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/health", nil)
+		// NO Authorization header
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+			t.Errorf("/health should never require auth, got %d", rec.Code)
+		}
+	})
+
+	gatedEndpoints := []string{
 		"/api/v1/stats",
 		"/metrics",
 	}
-
-	for _, ep := range publicEndpoints {
-		t.Run("GET "+ep, func(t *testing.T) {
+	for _, ep := range gatedEndpoints {
+		t.Run("GET "+ep+" gated", func(t *testing.T) {
 			req := httptest.NewRequest("GET", ep, nil)
 			// NO Authorization header
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
-			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-				t.Errorf("Public endpoint %s should not require auth, got %d", ep, rec.Code)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("Endpoint %s should require auth when a key is set, got %d", ep, rec.Code)
 			}
 		})
 	}
 
-	t.Log("✓ All public endpoints accessible without auth")
+	t.Log("✓ /health stays public; stats and metrics require auth")
 }
 
 func TestAuth_ValidTokenAllowsMutation(t *testing.T) {
@@ -1044,9 +1053,10 @@ func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
 	t.Log("✓ Sensitive endpoints are public when no reader key configured")
 }
 
-func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
-	t.Log("TEST: Admin key alone does not protect sensitive read-only endpoints")
-	t.Log("Reader protection is opt-in via LOTA_READER_API_KEY env var")
+func TestAuth_AdminKeyAloneProtectsReads(t *testing.T) {
+	t.Log("TEST: Admin key alone protects sensitive read-only endpoints")
+	t.Log("An admin key is a superset of the reader key, so configuring only")
+	t.Log("LOTA_ADMIN_API_KEY must not silently leave the read tier public")
 
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "")
 
@@ -1061,18 +1071,29 @@ func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
 	}
 
 	for _, ep := range sensitiveEndpoints {
-		t.Run("GET "+ep+" no auth", func(t *testing.T) {
+		t.Run("GET "+ep+" no auth rejected", func(t *testing.T) {
 			req := httptest.NewRequest("GET", ep, nil)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
+			if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+				t.Errorf("Endpoint %s should reject unauthenticated reads when admin key is set, got %d", ep, rec.Code)
+			}
+		})
+
+		t.Run("GET "+ep+" admin key accepted", func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			req.Header.Set("Authorization", "Bearer admin-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
 			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-				t.Errorf("Endpoint %s should be public when only admin key is set, got %d", ep, rec.Code)
+				t.Errorf("Endpoint %s should accept the admin key as a reader, got %d", ep, rec.Code)
 			}
 		})
 	}
 
-	t.Log("✓ Sensitive read-only endpoints are public without reader key")
+	t.Log("✓ Admin key gates the sensitive read tier and is accepted on it")
 }
 
 func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {

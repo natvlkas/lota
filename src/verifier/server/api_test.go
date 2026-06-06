@@ -237,10 +237,11 @@ func getClientTestAIK(clientID string) *rsa.PrivateKey {
 
 // creates a test verifier and HTTP mux for API testing
 // uses a test admin API key so that mutating endpoints are accessible
-// reader key is empty so sensitive read endpoints are public
+// no auth keys are configured, so every endpoint is public; this exercises
+// the handler logic in isolation, not the auth gate
 func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
-	return setupTestAPIWithKeys(t, "test-admin-key", "")
+	return setupTestAPIWithKeys(t, "", "")
 }
 
 // creates a test setup with a specific admin API key (no reader key)
@@ -597,7 +598,7 @@ func computeTestPCRDigest(buf []byte, pcrOffset int, pcrMask uint32) []byte {
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	rec := httptest.NewRecorder()
@@ -645,7 +646,7 @@ func TestHealthDegraded(t *testing.T) {
 }
 
 func TestStatsEndpoint(t *testing.T) {
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	if err := v.AddPolicy(verify.StrictPolicy()); err != nil {
 		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
 	}
@@ -683,7 +684,7 @@ func TestStatsEndpoint(t *testing.T) {
 }
 
 func TestStatsCounters(t *testing.T) {
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	_, _ = v.GenerateChallenge("client-a")
 	_, _ = v.GenerateChallenge("client-b")
@@ -701,7 +702,7 @@ func TestStatsCounters(t *testing.T) {
 }
 
 func TestListClientsEmpty(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/api/v1/clients", nil)
 	rec := httptest.NewRecorder()
@@ -723,7 +724,7 @@ func TestListClientsEmpty(t *testing.T) {
 }
 
 func TestListClientsWithChallenges(t *testing.T) {
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	_, _ = v.GenerateChallenge("10.0.0.1")
 	_, _ = v.GenerateChallenge("10.0.0.2")
@@ -742,7 +743,7 @@ func TestListClientsWithChallenges(t *testing.T) {
 }
 
 func TestClientInfoNotFound(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/api/v1/clients/nonexistent", nil)
 	rec := httptest.NewRecorder()
@@ -761,7 +762,7 @@ func TestClientInfoNotFound(t *testing.T) {
 }
 
 func TestClientInfoWithChallenge(t *testing.T) {
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	_, _ = v.GenerateChallenge("10.0.0.42")
 	_, _ = v.GenerateChallenge("10.0.0.42")
@@ -776,7 +777,7 @@ func TestClientInfoWithChallenge(t *testing.T) {
 }
 
 func TestClientInfoEmptyID(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/api/v1/clients/", nil)
 	rec := httptest.NewRecorder()
@@ -795,7 +796,7 @@ func TestClientInfoEmptyID(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -838,7 +839,7 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestMetricsCounterValues(t *testing.T) {
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	_, _ = v.GenerateChallenge("test-client")
 
@@ -854,7 +855,7 @@ func TestMetricsCounterValues(t *testing.T) {
 }
 
 func TestUptimeIncreases(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	rec := httptest.NewRecorder()
@@ -876,7 +877,7 @@ func TestUptimeIncreases(t *testing.T) {
 }
 
 func TestMethodNotAllowed(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	req := httptest.NewRequest("POST", "/health", nil)
 	rec := httptest.NewRecorder()
@@ -888,7 +889,7 @@ func TestMethodNotAllowed(t *testing.T) {
 }
 
 func TestJSONContentType(t *testing.T) {
-	mux, _ := setupTestAPIListening(t)
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	endpoints := []string{
 		"/health",
@@ -912,7 +913,7 @@ func TestIntegrationAPI_AttestationCounters(t *testing.T) {
 	t.Log("INTEGRATION: Verify /api/v1/stats counters after real attestation")
 	t.Log("Ensures total/success/failure counters accurately track attestation outcomes")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "attest-counter-client"
 	pcr14 := [32]byte{0x14}
 
@@ -949,7 +950,7 @@ func TestIntegrationAPI_FailedAttestationCounter(t *testing.T) {
 	t.Log("INTEGRATION: Verify failure counter after invalid attestation")
 	t.Log("Submits a malformed report and verifies the failure is tracked")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "bad-report-client"
 
 	// generate challenge but submit garbage report
@@ -985,7 +986,7 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 	t.Log("INTEGRATION: Verify nonce lifecycle visible through /api/v1/stats")
 	t.Log("Challenge → pending +1, attestation → pending -1, used_nonces +1")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "nonce-lifecycle"
 	pcr14 := [32]byte{0x14}
 
@@ -1030,7 +1031,7 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 	t.Log("INTEGRATION: Verify replay attack increments failure counter")
 	t.Log("CRITICAL SECURITY: Second submission of same report must fail")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "replay-stats-client"
 	pcr14 := [32]byte{0x14}
 
@@ -1073,7 +1074,7 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	t.Log("INTEGRATION: Verify /api/v1/clients/{id} after successful attestation")
 	t.Log("Client info must reflect AIK registration, baseline, counter")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "attested-client"
 	pcr14 := [32]byte{0x14, 0x15, 0x16}
 
@@ -1122,7 +1123,7 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	t.Log("INTEGRATION: Multiple attestations from same client tracked correctly")
 	t.Log("Counter, baseline match count, and last_attestation must update")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "multi-attest"
 	pcr14 := [32]byte{0x44}
 
@@ -1171,7 +1172,7 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 	t.Log("INTEGRATION: Multiple clients visible in /api/v1/clients after attestation")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	clients := []string{"client-alpha", "client-beta", "client-gamma"}
 	pcr14 := [32]byte{0x77}
@@ -1213,7 +1214,7 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 	t.Log("INTEGRATION: Invalid TPM signature → failure counter via API")
 	t.Log("CRITICAL SECURITY: Wrong key must be detected and tracked")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "wrong-sig-client"
 	pcr14 := [32]byte{0x14}
 
@@ -1255,7 +1256,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	t.Log("INTEGRATION: PCR14 baseline violation → failure counter via API")
 	t.Log("CRITICAL SECURITY: Agent tampering must be tracked in monitoring")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "tamper-client"
 	originalPCR14 := [32]byte{0xAA, 0xBB, 0xCC}
 
@@ -1289,7 +1290,7 @@ func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
 	t.Log("INTEGRATION: Prometheus /metrics reflects real attestation data")
 	t.Log("Verifies counter and gauge values match actual attestation outcomes")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	pcr14 := [32]byte{0x14}
 
 	// 3 successful attestations from 2 clients
@@ -1320,7 +1321,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	t.Log("INTEGRATION: Pending challenges decrement after verification")
 	t.Log("Ensures challenge state is properly cleaned up after attestation")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "pending-leak-test"
 	pcr14 := [32]byte{0x14}
 
@@ -1363,7 +1364,7 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 	t.Log("INTEGRATION: Concurrent attestations from multiple clients")
 	t.Log("Stress test: 10 clients attesting simultaneously, stats must converge")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	numClients := 10
 	pcr14 := [32]byte{0xCC}
 
@@ -1419,7 +1420,7 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 	t.Log("INTEGRATION: Mixed success/failure ratio visible through API")
 	t.Log("3 successful + 2 failed attestations = correct ratio in all endpoints")
 
-	mux, v := setupTestAPIListening(t)
+	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	pcr14 := [32]byte{0x14}
 
 	// 3 successful
@@ -1467,7 +1468,11 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 func assertStats(t *testing.T, mux *http.ServeMux, check func(statsResponse)) {
 	t.Helper()
 
+	// carry the admin bearer so the helper works against both a public
+	// (no-key) handler and one with the read tier gated; an unused bearer on
+	// a public handler is ignored
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+testAdminKey)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
