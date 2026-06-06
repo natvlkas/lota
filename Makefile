@@ -291,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -387,6 +387,22 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
 	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
+
+# Canonical reproducible build
+# This target pins the remaining environmental inputs the toolchain reads
+# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
+#  -- so the artifacts depend only on the source tree.
+# SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
+# given commit (or tag) is deterministic.
+# Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
+# git.
+# See docs/BUILD-REPRODUCIBLE.md for how to verify shipped == tag.
+REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
+reproducible-build: export TZ = UTC
+reproducible-build: export LC_ALL = C
+reproducible-build: all
+	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -896,6 +912,9 @@ help:
 	@echo "  bench-clean      Remove benchmark binaries and raw results"
 	@echo ""
 	@echo "  BENCH_COUNT=10 make bench-go   more samples for benchstat"
+	@echo ""
+	@echo "Release targets:"
+	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see docs/BUILD-REPRODUCIBLE.md)"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
