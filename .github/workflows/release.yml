@@ -103,7 +103,17 @@ jobs:
           set -eu
           notes="Reproducible build of $TAG. Verify the artifacts with cosign"
           notes="$notes against SHA256SUMS.cosign.bundle; see docs/BUILD-REPRODUCIBLE.md."
+          # marking anything that is not a final >=1.0.0 release as a pre-release:
+          # 0.x version (no stability promise yet) or a semver pre-release
+          # suffix (vX.Y.Z-rc.N).
+          # v1.0.0+ tag with no suffix is a normal release.
+          prerelease=""
+          ver="${TAG#v}"
+          case "$ver" in
+            0.*|*-*) prerelease="--prerelease" ;;
+          esac
           gh release create "$TAG" \
             release/* SHA256SUMS SHA256SUMS.cosign.bundle \
             --title "$TAG" \
-            --notes "$notes"
+            --notes "$notes" \
+            $prerelease
