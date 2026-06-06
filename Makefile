@@ -76,6 +76,15 @@ CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
 
+# Reproducible builds
+# Map the build root to a constant so the output depends only on the
+# source.
+# SOURCE_DATE_EPOCH (honored by the compiler for __DATE__/__TIME__)
+# is pinned by `make reproducible-build` and the CI audit.
+# Applied to the BPF object too.
+REPRO_CFLAGS := -ffile-prefix-map=$(CURDIR)=.
+CFLAGS += $(REPRO_CFLAGS)
+
 # Optional sanitizer build for the host C side (agent, SDK, tests).
 # Set SANITIZE=address,undefined to rebuild every host object under
 # ASan/UBSan; CI uses this to surface memory and UB defects the normal
@@ -119,6 +128,7 @@ BPF_CFLAGS := -target bpf -g -O2
 BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
+BPF_CFLAGS += $(REPRO_CFLAGS)
 
 # Agent test source files
 AGTEST_SRCS = tests/test_main.c \
