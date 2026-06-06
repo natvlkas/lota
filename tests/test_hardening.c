@@ -17,6 +17,7 @@
 #include <linux/seccomp.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -476,6 +477,41 @@ static void run_kill_case(const char *name, int (*body)(void))
 	FAIL("unexpected child termination");
 }
 
+/*
+ * Probe whether environment can load a seccomp filter at all.
+ * QEMU user-mode emulation and some restricted container runtimes return
+ * EOPNOTSUPP/ENOSYS for SECCOMP_SET_MODE_FILTER (and -1 for PR_GET_SECCOMP),
+ * so the seccomp enforcement tests below cannot run there and are skipped
+ * instead reported as failures.
+ * A real kernel -- including a real aarch64 host -- still runs them.
+ * seccomp is one-way, so the probe runs in a throwaway child.
+ */
+static bool seccomp_filter_supported(void)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+		return true; /* cannot tell; let the tests run and decide */
+	if (pid == 0) {
+		struct sock_filter insns[] = {
+		    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+		};
+		struct sock_fprog prog = {
+		    .len = (unsigned short)(sizeof(insns) / sizeof(insns[0])),
+		    .filter = insns,
+		};
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+			_exit(1);
+		if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &prog) !=
+		    0)
+			_exit(1);
+		_exit(0);
+	}
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0)
+		return true;
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 int main(void)
 {
 	printf("\n=== Hardening Tests ===\n\n");
@@ -494,32 +530,41 @@ int main(void)
 		       child_no_new_privs_sets_flag);
 	run_child_case("apply_no_dumpable: PR_GET_DUMPABLE == 0",
 		       child_no_dumpable_sets_flag);
-	run_kill_case("seccomp kills on mount() with SIGSYS",
-		      child_seccomp_kills_on_mount);
-	run_kill_case("seccomp kills on ptrace() with SIGSYS",
-		      child_seccomp_kills_on_ptrace_self);
-	run_kill_case("seccomp kills on io_uring_setup with SIGSYS",
-		      child_seccomp_kills_on_io_uring_setup);
-	run_kill_case("seccomp kills on userfaultfd with SIGSYS",
-		      child_seccomp_kills_on_userfaultfd);
-	run_kill_case("seccomp kills on pidfd_send_signal with SIGSYS",
-		      child_seccomp_kills_on_pidfd_send_signal);
+	if (seccomp_filter_supported()) {
+		run_kill_case("seccomp kills on mount() with SIGSYS",
+			      child_seccomp_kills_on_mount);
+		run_kill_case("seccomp kills on ptrace() with SIGSYS",
+			      child_seccomp_kills_on_ptrace_self);
+		run_kill_case("seccomp kills on io_uring_setup with SIGSYS",
+			      child_seccomp_kills_on_io_uring_setup);
+		run_kill_case("seccomp kills on userfaultfd with SIGSYS",
+			      child_seccomp_kills_on_userfaultfd);
+		run_kill_case("seccomp kills on pidfd_send_signal with SIGSYS",
+			      child_seccomp_kills_on_pidfd_send_signal);
 #ifdef SYS_modify_ldt
-	run_kill_case("seccomp kills on modify_ldt with SIGSYS",
-		      child_seccomp_kills_on_modify_ldt);
+		run_kill_case("seccomp kills on modify_ldt with SIGSYS",
+			      child_seccomp_kills_on_modify_ldt);
 #endif
-	run_kill_case("seccomp kills on personality with SIGSYS",
-		      child_seccomp_kills_on_personality);
-	run_kill_case("seccomp TSYNC kills denied syscall in spawned thread",
-		      child_seccomp_tsync_kills_spawned_thread);
-	run_child_case("seccomp keeps getpid/write available",
-		       child_seccomp_allows_benign_syscalls);
-	run_child_case("apply_all returns 0 in a clean child",
-		       child_apply_all_succeeds);
-	run_child_case("apply_basics: prctl guards set, seccomp mode unchanged",
-		       child_apply_basics_no_seccomp);
-	run_child_case("apply_daemon after basics installs seccomp filter",
-		       child_apply_daemon_installs_seccomp);
+		run_kill_case("seccomp kills on personality with SIGSYS",
+			      child_seccomp_kills_on_personality);
+		run_kill_case(
+		    "seccomp TSYNC kills denied syscall in spawned thread",
+		    child_seccomp_tsync_kills_spawned_thread);
+		run_child_case("seccomp keeps getpid/write available",
+			       child_seccomp_allows_benign_syscalls);
+		run_child_case("apply_all returns 0 in a clean child",
+			       child_apply_all_succeeds);
+		run_child_case(
+		    "apply_basics: prctl guards set, seccomp mode unchanged",
+		    child_apply_basics_no_seccomp);
+		run_child_case(
+		    "apply_daemon after basics installs seccomp filter",
+		    child_apply_daemon_installs_seccomp);
+	} else {
+		printf("  SKIP: seccomp enforcement tests -- filter load is "
+		       "unsupported in this environment (e.g. QEMU user-mode "
+		       "emulation); a real kernel runs them\n");
+	}
 
 	printf("\n  Result: %d/%d passed\n\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

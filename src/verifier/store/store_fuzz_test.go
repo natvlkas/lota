@@ -118,9 +118,14 @@ func FuzzParseAIKCertificate(f *testing.F) {
 			return
 		}
 
-		// public key must be non-nil
-		if cert.PublicKey == nil {
-			t.Error("parsed certificate has nil public key")
+		// x509 leaves PublicKey nil (and returns no error) for an unknown
+		// key algorithm. An AIK cert is usable only with an RSA key, which
+		// store's verifyAIKCertificate enforces via this same type assertion.
+		// Mirror that guard: the assertion is always safe and a non-RSA key
+		// is rejected, never dereferenced -- asserting cert.PublicKey != nil
+		// here would test a contract x509.ParseCertificate does not make.
+		if _, ok := cert.PublicKey.(*rsa.PublicKey); !ok {
+			return
 		}
 	})
 }
