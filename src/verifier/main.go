@@ -16,7 +16,9 @@
 
 // Environment variables:
 //   LOTA_ADMIN_API_KEY  API key for admin endpoints (revoke, ban); required for mutation
-//   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, public
+//   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, the
+//                       read tier is public on a loopback bind and the server
+//                       refuses a non-loopback bind unless LOTA_ADMIN_API_KEY is set
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -343,8 +345,8 @@ func main() {
 	if *httpAddr != "" && adminKey == "" {
 		logger.Warn("HTTP API enabled without admin API key: admin endpoints (revoke, ban) will be disabled")
 	}
-	if *httpAddr != "" && readerKey == "" {
-		logger.Warn("HTTP API enabled without reader API key: sensitive read-only endpoints will be public")
+	if *httpAddr != "" && readerKey == "" && adminKey == "" {
+		logger.Warn("HTTP API enabled without reader or admin API key: sensitive read-only endpoints are public on a loopback bind; a non-loopback bind will be refused")
 	}
 
 	srv, err := server.NewServer(serverCfg, verifier)
