@@ -62,7 +62,9 @@ type APIHandler struct {
 //
 // readerAPIKey controls access to sensitive read-only endpoints:
 //   - non-empty: requires Authorization: Bearer <reader-key|admin-key>
-//   - empty: sensitive read-only endpoints are public (not recommended)
+//   - empty but admin key set: still requires Authorization: Bearer <admin-key>
+//   - both empty: sensitive read-only endpoints are public (loopback dev only;
+//     the server refuses a non-loopback bind in this state)
 func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey string, readerAPIKey string) *APIHandler {
 	if logger == nil {
 		logger = logging.Nop()
@@ -150,11 +152,14 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 
 // wraps a handler with reader-level authentication
 // accepts either the reader API key or the admin API key
-// if no reader key is configured, the endpoint is public
+// the endpoint is public only when no auth tier is configured at all;
+// a configured admin key alone is sufficient to gate reader endpoints, so
+// an operator who sets only an admin key does not silently expose the
+// sensitive read tier
 func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.readerAPIKey == "" {
-			// endpoint is public
+		if h.readerAPIKey == "" && h.adminAPIKey == "" {
+			// no auth configured: endpoint is public (loopback dev default)
 			next(w, r)
 			return
 		}

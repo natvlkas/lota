@@ -224,6 +224,15 @@ func (s *Server) startHTTP() error {
 			ln.Close()
 			return fmt.Errorf("HTTP API on non-loopback address %s requires TLS; configure CertFile/KeyFile or use 127.0.0.1", s.httpAddr)
 		}
+		// TLS encrypts the channel but does not authenticate the caller; with
+		// no auth tier configured requireReader serves the sensitive read
+		// endpoints (clients, audit, attestations, metrics, session/validate)
+		// to anyone who can reach the socket. Refuse the bind, like TLS is
+		// refused, instead of exposing the fleet
+		if s.readerAPIKey == "" && s.adminAPIKey == "" {
+			ln.Close()
+			return fmt.Errorf("HTTP API on non-loopback address %s requires authentication; set LOTA_READER_API_KEY (and/or LOTA_ADMIN_API_KEY) or bind 127.0.0.1", s.httpAddr)
+		}
 		ln = tls.NewListener(ln, s.tlsConfig)
 		s.log.Info("HTTP API using TLS (non-loopback address)")
 	} else {
