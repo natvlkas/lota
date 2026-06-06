@@ -1,8 +1,8 @@
-name: Reproducible build audit
+name: Reproducible build
 
 on:
   push:
-    branches: [main]
+    branches: [main, lota-next]
   pull_request:
 
 permissions:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   reproducible:
-    name: reproducible-build audit
+    name: reproducible-build
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -54,23 +54,24 @@ jobs:
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build the tree twice under different environments
-        # Security agent must let a dev confirm the shipped binary matches
-        # what public CI built. Two builds from separate source paths, time
-        # zones and wall clocks (with a pinned SOURCE_DATE_EPOCH) should be
-        # bit-for-bit identical; anything that leaks the build path or
-        # timestamp into a binary shows up as a difference
+        # Both builds use the canonical reproducible-build target, which pins
+        # SOURCE_DATE_EPOCH (the shared .git gives both copies the same HEAD
+        # commit time), TZ and locale.
+        # They run from separate source paths and under different outer time
+        # zones on purpose: the target must neutralize that environment,
+        # so any path or timestamp that leaks into an artifact shows up as
+        # a difference.
         run: |
           set -eu
-          export SOURCE_DATE_EPOCH=1700000000
           cp -a "$GITHUB_WORKSPACE" /tmp/build-a
           cp -a "$GITHUB_WORKSPACE" /tmp/build-b
-          (cd /tmp/build-a && TZ=UTC make BUILD_DIR=out all)
-          (cd /tmp/build-b && TZ=Asia/Tokyo make BUILD_DIR=out all)
+          (cd /tmp/build-a && TZ=UTC make BUILD_DIR=out reproducible-build)
+          (cd /tmp/build-b && TZ=Asia/Tokyo make BUILD_DIR=out reproducible-build)
 
-      - name: Compare artifacts (audit, non-blocking)
-        # Audit mode: report differences but do not fail the build, so the
-        # path to reproducibility can be closed incrementally
-        # (-trimpath for Go, -ffile-prefix-map for C, honoring SOURCE_DATE_EPOCH)
+      - name: Compare artifacts
+        # Enforced: any non-reproducible artifact fails the job. The build
+        # is bit-for-bit reproducible (-trimpath for Go, -ffile-prefix-map
+        # for C/BPF, SOURCE_DATE_EPOCH/TZ/locale pinned by the target).
         run: |
           set -u
           mkdir -p repro-report
@@ -78,11 +79,13 @@ jobs:
             liblotagaming.so liblotaserver.so liblota_wine_hook.so \
             liblota_anticheat.so lota_lsm.bpf.o"
           differ=0
+          missing=0
           for a in $artifacts; do
             fa="/tmp/build-a/out/$a"
             fb="/tmp/build-b/out/$a"
             if [ ! -e "$fa" ] || [ ! -e "$fb" ]; then
-              echo "skip $a (not built)"
+              echo "MISSING: $a (expected artifact not built)"
+              missing=1
               continue
             fi
             if cmp -s "$fa" "$fb"; then
@@ -93,11 +96,15 @@ jobs:
               diffoscope --text "repro-report/$a.txt" "$fa" "$fb" || true
             fi
           done
-          if [ "$differ" -ne 0 ]; then
-            echo "::warning::build is not yet bit-for-bit reproducible; see the reproducibility-report artifact"
-          else
-            echo "build is bit-for-bit reproducible"
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::an expected artifact was not built; the matrix is stale"
+            exit 1
           fi
+          if [ "$differ" -ne 0 ]; then
+            echo "::error::build is not bit-for-bit reproducible; see the reproducibility-report artifact"
+            exit 1
+          fi
+          echo "build is bit-for-bit reproducible"
 
       - name: Upload reproducibility report
         if: always()

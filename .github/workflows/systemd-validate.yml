@@ -2,7 +2,7 @@ name: systemd and udev validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, lota-next]
   pull_request:
 
 permissions:

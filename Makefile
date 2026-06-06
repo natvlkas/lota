@@ -76,6 +76,15 @@ CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
 
+# Reproducible builds
+# Map the build root to a constant so the output depends only on the
+# source.
+# SOURCE_DATE_EPOCH (honored by the compiler for __DATE__/__TIME__)
+# is pinned by `make reproducible-build` and the CI audit.
+# Applied to the BPF object too.
+REPRO_CFLAGS := -ffile-prefix-map=$(CURDIR)=.
+CFLAGS += $(REPRO_CFLAGS)
+
 # Optional sanitizer build for the host C side (agent, SDK, tests).
 # Set SANITIZE=address,undefined to rebuild every host object under
 # ASan/UBSan; CI uses this to surface memory and UB defects the normal
@@ -119,6 +128,7 @@ BPF_CFLAGS := -target bpf -g -O2
 BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
+BPF_CFLAGS += $(REPRO_CFLAGS)
 
 # Agent test source files
 AGTEST_SRCS = tests/test_main.c \
@@ -281,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -370,13 +380,29 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
+	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
 
 # Go attestation CA
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
+	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
+
+# Canonical reproducible build
+# This target pins the remaining environmental inputs the toolchain reads
+# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
+#  -- so the artifacts depend only on the source tree.
+# SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
+# given commit (or tag) is deterministic.
+# Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
+# git.
+# See docs/BUILD-REPRODUCIBLE.md for how to verify shipped == tag.
+REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
+reproducible-build: export TZ = UTC
+reproducible-build: export LC_ALL = C
+reproducible-build: all
+	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -886,6 +912,9 @@ help:
 	@echo "  bench-clean      Remove benchmark binaries and raw results"
 	@echo ""
 	@echo "  BENCH_COUNT=10 make bench-go   more samples for benchstat"
+	@echo ""
+	@echo "Release targets:"
+	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see docs/BUILD-REPRODUCIBLE.md)"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"

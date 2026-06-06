@@ -1,0 +1,126 @@
+name: Release
+
+# Tag-triggered release: build the artifacts with the canonical
+# reproducible-build target, hash them into a SHA256SUMS manifest, and sign
+# that manifest with cosign keyless (Sigstore OIDC + Rekor).
+# The signature proves the manifest -- and therefore every artifact whose
+# hash it lists -- was produced by this workflow at this tag, so a downstream
+# consumer can confirm "shipped lota-agent == tag".
+# See docs/BUILD-REPRODUCIBLE.md.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# one release run per tag; never cancel a release that is already publishing
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: build and sign release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # create the release and upload assets
+      id-token: write    # OIDC token for cosign keyless signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          # a release builds the shipped artifacts; disable the module cache so
+          # a poisoned cache entry cannot influence the signed output
+          cache: false
+
+      - name: Confirm the tag matches VERSION
+        # check-version-tag fails when the annotated tag (vX.Y.Z) does not
+        # equal the VERSION file, so a release cannot ship a version string
+        # that disagrees with its tag
+        run: make check-version-tag
+
+      - name: Reproducible build
+        run: make reproducible-build
+
+      - name: Stage artifacts and hash manifest
+        run: |
+          set -eu
+          mkdir -p release
+          artifacts="lota-agent lota-verifier lota-attest-ca lota-pcr14-lock \
+            liblotagaming.so liblotaserver.so liblota_wine_hook.so \
+            liblota_anticheat.so lota_lsm.bpf.o"
+          for a in $artifacts; do
+            cp "build/$a" "release/$a"
+          done
+          cp VERSION release/VERSION
+          (cd release && sha256sum -- * > ../SHA256SUMS)
+          cat SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Sign the manifest (keyless)
+        # Keyless: GitHub's OIDC token mints an ephemeral Sigstore certificate
+        # bound to this workflow's identity and the signature is logged in Rekor.
+        # The self-contained bundle carries the certificate and the transparency-log
+        # proof, so verification needs no key distribution -- only the workflow
+        # identity and the OIDC issuer (documented in docs/BUILD-REPRODUCIBLE.md)
+        run: |
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS.cosign.bundle \
+            SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          notes="Reproducible build of $TAG. Verify the artifacts with cosign"
+          notes="$notes against SHA256SUMS.cosign.bundle; see docs/BUILD-REPRODUCIBLE.md."
+          # marking anything that is not a final >=1.0.0 release as a pre-release:
+          # 0.x version (no stability promise yet) or a semver pre-release
+          # suffix (vX.Y.Z-rc.N).
+          # v1.0.0+ tag with no suffix is a normal release.
+          prerelease=""
+          ver="${TAG#v}"
+          case "$ver" in
+            0.*|*-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "$TAG" \
+            release/* SHA256SUMS SHA256SUMS.cosign.bundle \
+            --title "$TAG" \
+            --notes "$notes" \
+            $prerelease
