@@ -380,12 +380,12 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
+	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
 
 # Go attestation CA
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -o $(abspath $@) .
+	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
 
 clean:
